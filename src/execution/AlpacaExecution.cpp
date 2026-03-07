@@ -17,7 +17,20 @@ namespace net = boost::asio;
 namespace ssl = net::ssl;
 using tcp = net::ip::tcp;
 
+#include <iomanip>
+#include <sstream>
+
 namespace bot {
+
+std::string formatDouble(double value) {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(9) << value;
+    std::string str = out.str();
+    // Remove trailing zeros
+    str.erase(str.find_last_not_of('0') + 1, std::string::npos);
+    if (str.back() == '.') str.pop_back();
+    return str;
+}
 
 AlpacaExecutionEngine::AlpacaExecutionEngine(std::string apiKey, std::string apiSecret, std::string baseUrl)
     : apiKey_(std::move(apiKey)), apiSecret_(std::move(apiSecret)), baseUrl_(std::move(baseUrl)) {}
@@ -33,14 +46,14 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
 
     nlohmann::json orderPayload = {
         {"symbol", request.symbol},
-        {"qty", std::to_string(request.quantity)}, // Alpaca often expects string for exact decimal precision
+        {"qty", formatDouble(request.quantity)}, // Prevent rounding up errors in std::to_string
         {"side", request.side == Side::BUY ? "buy" : "sell"},
         {"type", request.type == OrderType::MARKET ? "market" : "limit"},
         {"time_in_force", "gtc"} // Assume Good-Till-Canceled for simplicity
     };
 
     if (request.type == OrderType::LIMIT) {
-        orderPayload["limit_price"] = std::to_string(request.price);
+        orderPayload["limit_price"] = formatDouble(request.price);
     }
 
     std::cout << "[AlpacaExecutionEngine] Placing order: " << orderPayload.dump() << "\n";
@@ -53,9 +66,11 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
         auto responseJson = nlohmann::json::parse(responseStr);
         if (responseJson.contains("id")) {
             return responseJson["id"].get<std::string>();
+        } else {
+            std::cerr << "[AlpacaExecutionEngine] Order Rejected: " << responseJson.dump() << "\n";
         }
     } catch (const std::exception& e) {
-        std::cerr << "[AlpacaExecutionEngine] JSON Parse Error on placeOrder: " << e.what() << "\n";
+        std::cerr << "[AlpacaExecutionEngine] JSON Parse Error on placeOrder: " << e.what() << "\nResponse string: " << responseStr << "\n";
     }
 
     return "";
@@ -67,7 +82,20 @@ bool AlpacaExecutionEngine::cancelOrder(const std::string& orderId) {
     std::string endpoint = "/v2/orders/" + orderId;
     std::string responseStr = sendHttpRequest("DELETE", endpoint);
 
-    return !responseStr.empty(); 
+    // Alpaca returns HTTP 204 (empty body) on successful deletion
+    if (responseStr.empty()) {
+        return true;
+    }
+
+    try {
+        auto responseJson = nlohmann::json::parse(responseStr);
+        if (responseJson.contains("code")) {
+            std::cerr << "[AlpacaExecutionEngine] Cancel Rejected: " << responseJson.dump() << "\n";
+            return false;
+        }
+    } catch (...) {}
+
+    return true; 
 }
 
 std::optional<double> AlpacaExecutionEngine::getPortfolioValue() {

@@ -33,13 +33,11 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     // Allow time for WS handshake and authentication to complete
     std::this_thread::sleep_for(std::chrono::seconds(2));
     
-    // We will test the REST API by fetching portfolio value
     auto portfolioValue = executionEngine->getPortfolioValue();
     if (portfolioValue) {
         std::cout << "[LIVE] Current Portfolio Value: $" << *portfolioValue << std::endl;
     }
 
-    // Subscribe to a highly liquid symbol for the test
     std::string symbol = "BTC/USD";
     std::cout << "[LIVE] Subscribing to " << symbol << " market data stream..." << std::endl;
     auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, symbol);
@@ -49,7 +47,6 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     std::cout << "[LIVE] Listening for 20 seconds of live market data before shutting down..." << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(20));
 
-    // Cleanup
     std::cout << "[LIVE] Shutting down live session..." << std::endl;
     strategy->stop();
     dataFeed->disconnect();

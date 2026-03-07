@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 #include <execution/AlpacaExecutionEngine.hpp>
+#include <cstdlib>
+#include <thread>
+#include <chrono>
 
 using namespace bot;
 
@@ -68,16 +71,62 @@ TEST_F(AlpacaExecutionEngineTest, GetOpenPositionsParsesCorrectly) {
 }
 
 TEST_F(AlpacaExecutionEngineTest, PlaceLimitOrderSendsPrice) {
-    // We can't easily assert the payload sent without capturing it in MockAlpacaExecutionEngine,
-    // but we can ensure the code path doesn't crash when passing a LIMIT order
     OrderRequest req{"ETH/USD", Side::SELL, OrderType::LIMIT, 2.0, 4000.0};
     std::string orderId = engine->placeOrder(req);
     EXPECT_EQ(orderId, "alpaca-mock-id-9999");
 }
 
-TEST_F(AlpacaExecutionEngineTest, CancelOrderFailsIfResponseEmpty) {
-    // In our mock, DELETE to an unknown endpoint returns empty
-    // But since our mock doesn't look at the exact ID, we can't easily test the negative case
-    // unless we enhance the mock. This is a placeholder demonstrating intent.
-    EXPECT_TRUE(true); 
+// Integration Test - Only runs if ENABLE_PAPERTRADING_TEST=ON and credentials are set
+#ifdef PAPERTRADING
+TEST(AlpacaExecutionIntegration, LivePaperTradingFlow) {
+    const char* apiKeyEnv = std::getenv("APCA_API_KEY_ID");
+    const char* apiSecretEnv = std::getenv("APCA_API_SECRET_KEY");
+
+    ASSERT_NE(apiKeyEnv, nullptr) << "APCA_API_KEY_ID environment variable is missing.";
+    ASSERT_NE(apiSecretEnv, nullptr) << "APCA_API_SECRET_KEY environment variable is missing.";
+
+    std::string apiKey(apiKeyEnv);
+    std::string apiSecret(apiSecretEnv);
+    std::string baseUrl = "https://paper-api.alpaca.markets";
+    
+    // We use the real AlpacaExecutionEngine here
+    AlpacaExecutionEngine engine(apiKey, apiSecret, baseUrl);
+
+    // 1. Authenticate
+    EXPECT_TRUE(engine.authenticate());
+
+    // 2. Portfolio Value
+    auto portfolioValue = engine.getPortfolioValue();
+    EXPECT_TRUE(portfolioValue.has_value());
+    if (portfolioValue) {
+        std::cout << "[INTEGRATION] Current Portfolio Value: $" << *portfolioValue << std::endl;
+    }
+
+    // 3. Place a Market BUY Order
+    OrderRequest marketBuy{"BTC/USD", Side::BUY, OrderType::MARKET, 0.001, 0.0};
+    std::string orderId = engine.placeOrder(marketBuy);
+    ASSERT_FALSE(orderId.empty()) << "Failed to place Market BUY order.";
+    std::cout << "[INTEGRATION] Market Order ID: " << orderId << std::endl;
+
+    // 4. Get Open Positions and dynamically sell what we have
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    auto positions = engine.getOpenPositions();
+    double sellQty = 0.001;
+    if (positions.is_array() && !positions.empty()) {
+        for (const auto& pos : positions) {
+            if (pos.value("symbol", "") == "BTCUSD" || pos.value("symbol", "") == "BTC/USD") {
+                sellQty = std::stod(pos.value("qty_available", "0.001"));
+                break;
+            }
+        }
+    }
+
+    // 5. Place a Limit SELL Order
+    OrderRequest limitSell{"BTC/USD", Side::SELL, OrderType::LIMIT, sellQty, 150000.0};
+    std::string limitOrderId = engine.placeOrder(limitSell);
+    ASSERT_FALSE(limitOrderId.empty()) << "Failed to place Limit SELL order.";
+
+    // 6. Cancel the Limit SELL Order
+    EXPECT_TRUE(engine.cancelOrder(limitOrderId));
 }
+#endif
