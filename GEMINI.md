@@ -50,3 +50,7 @@ To evolve this from a single-file mock into a robust trading system, we should p
 ### [IN PROGRESS] Phase 5: Live API Integration (Paper Trading)
 * **[DONE]** Implemented `AlpacaDataFeed` and `AlpacaExecutionEngine` mapping logic utilizing `nlohmann/json`.
 * **[TODO]** Implement actual networking using `Boost.Asio` or similar HTTP/WS clients for live connectivity.
+
+---
+**Note for Next Gemini Session:**
+The project is currently fully unit-tested and backtest-capable using a lock-free event bus, Eigen-powered math, and CSV historical data. We are ready to tackle the final part of Phase 5. The next step is to integrate `Boost.Asio` (or `Boost.Beast` / `cURL`) into `AlpacaDataFeed` and `AlpacaExecutionEngine` so the bot can connect to the live Alpaca Paper Trading API via WebSockets and REST.
