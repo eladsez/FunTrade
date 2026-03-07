@@ -22,6 +22,10 @@ public:
     std::optional<double> getPortfolioValue();
     nlohmann::json getOpenPositions();
 
+protected:
+    // Abstracted HTTP request layer (to be mapped to libcurl / Boost.Beast later)
+    virtual std::string sendHttpRequest(const std::string& method, const std::string& endpoint, const std::string& payload = "");
+
 private:
     std::string apiKey_;
     std::string apiSecret_;
@@ -29,9 +33,6 @@ private:
 
     // Prevent concurrent modifications or request bursts via the same engine instance
     std::mutex requestMutex_;
-
-    // Abstracted HTTP request layer (to be mapped to libcurl / Boost.Beast later)
-    std::string sendHttpRequest(const std::string& method, const std::string& endpoint, const std::string& payload = "");
 };
 
 } // namespace bot

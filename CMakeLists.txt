@@ -41,10 +41,23 @@ file(GLOB_RECURSE LIB_SRC_FILES
     "src/strategy/*.cpp"
 )
 
+# Find Boost and OpenSSL
+find_package(Boost REQUIRED COMPONENTS system thread)
+find_package(OpenSSL REQUIRED)
+
 # Create a static library for the core logic
 add_library(FunTradeLib STATIC ${LIB_SRC_FILES})
 target_include_directories(FunTradeLib PUBLIC ${CMAKE_SOURCE_DIR}/include)
-target_link_libraries(FunTradeLib PUBLIC nlohmann_json::nlohmann_json concurrentqueue Eigen3::Eigen pthread)
+target_link_libraries(FunTradeLib PUBLIC 
+    nlohmann_json::nlohmann_json 
+    concurrentqueue 
+    Eigen3::Eigen 
+    pthread
+    Boost::system
+    Boost::thread
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
 
 # Create the main executable
 add_executable(${PROJECT_NAME} src/main.cpp)

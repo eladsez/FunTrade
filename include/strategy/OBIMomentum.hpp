@@ -9,7 +9,7 @@ namespace bot {
 
 class OBIMomentum : public IStrategy {
 public:
-    OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, int windowSize = 5);
+    OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, const std::string& symbol = "BTC/USD", int windowSize = 5);
     void start() override;
     void onTick(const MarketTick& tick) override;
     void stop() override;
@@ -17,6 +17,7 @@ public:
 private:
     std::shared_ptr<IEventBus> eventBus;
     std::shared_ptr<IExecutionEngine> executionEngine;
+    std::string symbol_;
 
     // OBI specific variables
     int windowSize_;

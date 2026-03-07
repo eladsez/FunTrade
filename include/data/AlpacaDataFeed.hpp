@@ -7,9 +7,13 @@
 #include <atomic>
 #include <mutex>
 #include <vector>
+#include <thread>
 #include <nlohmann/json.hpp>
 
 namespace bot {
+
+// Forward declaration to hide Boost.Beast types from the header
+struct WsClientState;
 
 class AlpacaDataFeed : public IDataFeed {
 public:
@@ -26,23 +30,29 @@ public:
     // when a text message frame is received.
     void onWebSocketMessage(const std::string& payload);
 
+protected:
+    std::atomic<bool> isConnected_{false};
+    std::atomic<bool> isRunning_{false};
+    
+    // Network abstractions that can be mocked in tests
+    virtual void sendWebSocketMessage(const std::string& message);
+    virtual void wsRunLoop();
+
 private:
     std::shared_ptr<IEventBus> eventBus_;
     std::string apiKey_;
     std::string apiSecret_;
     
-    std::atomic<bool> isConnected_{false};
-    
     std::mutex symbolsMutex_;
     std::vector<std::string> subscribedSymbols_;
+
+    std::unique_ptr<WsClientState> wsState_;
+    std::thread wsThread_;
 
     // Internal parsing strategies for different stream types
     void parseTradeUpdate(const nlohmann::json& data);
     void parseQuoteUpdate(const nlohmann::json& data);
     void parseOrderBookUpdate(const nlohmann::json& data);
-
-    // Mock network abstraction - this would be replaced by actual WS client calls
-    void sendWebSocketMessage(const std::string& message);
 };
 
 } // namespace bot
