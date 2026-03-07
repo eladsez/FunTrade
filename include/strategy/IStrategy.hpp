@@ -1,0 +1,18 @@
+#pragma once
+#include <core/DomainModels.hpp>
+
+// Base interface for all trading algorithms.
+// Complies with the Open/Closed principle: add new strategies without modifying the core.
+class IStrategy {
+public:
+    virtual ~IStrategy() = default;
+
+    // Initializes the strategy state and registers callbacks with the Event Bus.
+    virtual void start() = 0;
+
+    // The core logic loop, triggered upon receiving a new market event.
+    virtual void onTick(const MarketTick& tick) = 0;
+    
+    // Halts the strategy and cleans up.
+    virtual void stop() = 0;
+};

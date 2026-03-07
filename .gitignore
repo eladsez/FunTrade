@@ -1,0 +1,12 @@
+# Build and binary directories
+build/
+bin/
+lib/
+CMakeCache.txt
+CMakeFiles/
+*.dir/
+
+# OS generated files
+.DS_Store
+*.swp
+.vscode/
