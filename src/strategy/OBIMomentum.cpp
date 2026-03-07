@@ -1,5 +1,5 @@
 #include <strategy/OBIMomentum.hpp>
-#include <iostream>
+#include <core/Logger.hpp>
 
 namespace bot {
 
@@ -10,7 +10,7 @@ OBIMomentum::OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecut
 }
 
 void OBIMomentum::start() {
-    std::cout << "[OBIMomentum] Strategy started for " << symbol_ << " with window size " << windowSize_ << ".\n";
+    LOG_INFO("[OBIMomentum] Strategy started for {} with window size {}.", symbol_, windowSize_);
     eventBus->subscribeToTick(symbol_, [this](const MarketTick& tick) {
         this->onTick(tick);
     });
@@ -20,7 +20,7 @@ void OBIMomentum::onTick(const MarketTick& tick) {
     // If we don't have level 2 data, we can't calculate OBI
     if (tick.bid_size == 0.0 && tick.ask_size == 0.0) {
         // Fallback or print for live debug to see prices moving even without L2 OBI
-        // std::cout << "[DEBUG] " << tick.symbol << " price: " << tick.price << "\n";
+        // LOG_DEBUG("[DEBUG] {} price: {}", tick.symbol, tick.price);
         return; 
     }
 
@@ -42,13 +42,11 @@ void OBIMomentum::onTick(const MarketTick& tick) {
         // Calculate the Simple Moving Average using Eigen's built-in mean()
         double smoothedObi = obiWindow_.mean();
 
-        std::cout << "[OBIMomentum] Tick @ " << tick.price 
-                  << " | Raw OBI: " << obi 
-                  << " | Smoothed OBI (SMA): " << smoothedObi << "\n";
+        LOG_INFO("[OBIMomentum] Tick @ {} | Raw OBI: {} | Smoothed OBI (SMA): {}", tick.price, obi, smoothedObi);
 
         // 4. Trigger Orders based on momentum thresholds
         if (smoothedObi > 0.4) {
-            std::cout << ">>> [OBIMomentum] STRONG BUY SIGNAL! Smoothed OBI > 0.4\n";
+            LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Smoothed OBI > 0.4");
             OrderRequest req{symbol_, Side::BUY, OrderType::MARKET, 0.001, 0.0}; // Smaller qty for crypto
             executionEngine->placeOrder(req);
             
@@ -56,7 +54,7 @@ void OBIMomentum::onTick(const MarketTick& tick) {
             obiWindow_.setZero();
         } 
         else if (smoothedObi < -0.4) {
-            std::cout << "<<< [OBIMomentum] STRONG SELL SIGNAL! Smoothed OBI < -0.4\n";
+            LOG_INFO("<<< [OBIMomentum] STRONG SELL SIGNAL! Smoothed OBI < -0.4");
             OrderRequest req{symbol_, Side::SELL, OrderType::MARKET, 0.001, 0.0};
             executionEngine->placeOrder(req);
             
@@ -67,7 +65,7 @@ void OBIMomentum::onTick(const MarketTick& tick) {
 }
 
 void OBIMomentum::stop() {
-    std::cout << "[OBIMomentum] Strategy stopped.\n";
+    LOG_INFO("[OBIMomentum] Strategy stopped.");
 }
 
 } // namespace bot

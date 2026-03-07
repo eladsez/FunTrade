@@ -1,17 +1,17 @@
 #include <execution/DummyExecution.hpp>
-#include <iostream>
+#include <core/Logger.hpp>
 
 bool DummyExecution::authenticate() {
-    std::cout << "[DummyExecution] Authenticated successfully.\n";
+    LOG_INFO("[DummyExecution] Authenticated successfully.");
     return true;
 }
 
 std::string DummyExecution::placeOrder(const OrderRequest& request) {
-    std::cout << "[DummyExecution] Order placed for " << request.symbol << " qty: " << request.quantity << " side: " << (request.side == Side::BUY ? "BUY" : "SELL") << "\n";
+    LOG_INFO("[DummyExecution] Order placed for {} qty: {} side: {}", request.symbol, request.quantity, (request.side == Side::BUY ? "BUY" : "SELL"));
     return "dummy_order_123";
 }
 
 bool DummyExecution::cancelOrder(const std::string& orderId) {
-    std::cout << "[DummyExecution] Order cancelled: " << orderId << "\n";
+    LOG_INFO("[DummyExecution] Order cancelled: {}", orderId);
     return true;
 }

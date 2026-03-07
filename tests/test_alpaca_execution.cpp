@@ -129,4 +129,41 @@ TEST(AlpacaExecutionIntegration, LivePaperTradingFlow) {
     // 6. Cancel the Limit SELL Order
     EXPECT_TRUE(engine.cancelOrder(limitOrderId));
 }
+
+TEST(AlpacaExecutionIntegration, LiquidateAllOpenPositions) {
+    const char* apiKeyEnv = std::getenv("APCA_API_KEY_ID");
+    const char* apiSecretEnv = std::getenv("APCA_API_SECRET_KEY");
+
+    ASSERT_NE(apiKeyEnv, nullptr) << "APCA_API_KEY_ID environment variable is missing.";
+    ASSERT_NE(apiSecretEnv, nullptr) << "APCA_API_SECRET_KEY environment variable is missing.";
+
+    std::string apiKey(apiKeyEnv);
+    std::string apiSecret(apiSecretEnv);
+    std::string baseUrl = "https://paper-api.alpaca.markets";
+    
+    AlpacaExecutionEngine engine(apiKey, apiSecret, baseUrl);
+    EXPECT_TRUE(engine.authenticate());
+
+    auto positions = engine.getOpenPositions();
+    if (positions.is_array() && !positions.empty()) {
+        for (const auto& pos : positions) {
+            std::string symbol = pos.value("symbol", "");
+            // Alpaca returns crypto symbols without slash (e.g. BTCUSD), we map it back
+            if (symbol.find("USD") != std::string::npos && symbol.find('/') == std::string::npos) {
+                symbol.insert(symbol.length() - 3, "/");
+            }
+
+            double qty = std::stod(pos.value("qty_available", "0"));
+            if (qty > 0) {
+                std::cout << "[INTEGRATION] Liquidating " << qty << " of " << symbol << std::endl;
+                OrderRequest marketSell{symbol, Side::SELL, OrderType::MARKET, qty, 0.0};
+                std::string orderId = engine.placeOrder(marketSell);
+                EXPECT_FALSE(orderId.empty()) << "Failed to liquidate " << symbol;
+                std::cout << "[INTEGRATION] Sell Order ID: " << orderId << std::endl;
+            }
+        }
+    } else {
+        std::cout << "[INTEGRATION] No open positions to liquidate." << std::endl;
+    }
+}
 #endif

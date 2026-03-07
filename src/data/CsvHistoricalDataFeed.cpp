@@ -1,5 +1,5 @@
 #include <data/CsvHistoricalDataFeed.hpp>
-#include <iostream>
+#include <core/Logger.hpp>
 #include <sstream>
 #include <algorithm>
 #include <chrono>
@@ -16,10 +16,10 @@ CsvHistoricalDataFeed::~CsvHistoricalDataFeed() {
 bool CsvHistoricalDataFeed::connect() {
     fileStream_.open(csvFilePath_);
     if (!fileStream_.is_open()) {
-        std::cerr << "[CsvHistoricalDataFeed] Failed to open file: " << csvFilePath_ << std::endl;
+        LOG_ERROR("[CsvHistoricalDataFeed] Failed to open file: {}", csvFilePath_);
         return false;
     }
-    std::cout << "[CsvHistoricalDataFeed] Successfully opened " << csvFilePath_ << " for backtesting." << std::endl;
+    LOG_INFO("[CsvHistoricalDataFeed] Successfully opened {} for backtesting.", csvFilePath_);
     return true;
 }
 
@@ -27,7 +27,7 @@ void CsvHistoricalDataFeed::subscribeToSymbol(const std::string& symbol) {
     std::lock_guard<std::mutex> lock(symbolsMutex_);
     if (std::find(subscribedSymbols_.begin(), subscribedSymbols_.end(), symbol) == subscribedSymbols_.end()) {
         subscribedSymbols_.push_back(symbol);
-        std::cout << "[CsvHistoricalDataFeed] Filtering playback for " << symbol << std::endl;
+        LOG_INFO("[CsvHistoricalDataFeed] Filtering playback for {}", symbol);
     }
 }
 
@@ -35,13 +35,13 @@ void CsvHistoricalDataFeed::disconnect() {
     stopPlayback();
     if (fileStream_.is_open()) {
         fileStream_.close();
-        std::cout << "[CsvHistoricalDataFeed] Closed file." << std::endl;
+        LOG_INFO("[CsvHistoricalDataFeed] Closed file.");
     }
 }
 
 void CsvHistoricalDataFeed::startPlayback(bool realTimeSimulation) {
     if (!fileStream_.is_open()) {
-        std::cerr << "[CsvHistoricalDataFeed] Cannot start playback. File is not open." << std::endl;
+        LOG_ERROR("[CsvHistoricalDataFeed] Cannot start playback. File is not open.");
         return;
     }
 
@@ -54,7 +54,7 @@ void CsvHistoricalDataFeed::startPlayback(bool realTimeSimulation) {
     std::getline(fileStream_, header);
 
     playbackThread_ = std::thread(&CsvHistoricalDataFeed::playbackLoop, this, realTimeSimulation);
-    std::cout << "[CsvHistoricalDataFeed] Started playback " << (realTimeSimulation ? "(Real-Time Delay)" : "(As Fast As Possible)") << "." << std::endl;
+    LOG_INFO("[CsvHistoricalDataFeed] Started playback {}.", (realTimeSimulation ? "(Real-Time Delay)" : "(As Fast As Possible)"));
 }
 
 void CsvHistoricalDataFeed::stopPlayback() {
@@ -63,7 +63,7 @@ void CsvHistoricalDataFeed::stopPlayback() {
     if (playbackThread_.joinable()) {
         playbackThread_.join();
     }
-    std::cout << "[CsvHistoricalDataFeed] Stopped playback." << std::endl;
+    LOG_INFO("[CsvHistoricalDataFeed] Stopped playback.");
 }
 
 void CsvHistoricalDataFeed::playbackLoop(bool realTimeSimulation) {
@@ -94,11 +94,11 @@ void CsvHistoricalDataFeed::playbackLoop(bool realTimeSimulation) {
                 lastTimestamp = tick.timestamp_ms;
             }
         } catch (const std::exception& e) {
-            std::cerr << "[CsvHistoricalDataFeed] Error parsing line: " << line << " | " << e.what() << std::endl;
+            LOG_ERROR("[CsvHistoricalDataFeed] Error parsing line: {} | {}", line, e.what());
         }
     }
     isPlaying_ = false;
-    std::cout << "[CsvHistoricalDataFeed] Playback finished. Reached EOF." << std::endl;
+    LOG_INFO("[CsvHistoricalDataFeed] Playback finished. Reached EOF.");
 }
 
 MarketTick CsvHistoricalDataFeed::parseLine(const std::string& line) {

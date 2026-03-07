@@ -1,8 +1,8 @@
-#include <iostream>
 #include <memory>
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include <core/Logger.hpp>
 #include <core/EventBus.hpp>
 #include <data/CsvHistoricalDataFeed.hpp>
 #include <data/AlpacaDataFeed.hpp>
@@ -13,7 +13,7 @@
 using namespace bot;
 
 int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
-    std::cout << "--- Starting LIVE Alpaca Paper Trading Mode ---" << std::endl;
+    LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
     std::string baseUrl = "https://paper-api.alpaca.markets";
     
     auto eventBus = std::make_shared<EventBus>();
@@ -21,12 +21,12 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     auto dataFeed = std::make_shared<AlpacaDataFeed>(eventBus, apiKey, apiSecret);
 
     if (!executionEngine->authenticate()) {
-        std::cerr << "Live Execution Authentication Failed." << std::endl;
+        LOG_ERROR("Live Execution Authentication Failed.");
         return 1;
     }
 
     if (!dataFeed->connect()) {
-        std::cerr << "Live DataFeed Connection Failed." << std::endl;
+        LOG_ERROR("Live DataFeed Connection Failed.");
         return 1;
     }
     
@@ -35,26 +35,26 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     
     auto portfolioValue = executionEngine->getPortfolioValue();
     if (portfolioValue) {
-        std::cout << "[LIVE] Current Portfolio Value: $" << *portfolioValue << std::endl;
+        LOG_INFO("[LIVE] Current Portfolio Value: ${}", *portfolioValue);
     }
 
     std::string symbol = "BTC/USD";
-    std::cout << "[LIVE] Subscribing to " << symbol << " market data stream..." << std::endl;
+    LOG_INFO("[LIVE] Subscribing to {} market data stream...", symbol);
     auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, symbol);
     strategy->start();
     dataFeed->subscribeToSymbol(symbol);
 
-    std::cout << "[LIVE] Listening for 20 seconds of live market data before shutting down..." << std::endl;
+    LOG_INFO("[LIVE] Listening for 20 seconds of live market data before shutting down...");
     std::this_thread::sleep_for(std::chrono::seconds(20));
 
-    std::cout << "[LIVE] Shutting down live session..." << std::endl;
+    LOG_INFO("[LIVE] Shutting down live session...");
     strategy->stop();
     dataFeed->disconnect();
     return 0;
 }
 
 int runBacktestMode() {
-    std::cout << "--- Starting Backtest Playback Mode ---" << std::endl;
+    LOG_INFO("--- Starting Backtest Playback Mode ---");
     
     auto eventBus = std::make_shared<EventBus>();
     auto executionEngine = std::make_shared<DummyExecution>();
@@ -76,12 +76,15 @@ int runBacktestMode() {
     strategy->stop();
     dataFeed->disconnect();
 
-    std::cout << "Backtest successful." << std::endl;
+    LOG_INFO("Backtest successful.");
     return 0;
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << "Algorithmic Trading Bot PoC" << std::endl;
+    // Initialize the global spdlog logger
+    bot::Logger::init();
+
+    LOG_INFO("Algorithmic Trading Bot PoC");
 
     bool liveMode = false;
     for (int i = 1; i < argc; ++i) {
@@ -95,11 +98,10 @@ int main(int argc, char* argv[]) {
         const char* apiSecret = std::getenv("APCA_API_SECRET_KEY");
 
         if (!apiKey || !apiSecret) {
-            std::cerr << "\nERROR: Live mode requires Alpaca credentials.\n"
-                      << "Please export them in your terminal before running:\n"
-                      << "  export APCA_API_KEY_ID=your_paper_key\n"
-                      << "  export APCA_API_SECRET_KEY=your_paper_secret\n"
-                      << std::endl;
+            LOG_ERROR("\nERROR: Live mode requires Alpaca credentials.\n"
+                      "Please export them in your terminal before running:\n"
+                      "  export APCA_API_KEY_ID=your_paper_key\n"
+                      "  export APCA_API_SECRET_KEY=your_paper_secret\n");
             return 1;
         }
         return runLiveMode(apiKey, apiSecret);

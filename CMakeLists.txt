@@ -33,6 +33,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(eigen)
 
+# Fetch spdlog for high-performance logging
+FetchContent_Declare(
+    spdlog
+    GIT_REPOSITORY https://github.com/gabime/spdlog.git
+    GIT_TAG v1.13.0
+)
+FetchContent_MakeAvailable(spdlog)
+
 # Locate source files excluding main.cpp for the library
 file(GLOB_RECURSE LIB_SRC_FILES 
     "src/core/*.cpp"
@@ -52,6 +60,7 @@ target_link_libraries(FunTradeLib PUBLIC
     nlohmann_json::nlohmann_json 
     concurrentqueue 
     Eigen3::Eigen 
+    spdlog::spdlog
     pthread
     Boost::system
     Boost::thread

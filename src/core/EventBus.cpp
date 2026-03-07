@@ -1,5 +1,5 @@
 #include <core/EventBus.hpp>
-#include <iostream>
+#include <core/Logger.hpp>
 #include <chrono>
 
 EventBus::EventBus() {
@@ -14,7 +14,7 @@ void EventBus::start() {
     if (isRunning.exchange(true)) return;
     
     dispatcherThread = std::thread(&EventBus::processEvents, this);
-    std::cout << "[EventBus] Background dispatcher thread started.\n";
+    LOG_INFO("[EventBus] Background dispatcher thread started.");
 }
 
 void EventBus::stop() {
@@ -23,13 +23,13 @@ void EventBus::stop() {
     if (dispatcherThread.joinable()) {
         dispatcherThread.join();
     }
-    std::cout << "[EventBus] Background dispatcher thread stopped.\n";
+    LOG_INFO("[EventBus] Background dispatcher thread stopped.");
 }
 
 void EventBus::subscribeToTick(const std::string& symbol, TickCallback callback) {
     std::lock_guard<std::mutex> lock(subMtx);
     subscribers.push_back({symbol, callback});
-    std::cout << "[EventBus] Subscribed to " << symbol << "\n";
+    LOG_INFO("[EventBus] Subscribed to {}", symbol);
 }
 
 void EventBus::publishTick(const MarketTick& tick) {

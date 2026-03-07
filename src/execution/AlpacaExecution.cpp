@@ -1,5 +1,5 @@
 #include <execution/AlpacaExecutionEngine.hpp>
-#include <iostream>
+#include <core/Logger.hpp>
 
 // Boost libraries for asynchronous I/O and HTTP
 #include <boost/beast/core.hpp>
@@ -37,7 +37,7 @@ AlpacaExecutionEngine::AlpacaExecutionEngine(std::string apiKey, std::string api
 
 bool AlpacaExecutionEngine::authenticate() {
     // For Alpaca REST API, authentication happens via HTTP headers on every request.
-    std::cout << "[AlpacaExecutionEngine] Authentication credentials loaded.\n";
+    LOG_INFO("[AlpacaExecutionEngine] Authentication credentials loaded.");
     return true;
 }
 
@@ -56,7 +56,7 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
         orderPayload["limit_price"] = formatDouble(request.price);
     }
 
-    std::cout << "[AlpacaExecutionEngine] Placing order: " << orderPayload.dump() << "\n";
+    LOG_INFO("[AlpacaExecutionEngine] Placing order: {}", orderPayload.dump());
     
     std::string responseStr = sendHttpRequest("POST", "/v2/orders", orderPayload.dump());
     
@@ -67,10 +67,10 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
         if (responseJson.contains("id")) {
             return responseJson["id"].get<std::string>();
         } else {
-            std::cerr << "[AlpacaExecutionEngine] Order Rejected: " << responseJson.dump() << "\n";
+            LOG_ERROR("[AlpacaExecutionEngine] Order Rejected: {}", responseJson.dump());
         }
     } catch (const std::exception& e) {
-        std::cerr << "[AlpacaExecutionEngine] JSON Parse Error on placeOrder: " << e.what() << "\nResponse string: " << responseStr << "\n";
+        LOG_ERROR("[AlpacaExecutionEngine] JSON Parse Error on placeOrder: {}\nResponse string: {}", e.what(), responseStr);
     }
 
     return "";
@@ -90,7 +90,7 @@ bool AlpacaExecutionEngine::cancelOrder(const std::string& orderId) {
     try {
         auto responseJson = nlohmann::json::parse(responseStr);
         if (responseJson.contains("code")) {
-            std::cerr << "[AlpacaExecutionEngine] Cancel Rejected: " << responseJson.dump() << "\n";
+            LOG_ERROR("[AlpacaExecutionEngine] Cancel Rejected: {}", responseJson.dump());
             return false;
         }
     } catch (...) {}
@@ -215,7 +215,7 @@ std::string AlpacaExecutionEngine::sendHttpRequest(const std::string& method, co
         return res.body();
 
     } catch(std::exception const& e) {
-        std::cerr << "[AlpacaExecutionEngine] HTTP Request Failed: " << e.what() << "\n";
+        LOG_ERROR("[AlpacaExecutionEngine] HTTP Request Failed: {}", e.what());
         return "";
     }
 }

@@ -1,5 +1,5 @@
 #include <data/AlpacaDataFeed.hpp>
-#include <iostream>
+#include <core/Logger.hpp>
 #include <algorithm>
 #include <chrono>
 
@@ -38,7 +38,7 @@ AlpacaDataFeed::~AlpacaDataFeed() {
 bool AlpacaDataFeed::connect() {
     if (isConnected_) return true;
 
-    std::cout << "[AlpacaDataFeed] Connecting to WebSocket...\n";
+    LOG_INFO("[AlpacaDataFeed] Connecting to WebSocket...");
     isRunning_ = true;
     wsThread_ = std::thread(&AlpacaDataFeed::wsRunLoop, this);
 
@@ -51,7 +51,7 @@ bool AlpacaDataFeed::connect() {
     }
 
     if (!isConnected_) {
-        std::cerr << "[AlpacaDataFeed] Connection timed out.\n";
+        LOG_ERROR("[AlpacaDataFeed] Connection timed out.");
         disconnect();
     }
     
@@ -60,7 +60,7 @@ bool AlpacaDataFeed::connect() {
 
 void AlpacaDataFeed::subscribeToSymbol(const std::string& symbol) {
     if (!isConnected_) {
-        std::cerr << "[AlpacaDataFeed] Cannot subscribe, not connected.\n";
+        LOG_ERROR("[AlpacaDataFeed] Cannot subscribe, not connected.");
         return;
     }
 
@@ -78,7 +78,7 @@ void AlpacaDataFeed::subscribeToSymbol(const std::string& symbol) {
         {"orderbooks", {symbol}} // If supported by the specific data source
     };
 
-    std::cout << "[AlpacaDataFeed] Sending Subscription: " << subPayload.dump() << "\n";
+    LOG_INFO("[AlpacaDataFeed] Sending Subscription: {}", subPayload.dump());
     sendWebSocketMessage(subPayload.dump());
 }
 
@@ -100,7 +100,7 @@ void AlpacaDataFeed::disconnect() {
     if (wsThread_.joinable()) {
         wsThread_.join();
     }
-    std::cout << "[AlpacaDataFeed] Disconnected WebSocket.\n";
+    LOG_INFO("[AlpacaDataFeed] Disconnected WebSocket.");
 }
 
 void AlpacaDataFeed::wsRunLoop() {
@@ -125,7 +125,7 @@ void AlpacaDataFeed::wsRunLoop() {
         wsState_->ws->handshake(host, path);
 
         isConnected_ = true;
-        std::cout << "[AlpacaDataFeed] WebSocket Connected. Authenticating...\n";
+        LOG_INFO("[AlpacaDataFeed] WebSocket Connected. Authenticating...");
 
         nlohmann::json authPayload = {
             {"action", "auth"},
@@ -144,7 +144,7 @@ void AlpacaDataFeed::wsRunLoop() {
 
     } catch (const std::exception& e) {
         if (isRunning_) {
-            std::cerr << "[AlpacaDataFeed] WebSocket Run Loop Error: " << e.what() << "\n";
+            LOG_ERROR("[AlpacaDataFeed] WebSocket Run Loop Error: {}", e.what());
         }
         isConnected_ = false;
         isRunning_ = false;
@@ -156,7 +156,7 @@ void AlpacaDataFeed::sendWebSocketMessage(const std::string& message) {
         try {
             wsState_->ws->write(net::buffer(message));
         } catch (const std::exception& e) {
-            std::cerr << "[AlpacaDataFeed] Send Error: " << e.what() << "\n";
+            LOG_ERROR("[AlpacaDataFeed] Send Error: {}", e.what());
         }
     }
 }
@@ -165,7 +165,7 @@ void AlpacaDataFeed::onWebSocketMessage(const std::string& payload) {
     if (payload.empty()) return;
     
     // Debug: Print raw payload to see what Alpaca is sending
-    // std::cout << "[DEBUG] WS Received: " << payload << std::endl;
+    // LOG_DEBUG("[DEBUG] WS Received: {}", payload);
 
     try {
         auto msgArray = nlohmann::json::parse(payload);
@@ -174,7 +174,7 @@ void AlpacaDataFeed::onWebSocketMessage(const std::string& payload) {
             std::string msgType = msg.value("T", "");
 
             if (msgType == "success" && msg.value("msg", "") == "authenticated") {
-                std::cout << "[AlpacaDataFeed] Authentication SUCCESSFUL." << std::endl;
+                LOG_INFO("[AlpacaDataFeed] Authentication SUCCESSFUL.");
             } else if (msgType == "t") {
                 parseTradeUpdate(msg);
             } else if (msgType == "q") {
@@ -182,11 +182,11 @@ void AlpacaDataFeed::onWebSocketMessage(const std::string& payload) {
             } else if (msgType == "o") {
                 parseOrderBookUpdate(msg);
             } else if (msgType == "error") {
-                std::cerr << "[AlpacaDataFeed] Received error: " << msg.dump() << "\n";
+                LOG_ERROR("[AlpacaDataFeed] Received error: {}", msg.dump());
             }
         }
     } catch (const nlohmann::json::parse_error& e) {
-        std::cerr << "[AlpacaDataFeed] JSON Parse Error: " << e.what() << "\nPayload: " << payload << "\n";
+        LOG_ERROR("[AlpacaDataFeed] JSON Parse Error: {}\nPayload: {}", e.what(), payload);
     }
 }
 
@@ -203,7 +203,7 @@ void AlpacaDataFeed::parseTradeUpdate(const nlohmann::json& data) {
             eventBus_->publishTick(tick);
         }
     } catch (const std::exception& e) {
-        std::cerr << "[AlpacaDataFeed] Error parsing trade: " << e.what() << "\n";
+        LOG_ERROR("[AlpacaDataFeed] Error parsing trade: {}", e.what());
     }
 }
 
@@ -221,7 +221,7 @@ void AlpacaDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
             eventBus_->publishTick(tick);
         }
     } catch (const std::exception& e) {
-        // std::cerr << "[AlpacaDataFeed] Error parsing quote: " << e.what() << "\n";
+        // LOG_ERROR("[AlpacaDataFeed] Error parsing quote: {}", e.what());
     }
 }
 
@@ -246,7 +246,7 @@ void AlpacaDataFeed::parseOrderBookUpdate(const nlohmann::json& data) {
             }
         }
     } catch (const std::exception& e) {
-        // std::cerr << "[AlpacaDataFeed] Error parsing orderbook: " << e.what() << "\n";
+        // LOG_ERROR("[AlpacaDataFeed] Error parsing orderbook: {}", e.what());
     }
 }
 

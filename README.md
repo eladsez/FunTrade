@@ -6,44 +6,68 @@ FunTrade is a Proof-of-Concept (PoC) event-driven algorithmic trading bot writte
 
 The system is built around a central Publisher/Subscriber messaging system to prevent blocking calls between the network and the trading logic.
 
-*   **`DomainModels.hpp`**: Contains the foundational plain data structures (`MarketTick`, `OrderRequest`, `Side`, `OrderType`). Market ticks support both Level 1 (Trade) and Level 2 (Order Book Bid/Ask) data.
+*   **`DomainModels.hpp`**: Contains the foundational plain data structures (`MarketTick`, `OrderRequest`, `Side`, `OrderType`). Market ticks support both Level 1 (Trade) and Level 2 (Order Book Bid/Ask/Quote) data.
 *   **`IEventBus`**: The central communication hub. It utilizes a **lock-free concurrent queue** (`moodycamel::ConcurrentQueue`) and a dedicated background dispatcher thread. Data feeds publish ticks instantly without blocking, and strategies receive them asynchronously.
 *   **`IDataFeed`**: The interface for market data ingestion.
     *   `CsvHistoricalDataFeed`: Reads massive CSV files of past tick/order book data and pumps them into the event bus. Supports "As Fast As Possible" and "Real-Time Simulation" playback modes for backtesting.
-    *   `AlpacaDataFeed`: Pre-configured to handle live WebSocket streams from the Alpaca exchange, parsing JSON arrays into domain models.
+    *   `AlpacaDataFeed`: Connects to live Alpaca WebSocket streams (`Boost.Beast`) for 24/7 Crypto market data, parsing JSON arrays into domain models in real-time.
 *   **`IExecutionEngine`**: The interface for routing orders.
     *   `DummyExecution`: Mocks order placements for backtesting.
-    *   `AlpacaExecutionEngine`: Pre-configured to format domain `OrderRequest` structs into the JSON schemas expected by the Alpaca REST API.
+    *   `AlpacaExecutionEngine`: A high-performance REST client (`Boost.Beast`) that formats domain `OrderRequest` structs into JSON schemas for the Alpaca Paper Trading API.
 *   **`IStrategy`**: The "brain" of the bot. Strategies subscribe to the Event Bus and evaluate incoming ticks.
     *   `OBIMomentum`: The primary PoC strategy. It utilizes the **Eigen3** library to maintain an optimized rolling window of Order Book Imbalance (OBI) calculations. It fires Buy/Sell signals when the Simple Moving Average (SMA) of the imbalance crosses specific thresholds.
+*   **`Logger`**: Thread-safe, colored, microsecond-precision console logging powered by `spdlog`.
 
 ## Tech Stack & Tooling
 
 *   **Language:** C++20
 *   **Build System:** CMake (Pitchfork project layout)
 *   **Concurrency:** `std::thread`, `std::atomic`, `std::mutex`, and `moodycamel::ConcurrentQueue`.
+*   **Networking:** `Boost.Asio`, `Boost.Beast`, and `OpenSSL` for blazing-fast WebSocket and REST connectivity.
 *   **Mathematics:** `Eigen3` (Highly optimized, SIMD-vectorized C++ template library for linear algebra).
-*   **Data Parsing:** `nlohmann/json` (Modern C++ JSON library).
-*   **Testing:** Google Test (GTest) integrated via CTest.
+*   **Data Parsing/Logging:** `nlohmann/json` (Modern C++ JSON) and `spdlog`.
+*   **Testing:** Google Test (GTest) with dedicated mock sub-classes to safely isolate network code.
+
+## Security (Live Trading)
+
+**DO NOT hardcode your API keys.** The live bot expects your Alpaca credentials to be securely provided via environment variables. Create a `.env` file in the root directory (which is ignored by Git) to safely store your keys:
+
+```bash
+# .env
+export APCA_API_KEY_ID="your_real_paper_key_here"
+export APCA_API_SECRET_KEY="your_real_paper_secret_here"
+```
 
 ## Building and Running
 
-The project utilizes CMake's `FetchContent` to automatically download and link dependencies (GTest, Eigen, ConcurrentQueue, JSON).
+The project utilizes CMake's `FetchContent` to automatically download and link dependencies (GTest, Eigen, ConcurrentQueue, JSON, Boost, spdlog). It is configured to build aggressively fast using `-j14`.
 
 ```bash
-mkdir -p build && cd build
-cmake ..
-make
+# Build the project
+bash scripts/build.sh
 
-# Run the unit tests
-ctest --output-on-failure
+# Run the unit tests (Network operations are safely mocked)
+cd build && ctest --output-on-failure -j14 -R "^test_"
 
-# Run the backtester
-./FunTrade
+# Run the Offline Backtester (Uses sample CSV data)
+./build/FunTrade
+
+# Run the LIVE Paper Trading Bot
+source .env
+./build/FunTrade --live
+```
+
+### Running Live Integration Tests
+
+If you wish to test the physical connection to Alpaca and verify order placement (Warning: This will place paper trades!), you must explicitly enable the CMake flag:
+
+```bash
+cmake -B build -DENABLE_PAPERTRADING_TEST=ON
+cmake --build build
+source .env
+./build/tests/test_alpaca_execution
 ```
 
 ## Current Project Status
 
-The project has successfully completed the implementation of the core architecture, the lock-free event pipeline, the backtesting infrastructure, and the Eigen-powered mathematical strategy logic. The current entry point (`main.cpp`) acts as a backtester, replaying a sample Level 2 data CSV file through the `OBIMomentum` strategy.
-
-The next planned phase is the integration of live networking (e.g., using `Boost.Asio` or `Boost.Beast`) to connect the pre-mapped Alpaca data and execution classes to the live internet.
+The core infrastructure is 100% complete and fully verified. The bot successfully handles live WebSockets, lock-free dispatching, math calculations, and live REST order execution via `Boost.Beast`. The next phase will focus on Risk Management (position sizing, tracking active PnL) and refining the algorithmic strategies.
