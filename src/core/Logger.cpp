@@ -23,7 +23,7 @@ void Logger::init() {
         logger_->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%^%l%$] %v");
         
         // Set global log level
-        logger_->set_level(spdlog::level::info);
+        logger_->set_level(spdlog::level::debug);
         
         // Setup SPDLOG macros to use our logger level
         spdlog::set_default_logger(logger_);

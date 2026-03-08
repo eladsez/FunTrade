@@ -2,21 +2,18 @@
 #include <strategy/IStrategy.hpp>
 #include <core/IEventBus.hpp>
 #include <execution/IExecutionEngine.hpp>
+#include <risk/PortfolioManager.hpp>
 #include <memory>
 #include <Eigen/Dense>
 
 namespace bot {
 
-enum class PositionState {
-    FLAT,
-    LONG,
-    SHORT
-};
-
 class OBIMomentum : public IStrategy {
 public:
     OBIMomentum(std::shared_ptr<IEventBus> bus, 
                 std::shared_ptr<IExecutionEngine> execEngine, 
+                std::shared_ptr<PortfolioManager> portfolioManager,
+                double initialPortfolioValue = 100000.0,
                 const std::string& symbol = "BTC/USD", 
                 int windowSize = 5,
                 double stdDevMultiplier = 2.0,
@@ -29,6 +26,7 @@ public:
 private:
     std::shared_ptr<IEventBus> eventBus;
     std::shared_ptr<IExecutionEngine> executionEngine;
+    std::shared_ptr<PortfolioManager> portfolioManager_;
     std::string symbol_;
 
     // OBI specific variables
@@ -45,8 +43,8 @@ private:
     double emaPrice_;
     bool isEmaInitialized_;
 
-    // Position tracking to prevent order spamming
-    PositionState currentPosition_;
+    // Portfolio state
+    double portfolioValue_;
 };
 
 } // namespace bot

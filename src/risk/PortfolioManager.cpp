@@ -120,6 +120,19 @@ void PortfolioManager::syncWithExchange(IExecutionEngine& engine) {
             }
         }
     }
+
+    // --- LOG THE FINAL STATE AFTER SYNC ---
+    LOG_INFO("[PortfolioManager] === Sync Complete. Current Portfolio State ===");
+    LOG_INFO("[PortfolioManager] Total open positions: {}", positions_.size());
+    
+    for (const auto& [symbol, pos] : positions_) {
+        // Calculate a quick snapshot of unrealized PnL for the log
+        double unrealizedPnL = (pos.current_price - pos.avg_price) * pos.quantity;
+        
+        LOG_INFO("  -> Symbol: {} | Qty: {:.4f} | Avg Price: {:.2f} | Cur Price: {:.2f} | uPnL: {:.2f}", 
+                 symbol, pos.quantity, pos.avg_price, pos.current_price, unrealizedPnL);
+    }
+    LOG_INFO("[PortfolioManager] ================================================");
 }
 
 double PortfolioManager::getTotalRealizedPnL() const {

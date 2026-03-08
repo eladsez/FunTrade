@@ -5,6 +5,7 @@
 #include <csignal>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 #include <core/Logger.hpp>
 #include <core/EventBus.hpp>
 #include <data/CsvHistoricalDataFeed.hpp>
@@ -18,17 +19,11 @@
 using namespace bot;
 
 // Global coordination for graceful shutdown
-std::mutex g_shutdown_mutex;
-std::condition_variable g_shutdown_cv;
-bool g_shutdown_requested = false;
+std::atomic<bool> g_shutdown_requested{false};
 
-void signalHandler(int signum) {
-    LOG_INFO("Interrupt signal ({}) received. Initiating graceful shutdown...", signum);
-    {
-        std::lock_guard<std::mutex> lock(g_shutdown_mutex);
-        g_shutdown_requested = true;
-    }
-    g_shutdown_cv.notify_all();
+void signalHandler(int /*signum*/) {
+    // Async-signal-safe: only setting an atomic flag.
+    g_shutdown_requested.store(true, std::memory_order_release);
 }
 
 void setupSignalHandlers() {
@@ -64,15 +59,18 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
     std::this_thread::sleep_for(std::chrono::seconds(2));
     
     auto portfolioValue = executionEngine->getPortfolioValue();
+    double initPv = 100000.0;
     if (portfolioValue) {
-        LOG_INFO("[LIVE] Current Portfolio Value: ${}", *portfolioValue);
+        initPv = *portfolioValue;
+        LOG_INFO("[LIVE] Current Portfolio Value: ${}", initPv);
     }
 
     std::string symbol = "BTC/USD";
     LOG_INFO("[LIVE] Subscribing to {} market data stream...", symbol);
     
     // Use the dynamic parameters passed via command line
-    auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, symbol, windowSize, stdDevMultiplier, riskPercentage, emaWindowSize);
+    auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, portfolioManager, initPv, symbol, windowSize, stdDevMultiplier, riskPercentage, emaWindowSize);
+
     
     // PortfolioManager should also get tick updates to track unrealized PnL
     eventBus->subscribeToTick(symbol, [portfolioManager](const MarketTick& tick) {
@@ -85,8 +83,9 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
     LOG_INFO("[LIVE] Bot is running. Press Ctrl+C to stop.");
     
     // Wait infinitely until a signal is received
-    std::unique_lock<std::mutex> lock(g_shutdown_mutex);
-    g_shutdown_cv.wait(lock, [] { return g_shutdown_requested; });
+    while (!g_shutdown_requested.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
     LOG_INFO("[LIVE] Shutting down live session...");
     strategy->stop();
@@ -101,8 +100,8 @@ int runBacktestMode() {
     auto eventBus = std::make_shared<EventBus>();
     auto executionEngine = std::make_shared<DummyExecution>(*eventBus);
     auto dataFeed = std::make_shared<CsvHistoricalDataFeed>(eventBus, "data/obi_sample.csv");
-    auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine);
     auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus);
+    auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, portfolioManager, 100000.0);
 
     executionEngine->authenticate();
     
@@ -125,8 +124,9 @@ int runBacktestMode() {
     // Wait for shutdown signal OR a brief timeout (in reality backtests wait for EOF)
     // Since our Csv feed is threaded, we should ideally wait for it to finish.
     // For now, we just wait until the user stops it or 10 seconds pass.
-    std::unique_lock<std::mutex> lock(g_shutdown_mutex);
-    g_shutdown_cv.wait_for(lock, std::chrono::seconds(10), [] { return g_shutdown_requested; });
+    for (int i = 0; i < 100 && !g_shutdown_requested.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
     strategy->stop();
     dataFeed->disconnect();
@@ -146,10 +146,10 @@ int main(int argc, char* argv[]) {
     LOG_INFO("==================================================");
 
     bool liveMode = false;
-    int windowSize = 20;
-    double stdDevMultiplier = 2.0;
+    int windowSize = 100;
+    double stdDevMultiplier = 1.5;
     double riskPercentage = 1.0;
-    int emaWindowSize = 10;
+    int emaWindowSize = 500;
     
 
     for (int i = 1; i < argc; ++i) {

@@ -6,6 +6,7 @@
 #include <memory>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>
 #include <vector>
 #include <thread>
 #include <nlohmann/json.hpp>
@@ -49,10 +50,16 @@ private:
     std::unique_ptr<WsClientState> wsState_;
     std::thread wsThread_;
 
+    std::mutex connectMutex_;
+    std::condition_variable connectCv_;
+
     // Internal parsing strategies for different stream types
     void parseTradeUpdate(const nlohmann::json& data);
     void parseQuoteUpdate(const nlohmann::json& data);
     void parseOrderBookUpdate(const nlohmann::json& data);
+    
+    // Asynchronous write loop
+    void doWrite();
 };
 
 } // namespace bot

@@ -52,6 +52,7 @@ private:
 
     // WebSocket state for trade updates
     std::unique_ptr<AlpacaWsState> wsState_;
+    std::mutex wsMutex_;
     std::thread wsThread_;
     std::atomic<bool> isWsRunning_{false};
 

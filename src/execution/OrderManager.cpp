@@ -55,6 +55,19 @@ void OrderManager::syncWithExchange() {
             }
         }
     }
+
+    // --- LOG THE FINAL STATE AFTER SYNC ---
+    LOG_INFO("[OrderManager] === Sync Complete. Current State Summary ===");
+    LOG_INFO("[OrderManager] Total tracked orders: {}", ordersByClientId_.size());
+    
+    for (const auto& [clientId, state] : ordersByClientId_) {
+        // Convert the enum Side back to string for logging
+        std::string sideLog = (state.side == Side::BUY) ? "BUY" : "SELL";
+        
+        LOG_INFO("  -> ClientID: {} | ExchID: {} | Symbol: {} | Side: {} | Qty: {:.4f} | Price: {:.2f}", 
+                 clientId, state.order_id, state.symbol, sideLog, state.quantity, state.price);
+    }
+    LOG_INFO("[OrderManager] ============================================");
 }
 
 void OrderManager::onExecution(const ExecutionReport& report) {

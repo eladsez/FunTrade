@@ -1,23 +1,32 @@
 #include <strategy/OBIMomentum.hpp>
 #include <core/Logger.hpp>
 #include <cmath>
+#include <algorithm>
 
 namespace bot {
 
-OBIMomentum::OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, const std::string& symbol, int windowSize, double stdDevMultiplier, double riskPercentage, int emaWindowSize)
-    : eventBus(bus), executionEngine(execEngine), symbol_(symbol), windowSize_(windowSize), currentIndex_(0), isWindowFull_(false), stdDevMultiplier_(stdDevMultiplier), riskPercentage_(riskPercentage), emaWindowSize_(emaWindowSize), emaPrice_(0.0), isEmaInitialized_(false), currentPosition_(PositionState::FLAT) {
+OBIMomentum::OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, std::shared_ptr<PortfolioManager> portfolioManager, double initialPortfolioValue, const std::string& symbol, int windowSize, double stdDevMultiplier, double riskPercentage, int emaWindowSize)
+    : eventBus(bus), executionEngine(execEngine), portfolioManager_(portfolioManager), symbol_(symbol), windowSize_(windowSize), currentIndex_(0), isWindowFull_(false), stdDevMultiplier_(stdDevMultiplier), riskPercentage_(riskPercentage), emaWindowSize_(emaWindowSize), emaPrice_(0.0), isEmaInitialized_(false), portfolioValue_(initialPortfolioValue) {
     // Initialize Eigen vector for the rolling window
     obiWindow_ = Eigen::VectorXd::Zero(windowSize_);
 }
 
 void OBIMomentum::start() {
-    LOG_INFO("[OBIMomentum] Strategy started for {} with window size {}. StdDev Multiplier: {}, Risk: {}%, EMA Window: {}. Initial state: FLAT.", symbol_, windowSize_, stdDevMultiplier_, riskPercentage_, emaWindowSize_);
+    LOG_INFO("[OBIMomentum] Strategy started for {} with window size {}. StdDev Multiplier: {}, Risk: {}%, EMA Window: {}. Initial PV: ${}", symbol_, windowSize_, stdDevMultiplier_, riskPercentage_, emaWindowSize_, portfolioValue_);
+
     eventBus->subscribeToTick(symbol_, [this](const MarketTick& tick) {
         this->onTick(tick);
     });
 }
 
 void OBIMomentum::onTick(const MarketTick& tick) {
+
+    static int tickCounter = 0;
+    tickCounter++;
+    if (tickCounter % 100 == 0) { 
+        LOG_INFO("--- [DEBUG TICK {}] ---", tickCounter);
+    }
+
     // If we don't have level 2 data, we can't calculate OBI
     if (tick.bid_size == 0.0 && tick.ask_size == 0.0) {
         return; 
@@ -34,26 +43,20 @@ void OBIMomentum::onTick(const MarketTick& tick) {
         emaPrice_ = (alpha * midPrice) + (1.0 - alpha) * emaPrice_;
     }
 
-    // 1. Calculate the raw Order Book Imbalance (OBI)
+    // 1. Calculate the raw Order Book Imbalance (OBI) for the CURRENT tick
     double totalSize = tick.bid_size + tick.ask_size;
-    double obi = (tick.bid_size - tick.ask_size) / totalSize;
+    double currentObi = (tick.bid_size - tick.ask_size) / totalSize;
 
-    // 2. Update the rolling window (Eigen Vector)
-    obiWindow_(currentIndex_) = obi;
-    currentIndex_++;
-
-    if (currentIndex_ >= windowSize_) {
-        isWindowFull_ = true;
-        currentIndex_ = 0; // Wrap around (circular buffer)
-    }
-
-    // 3. Evaluate signal if window is full
+    // 2. Evaluate signal against the historical window BEFORE adding the new OBI
     if (isWindowFull_) {
         double smoothedObi = obiWindow_.mean();
 
-        // Calculate standard deviation of OBI
+        // Calculate standard deviation of historical OBI
         double variance = (obiWindow_.array() - smoothedObi).square().sum() / (windowSize_ - 1);
         double stdDev = std::sqrt(variance);
+
+        // Prevent 0 stdDev dividing/thresholding issues
+        if (stdDev < 1e-6) stdDev = 1e-6;
 
         double dynamicBuyThreshold = smoothedObi + (stdDevMultiplier_ * stdDev);
         double dynamicSellThreshold = smoothedObi - (stdDevMultiplier_ * stdDev);
@@ -61,50 +64,49 @@ void OBIMomentum::onTick(const MarketTick& tick) {
         bool trendIsUp = midPrice > emaPrice_;
         bool trendIsDown = midPrice < emaPrice_;
 
-        // Determine Trade Quantity based on Risk Percentage
-        double tradeQty = 0.001; // Safe Default
-        auto portfolioValueOpt = executionEngine->getPortfolioValue();
-        if (portfolioValueOpt && *portfolioValueOpt > 0) {
-            double riskValue = *portfolioValueOpt * (riskPercentage_ / 100.0);
-            tradeQty = riskValue / tick.ask_price;
-        }
+        // Use PortfolioManager to get the current ACTUAL position quantity
+        std::string cleanSymbol = symbol_;
+        cleanSymbol.erase(std::remove(cleanSymbol.begin(), cleanSymbol.end(), '/'), cleanSymbol.end());
+        double netQty = portfolioManager_->getNetPosition(cleanSymbol);
+        bool isLong = netQty > 0.0001;
 
-        // 4. Trigger Orders based on dynamic thresholds, EMA confluence AND current position
-        if (obi > dynamicBuyThreshold && trendIsUp && currentPosition_ != PositionState::LONG) {
-            LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Raw OBI ({:.2f}) > Buy Threshold ({:.2f}) & MidPrice ({:.2f}) > EMA ({:.2f}). Entering LONG.", obi, dynamicBuyThreshold, midPrice, emaPrice_);
+        // Portfolio value & risk sizing
+        double currentPortfolioValue = portfolioValue_ + portfolioManager_->getTotalRealizedPnL() + portfolioManager_->getTotalUnrealizedPnL();
+        double riskValue = currentPortfolioValue * (riskPercentage_ / 100.0);
+        double tradeQty = riskValue / tick.ask_price;
+        if (tradeQty < 0.0001) tradeQty = 0.0001; // Minimum trade size guard
+
+        // 3. Trigger Orders based on historical thresholds
+        if (currentObi > dynamicBuyThreshold && trendIsUp && !isLong) {
+            LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Raw OBI ({:.2f}) > Buy Threshold ({:.2f}) & MidPrice ({:.2f}) > EMA ({:.2f}). Entering LONG.", currentObi, dynamicBuyThreshold, midPrice, emaPrice_);
             
             OrderRequest req{"", symbol_, Side::BUY, OrderType::LIMIT, tradeQty, tick.ask_price}; 
             executionEngine->placeOrder(req);
             
-            currentPosition_ = PositionState::LONG;
+            // FIX: Do NOT zero out the window. We just reset the index and fullness 
+            // to act as a brief cooldown while we wait for the asynchronous fill.
             isWindowFull_ = false;
-            obiWindow_.setZero();
+            currentIndex_ = 0;
         } 
-        else if (obi < dynamicSellThreshold && trendIsDown && currentPosition_ == PositionState::LONG) {
-            LOG_INFO("<<< [OBIMomentum] STRONG SELL SIGNAL! Raw OBI ({:.2f}) < Sell Threshold ({:.2f}) & MidPrice ({:.2f}) < EMA ({:.2f}). Exiting LONG to FLAT.", obi, dynamicSellThreshold, midPrice, emaPrice_);
+        else if (currentObi < dynamicSellThreshold && trendIsDown && isLong) {
+            LOG_INFO("<<< [OBIMomentum] STRONG SELL SIGNAL! Raw OBI ({:.2f}) < Sell Threshold ({:.2f}) & MidPrice ({:.2f}) < EMA ({:.2f}). Exiting LONG to FLAT.", currentObi, dynamicSellThreshold, midPrice, emaPrice_);
             
-            auto positions = executionEngine->getOpenPositions();
-            double exactQtyToSell = 0.0;
-            if (positions.is_array()) {
-                for (const auto& pos : positions) {
-                    if (pos.value("symbol", "").find("BTC") != std::string::npos) {
-                        exactQtyToSell = std::stod(pos.value("qty_available", "0"));
-                        break;
-                    }
-                }
-            }
-
-            if (exactQtyToSell > 0) {
-                OrderRequest req{"", symbol_, Side::SELL, OrderType::LIMIT, exactQtyToSell, tick.bid_price};
-                executionEngine->placeOrder(req);
-            } else {
-                LOG_WARN("[OBIMomentum] Strategy tried to sell, but no position was found in Alpaca!");
-            }
+            OrderRequest req{"", symbol_, Side::SELL, OrderType::LIMIT, netQty, tick.bid_price};
+            executionEngine->placeOrder(req);
             
-            currentPosition_ = PositionState::FLAT;
+            // FIX: Same here. Act as a cooldown, keep the historical data alive.
             isWindowFull_ = false;
-            obiWindow_.setZero();
+            currentIndex_ = 0;
         }
+    }
+
+    // 4. NOW update the rolling window with the new OBI
+    obiWindow_(currentIndex_) = currentObi;
+    currentIndex_++;
+
+    if (currentIndex_ >= windowSize_) {
+        isWindowFull_ = true;
+        currentIndex_ = 0; // Wrap around (circular buffer)
     }
 }
 

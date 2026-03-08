@@ -29,6 +29,7 @@ struct AlpacaWsState {
     net::io_context ioc;
     ssl::context ctx{ssl::context::tlsv12_client};
     std::unique_ptr<websocket::stream<beast::ssl_stream<tcp::socket>>> ws;
+    beast::flat_buffer buffer;
 };
 
 static std::string formatDouble(double value) {
@@ -51,10 +52,15 @@ AlpacaExecutionEngine::AlpacaExecutionEngine(IEventBus& eventBus, std::string ap
 
 AlpacaExecutionEngine::~AlpacaExecutionEngine() {
     isWsRunning_ = false;
-    if (wsState_ && wsState_->ws) {
-        beast::error_code ec;
-        beast::get_lowest_layer(*wsState_->ws).cancel(ec);
-        beast::get_lowest_layer(*wsState_->ws).close(ec);
+    {
+        std::lock_guard<std::mutex> lock(wsMutex_);
+        if (wsState_) {
+            net::post(wsState_->ioc, [this]() {
+                if (wsState_->ws && wsState_->ws->is_open()) {
+                    wsState_->ws->async_close(websocket::close_code::normal, [](beast::error_code){});
+                }
+            });
+        }
     }
     if (wsThread_.joinable()) wsThread_.join();
 
@@ -188,7 +194,10 @@ std::string AlpacaExecutionEngine::sendHttpRequest(const std::string& method, co
         }
 
         auto const results = resolver.resolve(host, port);
+        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
         beast::get_lowest_layer(stream).connect(results);
+        
+        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
         stream.handshake(ssl::stream_base::client);
 
         http::verb verb = (method == "POST") ? http::verb::post : ((method == "DELETE") ? http::verb::delete_ : http::verb::get);
@@ -204,9 +213,12 @@ std::string AlpacaExecutionEngine::sendHttpRequest(const std::string& method, co
             req.prepare_payload();
         }
 
+        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
         http::write(stream, req);
+        
         beast::flat_buffer buffer;
         http::response<http::string_body> res;
+        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
         http::read(stream, buffer, res);
 
         beast::error_code ec;
@@ -219,8 +231,11 @@ std::string AlpacaExecutionEngine::sendHttpRequest(const std::string& method, co
 }
 
 void AlpacaExecutionEngine::runWsLoop() {
-    wsState_ = std::make_unique<AlpacaWsState>();
-    wsState_->ctx.set_default_verify_paths();
+    {
+        std::lock_guard<std::mutex> lock(wsMutex_);
+        wsState_ = std::make_unique<AlpacaWsState>();
+        wsState_->ctx.set_default_verify_paths();
+    }
     
     std::string host = "paper-api.alpaca.markets"; // Using paper-api for stream
     std::string port = "443";
@@ -228,7 +243,10 @@ void AlpacaExecutionEngine::runWsLoop() {
     while (isWsRunning_) {
         try {
             tcp::resolver resolver(wsState_->ioc);
-            wsState_->ws = std::make_unique<websocket::stream<beast::ssl_stream<tcp::socket>>>(net::make_strand(wsState_->ioc), wsState_->ctx);
+            {
+                std::lock_guard<std::mutex> lock(wsMutex_);
+                wsState_->ws = std::make_unique<websocket::stream<beast::ssl_stream<tcp::socket>>>(net::make_strand(wsState_->ioc), wsState_->ctx);
+            }
 
             auto const results = resolver.resolve(host, port);
             net::connect(beast::get_lowest_layer(*wsState_->ws), results);
@@ -246,12 +264,21 @@ void AlpacaExecutionEngine::runWsLoop() {
             nlohmann::json sub = {{"action", "listen"}, {"data", {{"streams", {"trade_updates"}}}}};
             wsState_->ws->write(net::buffer(sub.dump()));
 
-            beast::flat_buffer buffer;
-            while (isWsRunning_ && wsState_->ws->is_open()) {
-                wsState_->ws->read(buffer);
-                onWsMessage(beast::buffers_to_string(buffer.data()));
-                buffer.consume(buffer.size());
-            }
+            std::function<void()> doRead;
+            doRead = [this, &doRead]() {
+                if (!isWsRunning_ || !wsState_->ws->is_open()) return;
+                wsState_->ws->async_read(wsState_->buffer, [this, &doRead](beast::error_code ec, std::size_t) {
+                    if (ec) return;
+                    std::string payload = beast::buffers_to_string(wsState_->buffer.data());
+                    wsState_->buffer.consume(wsState_->buffer.size());
+                    onWsMessage(payload);
+                    if (isWsRunning_) doRead();
+                });
+            };
+            doRead();
+            wsState_->ioc.run();
+            wsState_->ioc.restart();
+
         } catch (const std::exception& e) {
             if (isWsRunning_) {
                 LOG_ERROR("[AlpacaExecutionEngine] WS Error: {}. Reconnecting in 5s...", e.what());

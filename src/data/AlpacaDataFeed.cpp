@@ -2,6 +2,7 @@
 #include <core/Logger.hpp>
 #include <algorithm>
 #include <chrono>
+#include <deque>
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -24,6 +25,10 @@ struct WsClientState {
     net::io_context ioc;
     ssl::context ctx{ssl::context::tlsv12_client};
     std::unique_ptr<websocket::stream<beast::ssl_stream<tcp::socket>>> ws;
+    beast::flat_buffer buffer;
+    
+    std::deque<std::string> writeQueue;
+    bool isWriting = false;
 };
 
 AlpacaDataFeed::AlpacaDataFeed(std::shared_ptr<IEventBus> eventBus, std::string apiKey, std::string apiSecret)
@@ -40,22 +45,24 @@ bool AlpacaDataFeed::connect() {
 
     LOG_INFO("[AlpacaDataFeed] Connecting to WebSocket...");
     isRunning_ = true;
+    
+    std::unique_lock<std::mutex> lock(connectMutex_);
     wsThread_ = std::thread(&AlpacaDataFeed::wsRunLoop, this);
 
-    // Wait briefly for the connection flag to flip (sufficient for PoC)
-    // In a production system, use a std::condition_variable.
-    int attempts = 0;
-    while (!isConnected_ && isRunning_ && attempts < 20) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        attempts++;
-    }
-
-    if (!isConnected_) {
+    // Wait for the connection flag to flip or error to occur
+    if (connectCv_.wait_for(lock, std::chrono::seconds(10), [this] { return isConnected_.load() || !isRunning_.load(); })) {
+        if (isConnected_) {
+            return true;
+        } else {
+            LOG_ERROR("[AlpacaDataFeed] Connection failed during setup.");
+            disconnect();
+            return false;
+        }
+    } else {
         LOG_ERROR("[AlpacaDataFeed] Connection timed out.");
         disconnect();
+        return false;
     }
-    
-    return isConnected_;
 }
 
 void AlpacaDataFeed::subscribeToSymbol(const std::string& symbol) {
@@ -85,17 +92,17 @@ void AlpacaDataFeed::subscribeToSymbol(const std::string& symbol) {
 void AlpacaDataFeed::disconnect() {
     if (!isRunning_.exchange(false)) return;
 
-    if (isConnected_ && wsState_->ws && wsState_->ws->is_open()) {
-        try {
-            beast::error_code ec;
-            // Forcefully close the underlying TCP socket to unblock any pending read operations.
-            // Calling websocket::close() concurrently with a blocking read() is not thread-safe in Boost.Beast.
-            beast::get_lowest_layer(*wsState_->ws).cancel(ec);
-            beast::get_lowest_layer(*wsState_->ws).close(ec);
-        } catch(...) {}
+    if (wsState_) {
+        net::post(wsState_->ioc, [this]() {
+            if (wsState_->ws && wsState_->ws->is_open()) {
+                // Close the websocket gracefully asynchronously
+                wsState_->ws->async_close(websocket::close_code::normal, [](beast::error_code){});
+            }
+        });
     }
     
     isConnected_ = false;
+    connectCv_.notify_all(); // Unblock any threads waiting in connect()
 
     if (wsThread_.joinable()) {
         wsThread_.join();
@@ -124,7 +131,12 @@ void AlpacaDataFeed::wsRunLoop() {
         wsState_->ws->next_layer().handshake(ssl::stream_base::client);
         wsState_->ws->handshake(host, path);
 
-        isConnected_ = true;
+        {
+            std::lock_guard<std::mutex> lock(connectMutex_);
+            isConnected_ = true;
+        }
+        connectCv_.notify_all();
+
         LOG_INFO("[AlpacaDataFeed] WebSocket Connected. Authenticating...");
 
         nlohmann::json authPayload = {
@@ -134,38 +146,89 @@ void AlpacaDataFeed::wsRunLoop() {
         };
         sendWebSocketMessage(authPayload.dump());
 
-        beast::flat_buffer buffer;
-        while (isRunning_ && wsState_->ws->is_open()) {
-            wsState_->ws->read(buffer);
-            std::string payload = beast::buffers_to_string(buffer.data());
-            buffer.consume(buffer.size());
-            onWebSocketMessage(payload);
-        }
+        std::function<void()> doRead;
+        doRead = [this, &doRead]() {
+            if (!isRunning_ || !wsState_->ws->is_open()) return;
+            wsState_->ws->async_read(wsState_->buffer, [this, &doRead](beast::error_code ec, std::size_t) {
+                if (ec) {
+                    if (isRunning_) LOG_ERROR("[AlpacaDataFeed] WS Read Error: {}", ec.message());
+                    isConnected_ = false;
+                    return; // Stop the read loop
+                }
+                std::string payload = beast::buffers_to_string(wsState_->buffer.data());
+                wsState_->buffer.consume(wsState_->buffer.size());
+                onWebSocketMessage(payload);
+                if (isRunning_) doRead();
+            });
+        };
+        doRead();
+        
+        // Block until io_context is stopped or runs out of work.
+        wsState_->ioc.run();
+        wsState_->ioc.restart();
 
     } catch (const std::exception& e) {
         if (isRunning_) {
             LOG_ERROR("[AlpacaDataFeed] WebSocket Run Loop Error: {}", e.what());
         }
-        isConnected_ = false;
-        isRunning_ = false;
+        {
+            std::lock_guard<std::mutex> lock(connectMutex_);
+            isConnected_ = false;
+            isRunning_ = false;
+        }
+        connectCv_.notify_all(); // Notify if it failed during handshake
     }
 }
 
 void AlpacaDataFeed::sendWebSocketMessage(const std::string& message) {
-    if (isConnected_ && wsState_->ws && wsState_->ws->is_open()) {
-        try {
-            wsState_->ws->write(net::buffer(message));
-        } catch (const std::exception& e) {
-            LOG_ERROR("[AlpacaDataFeed] Send Error: {}", e.what());
-        }
+    if (isConnected_ && wsState_) {
+        // Post to the io_context to ensure thread safety
+        net::post(wsState_->ioc, [this, msg = message]() {
+            wsState_->writeQueue.push_back(msg);
+            if (!wsState_->isWriting) {
+                doWrite();
+            }
+        });
     }
+}
+
+void AlpacaDataFeed::doWrite() {
+    if (wsState_->writeQueue.empty()) {
+        wsState_->isWriting = false;
+        return;
+    }
+
+    wsState_->isWriting = true;
+    
+    // We must capture the message by value or ensure its lifetime. 
+    // Since we are pushing it into async_write, we can just use the front element, 
+    // but the buffer needs to point to valid memory until the async operation completes.
+    // The deque guarantees that references to elements are not invalidated by push_back.
+    wsState_->ws->async_write(
+        net::buffer(wsState_->writeQueue.front()),
+        [this](beast::error_code ec, std::size_t bytes_transferred) {
+            if (ec) {
+                LOG_ERROR("[AlpacaDataFeed] Send Error: {}", ec.message());
+                // In case of error, we might want to clear the queue or disconnect
+                wsState_->isWriting = false;
+                isConnected_ = false;
+                return;
+            }
+
+            // Remove the sent message
+            wsState_->writeQueue.pop_front();
+            
+            // Send the next message
+            doWrite();
+        }
+    );
 }
 
 void AlpacaDataFeed::onWebSocketMessage(const std::string& payload) {
     if (payload.empty()) return;
     
     // Debug: Print raw payload to see what Alpaca is sending
-    // LOG_DEBUG("[DEBUG] WS Received: {}", payload);
+    LOG_DEBUG("[DEBUG] WS Received: {}", payload);
 
     try {
         auto msgArray = nlohmann::json::parse(payload);
@@ -221,7 +284,7 @@ void AlpacaDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
             eventBus_->publishTick(tick);
         }
     } catch (const std::exception& e) {
-        // LOG_ERROR("[AlpacaDataFeed] Error parsing quote: {}", e.what());
+        LOG_ERROR("[AlpacaDataFeed] Error parsing quote: {}", e.what());
     }
 }
 
@@ -246,7 +309,7 @@ void AlpacaDataFeed::parseOrderBookUpdate(const nlohmann::json& data) {
             }
         }
     } catch (const std::exception& e) {
-        // LOG_ERROR("[AlpacaDataFeed] Error parsing orderbook: {}", e.what());
+        LOG_ERROR("[AlpacaDataFeed] Error parsing orderbook: {}", e.what());
     }
 }
 
