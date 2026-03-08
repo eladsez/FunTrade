@@ -22,18 +22,27 @@ enum class OrderStatus {
     EXPIRED
 };
 
-// Represents a price update or a trade execution in the market.
+enum class TickType {
+    TRADE,
+    QUOTE,
+    ORDERBOOK
+};
+
 struct MarketTick {
     std::string symbol;
-    double price;         // Last trade price (or mid-price)
-    double volume;        // Last trade volume
-    uint64_t timestamp_ms;
+    TickType type;
     
-    // Level 1 Order Book Data (Optional/0.0 if not provided by the feed)
+    // Trade Data
+    double price = 0.0;       // Last trade price
+    double volume = 0.0;      // Last trade volume
+    
+    // Quote / Order Book Data
     double bid_price = 0.0;
     double bid_size = 0.0;
     double ask_price = 0.0;
     double ask_size = 0.0;
+
+    uint64_t timestamp_ms = 0;
 };
 
 // Represents an order we want to send to the exchange.

@@ -20,9 +20,30 @@ void OBIMomentum::start() {
 }
 
 void OBIMomentum::onTick(const MarketTick& tick) {
+    LOG_DEBUG("[OBIMomentum] MarketTick for {} Price: {:.2f}, Vol: {:.4f}, TS: {}, Bid: {:.4f}@{:.2f}, Ask: {:.4f}@{:.2f}", 
+          tick.symbol, 
+          tick.price, 
+          tick.volume, 
+          tick.timestamp_ms,
+          tick.bid_size, 
+          tick.bid_price, 
+          tick.ask_size, 
+          tick.ask_price);
     // If we don't have level 2 data, we can't calculate OBI
-    if (tick.bid_size == 0.0 && tick.ask_size == 0.0) {
+    if (tick.type != TickType::QUOTE && tick.type != TickType::ORDERBOOK) {
         return; 
+    }
+
+    // Get current local system time in milliseconds
+    auto now = std::chrono::system_clock::now();
+    uint64_t localTimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()
+    ).count();
+
+    // Guard against stale data (e.g., discard ticks older than 500ms)
+    if (tick.timestamp_ms > 0 && (localTimeMs - tick.timestamp_ms > 500)) {
+        LOG_DEBUG("[OBIMomentum] Discarding stale tick for {} ({}ms old)", tick.symbol, (localTimeMs - tick.timestamp_ms));
+        return;
     }
 
     double midPrice = (tick.bid_price + tick.ask_price) / 2.0;

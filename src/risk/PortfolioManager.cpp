@@ -18,11 +18,18 @@ PortfolioManager::PortfolioManager(IEventBus& eventBus) : eventBus_(eventBus) {
 }
 
 void PortfolioManager::onTick(const MarketTick& tick) {
+    if (tick.type != TickType::TRADE) {
+        return; 
+    }
     std::string symbol = tick.symbol;
     symbol.erase(std::remove(symbol.begin(), symbol.end(), '/'), symbol.end());
     
     std::lock_guard<std::mutex> lock(mtx_);
     if (positions_.count(symbol)) {
+        LOG_DEBUG("[PortfolioManager] Update price for {}:{:.2f}: -> {:.2f}", 
+            tick.symbol, 
+            positions_[symbol].current_price, 
+            tick.price);
         positions_[symbol].current_price = tick.price;
     }
 }

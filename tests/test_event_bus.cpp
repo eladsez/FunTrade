@@ -25,7 +25,7 @@ TEST_F(EventBusTest, PublishTickDeliversToSubscriber) {
         lastPrice = tick.price;
     });
 
-    MarketTick tick{"BTC/USD", 50000.0, 1.0, 1000};
+    MarketTick tick{"BTC/USD", TickType::ORDERBOOK, 50000.0, 1.0, 1000};
     eventBus->publishTick(tick);
 
     // Wait a short moment for the background thread to process
@@ -49,7 +49,7 @@ TEST_F(EventBusTest, MultipleSubscribersReceiveTick) {
         sub2Count++;
     });
 
-    MarketTick tick{"ETH/USD", 3000.0, 10.0, 1000};
+    MarketTick tick{"ETH/USD", TickType::TRADE, 3000.0, 10.0, 1000};
     eventBus->publishTick(tick);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -65,7 +65,7 @@ TEST_F(EventBusTest, FilterBySymbolWorks) {
     eventBus->subscribeToTick("BTC/USD", [&](const MarketTick& tick) { (void)tick; btcCount++; });
     eventBus->subscribeToTick("ETH/USD", [&](const MarketTick& tick) { (void)tick; ethCount++; });
 
-    MarketTick tick{"ETH/USD", 3000.0, 10.0, 1000};
+    MarketTick tick{"ETH/USD", TickType::TRADE, 3000.0, 10.0, 1000};
     eventBus->publishTick(tick);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -80,7 +80,7 @@ TEST_F(EventBusTest, GracefulShutdownProcessesRemainingEvents) {
 
     // Publish some ticks
     for (int i = 0; i < 100; ++i) {
-        eventBus->publishTick({"TEST", 1.0, 1.0, static_cast<uint64_t>(i)});
+        eventBus->publishTick({"TEST", TickType::QUOTE, 1.0, 1.0, static_cast<uint64_t>(i)});
     }
 
     // Immediately stop. The destructor/stop method should drain the queue.

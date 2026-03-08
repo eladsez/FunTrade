@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <deque>
+#include <string>
+#include <time.h>
 
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -199,7 +201,7 @@ void AlpacaDataFeed::doWrite() {
 
     wsState_->ws->async_write(
         net::buffer(wsState_->writeQueue.front()),
-        [this](beast::error_code ec, std::size_t bytes_transferred) {
+        [this](beast::error_code ec, std::size_t /*bytes_transferred*/) {
             if (ec) {
                 LOG_ERROR("[AlpacaDataFeed] Send Error: {}", ec.message());
                 // In case of error, we might want to clear the queue or disconnect
@@ -221,7 +223,7 @@ void AlpacaDataFeed::onWebSocketMessage(const std::string& payload) {
     if (payload.empty()) return;
     
     // Debug: Print raw payload to see what Alpaca is sending
-    LOG_DEBUG("[AlpacaDataFeed] WS Received: {}", payload);
+    // LOG_DEBUG("[AlpacaDataFeed] WS Received: {}", payload);
 
     try {
         auto msgArray = nlohmann::json::parse(payload);
@@ -263,15 +265,58 @@ void AlpacaDataFeed::onWebSocketMessage(const std::string& payload) {
     }
 }
 
+// Parses an RFC3339 UTC string into milliseconds since the epoch
+inline uint64_t parseAlpacaTimestamp(const std::string& ts) {
+    if (ts.empty()) return 0;
+
+    struct tm t{};
+    // Parse the base date and time
+    char* p = strptime(ts.c_str(), "%Y-%m-%dT%H:%M:%S", &t);
+    if (p == nullptr) return 0;
+
+    // CRITICAL: Use timegm, not std::mktime. 
+    // std::mktime applies your machine's local timezone offset, which will corrupt the UTC time.
+    time_t seconds = timegm(&t);
+    uint64_t ms = static_cast<uint64_t>(seconds) * 1000;
+
+    // Parse fractional seconds dynamically (Alpaca can send variable precision)
+    if (*p == '.') {
+        p++;
+        uint64_t fraction = 0;
+        int digitCount = 0;
+        
+        while (*p >= '0' && *p <= '9') {
+            fraction = fraction * 10 + (*p - '0');
+            digitCount++;
+            p++;
+        }
+        
+        // Normalize the extracted fraction to exactly 3 digits (milliseconds)
+        if (digitCount > 0) {
+            if (digitCount >= 3) {
+                for (int i = 0; i < digitCount - 3; ++i) fraction /= 10;
+                ms += fraction;
+            } else {
+                for (int i = 0; i < 3 - digitCount; ++i) fraction *= 10;
+                ms += fraction;
+            }
+        }
+    }
+    return ms;
+}
+
 void AlpacaDataFeed::parseTradeUpdate(const nlohmann::json& data) {
-    LOG_DEBUG("[AlpacaDataFeed] TradeUpdate Received: {}", data);
+    // LOG_DEBUG("[AlpacaDataFeed] TradeUpdate Received: {}", data);
     try {
         MarketTick tick;
+        tick.type = TickType::TRADE;
         tick.symbol = data.at("S").get<std::string>();
         tick.price = data.at("p").get<double>();
         tick.volume = data.at("s").get<double>();
-        // Using current time as mock timestamp for PoC; usually data.at("t")
-        tick.timestamp_ms = 0; 
+        
+        // Parse the timestamp string to epoch milliseconds
+        std::string tsString = data.value("t", "");
+        tick.timestamp_ms = parseAlpacaTimestamp(tsString);
 
         if (eventBus_) {
             eventBus_->publishTick(tick);
@@ -282,15 +327,18 @@ void AlpacaDataFeed::parseTradeUpdate(const nlohmann::json& data) {
 }
 
 void AlpacaDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
-    LOG_DEBUG("[AlpacaDataFeed] QuoteUpdate Received: {}", data);
+    // LOG_DEBUG("[AlpacaDataFeed] QuoteUpdate Received: {}", data);
     try {
         MarketTick tick;
+        tick.type = TickType::QUOTE;
         tick.symbol = data.at("S").get<std::string>();
-        tick.price = data.at("ap").get<double>(); // Using Ask Price as current price reference
-        tick.bid_size = data.at("bs").get<double>();
+        tick.ask_price = data.at("ap").get<double>();
         tick.ask_size = data.at("as").get<double>();
-        tick.volume = 0; // Quotes don't have trade volume
-        tick.timestamp_ms = 0;
+        tick.bid_price = data.at("bp").get<double>();
+        tick.bid_size = data.at("bs").get<double>();
+        // Parse the timestamp string to epoch milliseconds
+        std::string tsString = data.value("t", "");
+        tick.timestamp_ms = parseAlpacaTimestamp(tsString);
 
         if (eventBus_) {
             eventBus_->publishTick(tick);
@@ -301,21 +349,23 @@ void AlpacaDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
 }
 
 void AlpacaDataFeed::parseOrderBookUpdate(const nlohmann::json& data) {
-    LOG_DEBUG("[AlpacaDataFeed] BookUpdate Received: {}", data);
+    // LOG_DEBUG("[AlpacaDataFeed] BookUpdate Received: {}", data);
     try {
         MarketTick tick;
+        tick.type = TickType::ORDERBOOK;
         tick.symbol = data.at("S").get<std::string>();
         
         const auto& bids = data.at("b");
         const auto& asks = data.at("a");
 
         if (!bids.empty() && !asks.empty()) {
-            // Top of book is the first element
-            tick.price = asks[0].at("p").get<double>();
-            tick.bid_size = bids[0].at("s").get<double>();
+            tick.ask_price = asks[0].at("p").get<double>();
             tick.ask_size = asks[0].at("s").get<double>();
-            tick.volume = 0;
-            tick.timestamp_ms = 0;
+            tick.bid_price = bids[0].at("p").get<double>();
+            tick.bid_size = bids[0].at("s").get<double>();
+            // Parse the timestamp string to epoch milliseconds
+            std::string tsString = data.value("t", "");
+            tick.timestamp_ms = parseAlpacaTimestamp(tsString);
 
             if (eventBus_) {
                 eventBus_->publishTick(tick);
