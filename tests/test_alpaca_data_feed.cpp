@@ -17,7 +17,16 @@ public:
         receivedTicks.push_back(tick);
     }
 
+    void subscribeToExecution(ExecutionCallback callback) override {
+        (void)callback;
+    }
+
+    void publishExecution(const ExecutionReport& report) override {
+        receivedExecutions.push_back(report);
+    }
+
     std::vector<MarketTick> receivedTicks;
+    std::vector<ExecutionReport> receivedExecutions;
 };
 
 // Mock Subclass to isolate networking

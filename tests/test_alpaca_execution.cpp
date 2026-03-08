@@ -4,13 +4,15 @@
 #include <thread>
 #include <chrono>
 
+#include <core/EventBus.hpp>
+
 using namespace bot;
 
 // Mock Subclass to isolate networking
 class MockAlpacaExecutionEngine : public AlpacaExecutionEngine {
 public:
-    MockAlpacaExecutionEngine(std::string apiKey, std::string apiSecret, std::string baseUrl)
-        : AlpacaExecutionEngine(std::move(apiKey), std::move(apiSecret), std::move(baseUrl)) {}
+    MockAlpacaExecutionEngine(IEventBus& eventBus, std::string apiKey, std::string apiSecret, std::string baseUrl)
+        : AlpacaExecutionEngine(eventBus, std::move(apiKey), std::move(apiSecret), std::move(baseUrl)) {}
 
 protected:
     std::string sendHttpRequest(const std::string& method, const std::string& endpoint, const std::string& payload = "") override {
@@ -30,10 +32,12 @@ protected:
 
 class AlpacaExecutionEngineTest : public ::testing::Test {
 protected:
+    std::shared_ptr<EventBus> eventBus;
     std::unique_ptr<MockAlpacaExecutionEngine> engine;
 
     void SetUp() override {
-        engine = std::make_unique<MockAlpacaExecutionEngine>("FAKE_KEY", "FAKE_SECRET", "https://paper-api.alpaca.markets");
+        eventBus = std::make_shared<EventBus>();
+        engine = std::make_unique<MockAlpacaExecutionEngine>(*eventBus, "FAKE_KEY", "FAKE_SECRET", "https://paper-api.alpaca.markets");
     }
 };
 
@@ -90,7 +94,8 @@ TEST(AlpacaExecutionIntegration, LivePaperTradingFlow) {
     std::string baseUrl = "https://paper-api.alpaca.markets";
     
     // We use the real AlpacaExecutionEngine here
-    AlpacaExecutionEngine engine(apiKey, apiSecret, baseUrl);
+    EventBus eventBus;
+    AlpacaExecutionEngine engine(eventBus, apiKey, apiSecret, baseUrl);
 
     // 1. Authenticate
     EXPECT_TRUE(engine.authenticate());
@@ -141,7 +146,8 @@ TEST(AlpacaExecutionIntegration, LiquidateAllOpenPositions) {
     std::string apiSecret(apiSecretEnv);
     std::string baseUrl = "https://paper-api.alpaca.markets";
     
-    AlpacaExecutionEngine engine(apiKey, apiSecret, baseUrl);
+    EventBus eventBus;
+    AlpacaExecutionEngine engine(eventBus, apiKey, apiSecret, baseUrl);
     EXPECT_TRUE(engine.authenticate());
 
     auto positions = engine.getOpenPositions();

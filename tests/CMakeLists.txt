@@ -25,3 +25,8 @@ gtest_discover_tests(test_alpaca_data_feed)
 add_executable(test_alpaca_execution test_alpaca_execution.cpp)
 target_link_libraries(test_alpaca_execution FunTradeLib GTest::gtest_main)
 gtest_discover_tests(test_alpaca_execution)
+
+# Add PortfolioManager tests
+add_executable(test_portfolio_manager test_portfolio_manager.cpp)
+target_link_libraries(test_portfolio_manager FunTradeLib GTest::gtest_main)
+gtest_discover_tests(test_portfolio_manager)

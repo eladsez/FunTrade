@@ -28,8 +28,8 @@ void EventBus::stop() {
 
 void EventBus::subscribeToTick(const std::string& symbol, TickCallback callback) {
     std::lock_guard<std::mutex> lock(subMtx);
-    subscribers.push_back({symbol, callback});
-    LOG_INFO("[EventBus] Subscribed to {}", symbol);
+    tickSubscribers.push_back({symbol, callback});
+    LOG_INFO("[EventBus] Subscribed to tick: {}", symbol);
 }
 
 void EventBus::publishTick(const MarketTick& tick) {
@@ -37,34 +37,60 @@ void EventBus::publishTick(const MarketTick& tick) {
     queue.enqueue(tick);
 }
 
+void EventBus::subscribeToExecution(ExecutionCallback callback) {
+    std::lock_guard<std::mutex> lock(subMtx);
+    executionSubscribers.push_back(callback);
+    LOG_INFO("[EventBus] Subscribed to execution reports");
+}
+
+void EventBus::publishExecution(const ExecutionReport& report) {
+    queue.enqueue(report);
+}
+
 void EventBus::processEvents() {
-    MarketTick tick;
+    Event event;
     while (isRunning) {
         // Attempt to dequeue
-        if (queue.try_dequeue(tick)) {
-            // Read-only access to subscribers list for simplicity here.
-            // In a highly dynamic system, we'd use a reader-writer lock or a lock-free list for subscribers.
-            // But since strategies typically subscribe once at startup, a simple lock or copy is fine.
+        if (queue.try_dequeue(event)) {
             std::lock_guard<std::mutex> lock(subMtx);
-            for (const auto& sub : subscribers) {
-                if (sub.first == tick.symbol) {
-                    sub.second(tick);
+            
+            std::visit([this](auto&& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, MarketTick>) {
+                    for (const auto& sub : tickSubscribers) {
+                        if (sub.first == arg.symbol) {
+                            sub.second(arg);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, ExecutionReport>) {
+                    for (const auto& sub : executionSubscribers) {
+                        sub(arg);
+                    }
                 }
-            }
+            }, event);
+
         } else {
             // Spin-wait or yield to prevent maxing out CPU if queue is empty
             std::this_thread::yield(); 
-            // Alternately, could use std::this_thread::sleep_for(std::chrono::microseconds(1));
         }
     }
     
     // Drain remaining events on shutdown
-    while (queue.try_dequeue(tick)) {
+    while (queue.try_dequeue(event)) {
         std::lock_guard<std::mutex> lock(subMtx);
-        for (const auto& sub : subscribers) {
-            if (sub.first == tick.symbol) {
-                sub.second(tick);
+        std::visit([this](auto&& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, MarketTick>) {
+                for (const auto& sub : tickSubscribers) {
+                    if (sub.first == arg.symbol) {
+                        sub.second(arg);
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, ExecutionReport>) {
+                for (const auto& sub : executionSubscribers) {
+                    sub(arg);
+                }
             }
-        }
+        }, event);
     }
 }

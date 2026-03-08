@@ -6,15 +6,18 @@
 #include <atomic>
 #include <concurrentqueue.h> // moodycamel lock-free queue
 
+#include <variant>
+
 class EventBus : public IEventBus {
 public:
     EventBus();
     ~EventBus() override;
 
     void subscribeToTick(const std::string& symbol, TickCallback callback) override;
-    
-    // Pushes tick to the lock-free queue immediately (non-blocking)
     void publishTick(const MarketTick& tick) override;
+
+    void subscribeToExecution(ExecutionCallback callback) override;
+    void publishExecution(const ExecutionReport& report) override;
 
     // Start/stop the background dispatcher thread
     void start();
@@ -23,10 +26,13 @@ public:
 private:
     void processEvents();
 
-    std::vector<std::pair<std::string, TickCallback>> subscribers;
+    using Event = std::variant<MarketTick, ExecutionReport>;
+
+    std::vector<std::pair<std::string, TickCallback>> tickSubscribers;
+    std::vector<ExecutionCallback> executionSubscribers;
     std::mutex subMtx; // Mutex only for registering subscribers, not for publishing
 
-    moodycamel::ConcurrentQueue<MarketTick> queue;
+    moodycamel::ConcurrentQueue<Event> queue;
     
     std::atomic<bool> isRunning{false};
     std::thread dispatcherThread;

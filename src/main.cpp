@@ -12,6 +12,7 @@
 #include <execution/DummyExecution.hpp>
 #include <execution/AlpacaExecutionEngine.hpp>
 #include <strategy/OBIMomentum.hpp>
+#include <risk/PortfolioManager.hpp>
 
 using namespace bot;
 
@@ -39,8 +40,9 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
     std::string baseUrl = "https://paper-api.alpaca.markets";
     
     auto eventBus = std::make_shared<EventBus>();
-    auto executionEngine = std::make_shared<AlpacaExecutionEngine>(apiKey, apiSecret, baseUrl);
+    auto executionEngine = std::make_shared<AlpacaExecutionEngine>(*eventBus, apiKey, apiSecret, baseUrl);
     auto dataFeed = std::make_shared<AlpacaDataFeed>(eventBus, apiKey, apiSecret);
+    auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus);
 
     if (!executionEngine->authenticate()) {
         LOG_ERROR("Live Execution Authentication Failed.");
@@ -65,6 +67,12 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
     
     // Use the dynamic parameters passed via command line
     auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, symbol, windowSize, threshold, -threshold);
+    
+    // PortfolioManager should also get tick updates to track unrealized PnL
+    eventBus->subscribeToTick(symbol, [portfolioManager](const MarketTick& tick) {
+        portfolioManager->onTick(tick);
+    });
+
     strategy->start();
     dataFeed->subscribeToSymbol(symbol);
 
@@ -85,9 +93,10 @@ int runBacktestMode() {
     LOG_INFO("--- Starting Backtest Playback Mode ---");
     
     auto eventBus = std::make_shared<EventBus>();
-    auto executionEngine = std::make_shared<DummyExecution>();
+    auto executionEngine = std::make_shared<DummyExecution>(*eventBus);
     auto dataFeed = std::make_shared<CsvHistoricalDataFeed>(eventBus, "data/obi_sample.csv");
     auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine);
+    auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus);
 
     executionEngine->authenticate();
     
@@ -95,8 +104,13 @@ int runBacktestMode() {
         return 1;
     }
     
+    std::string symbol = "BTC/USD";
+    eventBus->subscribeToTick(symbol, [portfolioManager](const MarketTick& tick) {
+        portfolioManager->onTick(tick);
+    });
+
     strategy->start();
-    dataFeed->subscribeToSymbol("BTC/USD");
+    dataFeed->subscribeToSymbol(symbol);
     
     dataFeed->startPlayback(true);
     
@@ -122,7 +136,7 @@ int main(int argc, char* argv[]) {
     setupSignalHandlers();
 
     LOG_INFO("==================================================");
-    LOG_INFO("          Algorithmic Trading Bot PoC             ");
+    LOG_INFO("          Algorithmic Trading Bot                 ");
     LOG_INFO("==================================================");
 
     bool liveMode = false;

@@ -9,7 +9,17 @@ enum class Side {
 
 enum class OrderType {
     MARKET,
-    LIMIT
+    LIMIT,
+    TRAILING_STOP
+};
+
+enum class OrderStatus {
+    NEW,
+    PARTIALLY_FILLED,
+    FILLED,
+    CANCELED,
+    REJECTED,
+    EXPIRED
 };
 
 // Represents a price update or a trade execution in the market.
@@ -33,4 +43,19 @@ struct OrderRequest {
     OrderType type;
     double quantity;
     double price; // Relevant only for LIMIT orders
+    double trail_price = 0.0;    // For TRAILING_STOP (absolute distance)
+    double trail_percent = 0.0;  // For TRAILING_STOP (percentage distance, e.g., 1.0 for 1%)
+};
+
+// Represents a notification from the exchange about an order's status change.
+struct ExecutionReport {
+    std::string order_id;
+    std::string symbol;
+    Side side;
+    OrderStatus status;
+    double last_quantity; // Quantity filled in this specific update
+    double cumulative_quantity; // Total quantity filled so far
+    double last_price;    // Price of the last fill
+    double avg_price;     // Average price of all fills for this order
+    uint64_t timestamp_ms;
 };

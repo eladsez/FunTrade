@@ -6,11 +6,13 @@
 #include <optional>
 #include <nlohmann/json.hpp>
 
+#include <core/IEventBus.hpp>
+
 namespace bot {
 
 class AlpacaExecutionEngine : public IExecutionEngine {
 public:
-    AlpacaExecutionEngine(std::string apiKey, std::string apiSecret, std::string baseUrl);
+    AlpacaExecutionEngine(IEventBus& eventBus, std::string apiKey, std::string apiSecret, std::string baseUrl);
     ~AlpacaExecutionEngine() override = default;
 
     // IExecutionEngine Implementation
@@ -19,14 +21,15 @@ public:
     bool cancelOrder(const std::string& orderId) override;
 
     // Extended Domain Specific API
-    std::optional<double> getPortfolioValue();
-    nlohmann::json getOpenPositions();
+    std::optional<double> getPortfolioValue() override;
+    nlohmann::json getOpenPositions() override;
 
 protected:
     // Abstracted HTTP request layer (to be mapped to libcurl / Boost.Beast later)
     virtual std::string sendHttpRequest(const std::string& method, const std::string& endpoint, const std::string& payload = "");
 
 private:
+    IEventBus& eventBus_;
     std::string apiKey_;
     std::string apiSecret_;
     std::string baseUrl_;

@@ -1,6 +1,6 @@
 # FunTrade - High-Performance Algorithmic Trading Bot
 
-FunTrade is a Proof-of-Concept (PoC) event-driven algorithmic trading bot written in **C++20**. It is designed with a strict focus on low-latency execution, robust concurrency, and adherence to SOLID principles. The architecture decouples market data ingestion, strategy logic, and order execution, allowing researchers to seamlessly transition from historical backtesting to live paper trading without modifying core strategy code.
+FunTrade is a event-driven algorithmic trading bot written in **C++20**. It is designed with a strict focus on low-latency execution, robust concurrency, and adherence to SOLID principles. The architecture decouples market data ingestion, strategy logic, and order execution, allowing researchers to seamlessly transition from historical backtesting to live paper trading without modifying core strategy code.
 
 ## Core Architecture
 
@@ -15,7 +15,7 @@ The system is built around a central Publisher/Subscriber messaging system to pr
     *   `DummyExecution`: Mocks order placements for backtesting.
     *   `AlpacaExecutionEngine`: A high-performance REST client (`Boost.Beast`) that formats domain `OrderRequest` structs into JSON schemas for the Alpaca Paper Trading API.
 *   **`IStrategy`**: The "brain" of the bot. Strategies subscribe to the Event Bus and evaluate incoming ticks.
-    *   `OBIMomentum`: The primary PoC strategy. It utilizes the **Eigen3** library to maintain an optimized rolling window of Order Book Imbalance (OBI) calculations. It fires Buy/Sell signals when the Simple Moving Average (SMA) of the imbalance crosses specific thresholds.
+    *   `OBIMomentum`: The primary strategy. It utilizes the **Eigen3** library to maintain an optimized rolling window of Order Book Imbalance (OBI) calculations. It fires Buy/Sell signals when the Simple Moving Average (SMA) of the imbalance crosses specific thresholds.
 *   **`Logger`**: Thread-safe, colored, microsecond-precision console logging powered by `spdlog`.
 
 ## Tech Stack & Tooling
@@ -63,7 +63,7 @@ If you wish to test the physical connection to Alpaca and verify order placement
 
 ```bash
 cmake -B build -DENABLE_PAPERTRADING_TEST=ON
-cmake --build build
+cmake --build build -j14
 source .env
 ./build/tests/test_alpaca_execution
 ```

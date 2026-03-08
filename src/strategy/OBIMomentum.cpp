@@ -51,7 +51,8 @@ void OBIMomentum::onTick(const MarketTick& tick) {
         if (smoothedObi > buyThreshold_ && currentPosition_ != PositionState::LONG) {
             LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Smoothed OBI ({:.2f}) > {}. Entering LONG position.", smoothedObi, buyThreshold_);
             
-            OrderRequest req{symbol_, Side::BUY, OrderType::MARKET, 0.001, 0.0}; 
+            // Use LIMIT order at Ask price to ensure aggressive entry but with price protection
+            OrderRequest req{symbol_, Side::BUY, OrderType::LIMIT, 0.001, tick.ask_price}; 
             executionEngine->placeOrder(req);
             
             currentPosition_ = PositionState::LONG;
@@ -59,16 +60,12 @@ void OBIMomentum::onTick(const MarketTick& tick) {
             obiWindow_.setZero();
         } 
         else if (smoothedObi < sellThreshold_ && currentPosition_ == PositionState::LONG) {
-            // Alpaca Crypto does NOT support short selling. We can only sell if we are currently LONG.
             LOG_INFO("<<< [OBIMomentum] STRONG SELL SIGNAL! Smoothed OBI ({:.2f}) < {}. Exiting LONG position to FLAT.", smoothedObi, sellThreshold_);
             
-            // In a production bot, we must query the EXACT available balance to sell to avoid fractional fee failures.
-            // For this PoC, we will query the execution engine dynamically right here before selling.
             auto positions = executionEngine->getOpenPositions();
             double exactQtyToSell = 0.0;
             if (positions.is_array()) {
                 for (const auto& pos : positions) {
-                    // Match BTCUSD or BTC/USD
                     if (pos.value("symbol", "").find("BTC") != std::string::npos) {
                         exactQtyToSell = std::stod(pos.value("qty_available", "0"));
                         break;
@@ -77,7 +74,8 @@ void OBIMomentum::onTick(const MarketTick& tick) {
             }
 
             if (exactQtyToSell > 0) {
-                OrderRequest req{symbol_, Side::SELL, OrderType::MARKET, exactQtyToSell, 0.0};
+                // Use LIMIT order at Bid price to exit aggressively
+                OrderRequest req{symbol_, Side::SELL, OrderType::LIMIT, exactQtyToSell, tick.bid_price};
                 executionEngine->placeOrder(req);
             } else {
                 LOG_WARN("[OBIMomentum] Strategy tried to sell, but no position was found in Alpaca!");
