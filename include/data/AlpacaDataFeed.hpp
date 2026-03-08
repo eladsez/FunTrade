@@ -60,6 +60,7 @@ private:
     
     // Asynchronous write loop
     void doWrite();
+    void doRead();
 };
 
 } // namespace bot

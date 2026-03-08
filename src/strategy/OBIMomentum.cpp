@@ -20,13 +20,6 @@ void OBIMomentum::start() {
 }
 
 void OBIMomentum::onTick(const MarketTick& tick) {
-
-    static int tickCounter = 0;
-    tickCounter++;
-    if (tickCounter % 100 == 0) { 
-        LOG_INFO("--- [DEBUG TICK {}] ---", tickCounter);
-    }
-
     // If we don't have level 2 data, we can't calculate OBI
     if (tick.bid_size == 0.0 && tick.ask_size == 0.0) {
         return; 

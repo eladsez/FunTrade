@@ -110,6 +110,26 @@ void AlpacaDataFeed::disconnect() {
     LOG_INFO("[AlpacaDataFeed] Disconnected WebSocket.");
 }
 
+void AlpacaDataFeed::doRead() {
+    if (!isRunning_ || !wsState_->ws->is_open()) return;
+
+    wsState_->ws->async_read(wsState_->buffer, 
+        [this](beast::error_code ec, std::size_t) {
+            if (ec) {
+                if (isRunning_) LOG_ERROR("[AlpacaDataFeed] WS Read Error: {}", ec.message());
+                isConnected_ = false;
+                return;
+            }
+            std::string payload = beast::buffers_to_string(wsState_->buffer.data());
+            wsState_->buffer.consume(wsState_->buffer.size());
+            
+            onWebSocketMessage(payload);
+            
+            if (isRunning_) doRead(); // Safe, recursive call
+        }
+    );
+}
+
 void AlpacaDataFeed::wsRunLoop() {
     try {
         std::string host = "stream.data.alpaca.markets";
@@ -131,36 +151,7 @@ void AlpacaDataFeed::wsRunLoop() {
         wsState_->ws->next_layer().handshake(ssl::stream_base::client);
         wsState_->ws->handshake(host, path);
 
-        {
-            std::lock_guard<std::mutex> lock(connectMutex_);
-            isConnected_ = true;
-        }
-        connectCv_.notify_all();
-
-        LOG_INFO("[AlpacaDataFeed] WebSocket Connected. Authenticating...");
-
-        nlohmann::json authPayload = {
-            {"action", "auth"},
-            {"key", apiKey_},
-            {"secret", apiSecret_}
-        };
-        sendWebSocketMessage(authPayload.dump());
-
-        std::function<void()> doRead;
-        doRead = [this, &doRead]() {
-            if (!isRunning_ || !wsState_->ws->is_open()) return;
-            wsState_->ws->async_read(wsState_->buffer, [this, &doRead](beast::error_code ec, std::size_t) {
-                if (ec) {
-                    if (isRunning_) LOG_ERROR("[AlpacaDataFeed] WS Read Error: {}", ec.message());
-                    isConnected_ = false;
-                    return; // Stop the read loop
-                }
-                std::string payload = beast::buffers_to_string(wsState_->buffer.data());
-                wsState_->buffer.consume(wsState_->buffer.size());
-                onWebSocketMessage(payload);
-                if (isRunning_) doRead();
-            });
-        };
+        // Start the read loop immediately, DO NOT send auth yet
         doRead();
         
         // Block until io_context is stopped or runs out of work.
@@ -181,14 +172,17 @@ void AlpacaDataFeed::wsRunLoop() {
 }
 
 void AlpacaDataFeed::sendWebSocketMessage(const std::string& message) {
-    if (isConnected_ && wsState_) {
-        // Post to the io_context to ensure thread safety
-        net::post(wsState_->ioc, [this, msg = message]() {
+    // Check if the physical socket is open
+    if (wsState_ && wsState_->ws && wsState_->ws->is_open()) {
+        // Post to the WEBSOCKET'S executor (the strand)
+        net::post(wsState_->ws->get_executor(), [this, msg = message]() {
             wsState_->writeQueue.push_back(msg);
             if (!wsState_->isWriting) {
                 doWrite();
             }
         });
+    } else {
+        LOG_ERROR("[AlpacaDataFeed] Cannot send message: WebSocket is not open.");
     }
 }
 
@@ -200,10 +194,9 @@ void AlpacaDataFeed::doWrite() {
 
     wsState_->isWriting = true;
     
-    // We must capture the message by value or ensure its lifetime. 
-    // Since we are pushing it into async_write, we can just use the front element, 
-    // but the buffer needs to point to valid memory until the async operation completes.
-    // The deque guarantees that references to elements are not invalidated by push_back.
+    // Force text framing for JSON payloads
+    wsState_->ws->text(true); 
+
     wsState_->ws->async_write(
         net::buffer(wsState_->writeQueue.front()),
         [this](beast::error_code ec, std::size_t bytes_transferred) {
@@ -228,7 +221,7 @@ void AlpacaDataFeed::onWebSocketMessage(const std::string& payload) {
     if (payload.empty()) return;
     
     // Debug: Print raw payload to see what Alpaca is sending
-    LOG_DEBUG("[DEBUG] WS Received: {}", payload);
+    LOG_DEBUG("[AlpacaDataFeed] WS Received: {}", payload);
 
     try {
         auto msgArray = nlohmann::json::parse(payload);
@@ -236,8 +229,25 @@ void AlpacaDataFeed::onWebSocketMessage(const std::string& payload) {
         for (const auto& msg : msgArray) {
             std::string msgType = msg.value("T", "");
 
-            if (msgType == "success" && msg.value("msg", "") == "authenticated") {
+            // 1. Wait for the welcome message
+            if (msgType == "success" && msg.value("msg", "") == "connected") {
+                LOG_INFO("[AlpacaDataFeed] Server connected. Sending authentication...");
+                nlohmann::json authPayload = {
+                    {"action", "auth"},
+                    {"key", apiKey_},
+                    {"secret", apiSecret_}
+                };
+                sendWebSocketMessage(authPayload.dump());
+            // 2. Wait for auth success
+            } else if (msgType == "success" && msg.value("msg", "") == "authenticated") {
                 LOG_INFO("[AlpacaDataFeed] Authentication SUCCESSFUL.");
+                // NOTE: It is now safe to send your subscription payloads!
+                {
+                    std::lock_guard<std::mutex> lock(connectMutex_);
+                    isConnected_ = true;
+                }
+                connectCv_.notify_all();
+
             } else if (msgType == "t") {
                 parseTradeUpdate(msg);
             } else if (msgType == "q") {
@@ -254,6 +264,7 @@ void AlpacaDataFeed::onWebSocketMessage(const std::string& payload) {
 }
 
 void AlpacaDataFeed::parseTradeUpdate(const nlohmann::json& data) {
+    LOG_DEBUG("[AlpacaDataFeed] TradeUpdate Received: {}", data);
     try {
         MarketTick tick;
         tick.symbol = data.at("S").get<std::string>();
@@ -271,6 +282,7 @@ void AlpacaDataFeed::parseTradeUpdate(const nlohmann::json& data) {
 }
 
 void AlpacaDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
+    LOG_DEBUG("[AlpacaDataFeed] QuoteUpdate Received: {}", data);
     try {
         MarketTick tick;
         tick.symbol = data.at("S").get<std::string>();
@@ -289,6 +301,7 @@ void AlpacaDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
 }
 
 void AlpacaDataFeed::parseOrderBookUpdate(const nlohmann::json& data) {
+    LOG_DEBUG("[AlpacaDataFeed] BookUpdate Received: {}", data);
     try {
         MarketTick tick;
         tick.symbol = data.at("S").get<std::string>();
