@@ -13,6 +13,7 @@
 #include <execution/AlpacaExecutionEngine.hpp>
 #include <strategy/OBIMomentum.hpp>
 #include <risk/PortfolioManager.hpp>
+#include <execution/OrderManager.hpp>
 
 using namespace bot;
 
@@ -43,11 +44,16 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
     auto executionEngine = std::make_shared<AlpacaExecutionEngine>(*eventBus, apiKey, apiSecret, baseUrl);
     auto dataFeed = std::make_shared<AlpacaDataFeed>(eventBus, apiKey, apiSecret);
     auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus);
+    auto orderManager = std::make_shared<OrderManager>(*eventBus, *executionEngine);
 
     if (!executionEngine->authenticate()) {
         LOG_ERROR("Live Execution Authentication Failed.");
         return 1;
     }
+
+    // Sync state with exchange
+    portfolioManager->syncWithExchange(*executionEngine);
+    orderManager->syncWithExchange();
 
     if (!dataFeed->connect()) {
         LOG_ERROR("Live DataFeed Connection Failed.");

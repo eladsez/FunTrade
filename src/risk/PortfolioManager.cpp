@@ -1,5 +1,7 @@
 #include <risk/PortfolioManager.hpp>
+#include <execution/IExecutionEngine.hpp>
 #include <core/Logger.hpp>
+#include <nlohmann/json.hpp>
 #include <cmath>
 
 namespace bot {
@@ -16,9 +18,12 @@ PortfolioManager::PortfolioManager(IEventBus& eventBus) : eventBus_(eventBus) {
 }
 
 void PortfolioManager::onTick(const MarketTick& tick) {
+    std::string symbol = tick.symbol;
+    symbol.erase(std::remove(symbol.begin(), symbol.end(), '/'), symbol.end());
+    
     std::lock_guard<std::mutex> lock(mtx_);
-    if (positions_.count(tick.symbol)) {
-        positions_[tick.symbol].current_price = tick.price;
+    if (positions_.count(symbol)) {
+        positions_[symbol].current_price = tick.price;
     }
 }
 
@@ -30,8 +35,11 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
         return;
     }
 
-    Position& pos = positions_[report.symbol];
-    pos.symbol = report.symbol;
+    std::string symbol = report.symbol;
+    symbol.erase(std::remove(symbol.begin(), symbol.end(), '/'), symbol.end());
+
+    Position& pos = positions_[symbol];
+    pos.symbol = symbol;
     pos.current_price = report.last_price; // Update price on fill
 
     double fill_qty = report.last_quantity;
@@ -40,7 +48,7 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
     // Convert Side to signed quantity for easier calculation
     double signed_fill_qty = (report.side == Side::BUY) ? fill_qty : -fill_qty;
 
-    if (pos.quantity == 0.0) {
+    if (std::abs(pos.quantity) < 1e-9) {
         // Opening new position
         pos.quantity = signed_fill_qty;
         pos.avg_price = fill_price;
@@ -67,7 +75,7 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
         
         double remaining_qty = pos.quantity + signed_fill_qty;
         
-        if ((pos.quantity > 0 && remaining_qty < 0) || (pos.quantity < 0 && remaining_qty > 0)) {
+        if ((pos.quantity > 0 && remaining_qty < -1e-9) || (pos.quantity < 0 && remaining_qty > 1e-9)) {
             // Position flipped
             pos.quantity = remaining_qty;
             pos.avg_price = fill_price;
@@ -75,7 +83,8 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
             // Position reduced but not flipped
             pos.quantity = remaining_qty;
             // avg_price remains the same for the remaining part
-            if (pos.quantity == 0.0) {
+            if (std::abs(pos.quantity) < 1e-9) {
+                pos.quantity = 0.0;
                 pos.avg_price = 0.0;
             }
         }
@@ -83,6 +92,34 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
 
     LOG_INFO("[PortfolioManager] Updated {} position: Qty={}, AvgPrice={}, RealizedPnL={}", 
              pos.symbol, pos.quantity, pos.avg_price, pos.realized_pnl);
+}
+
+void PortfolioManager::syncWithExchange(IExecutionEngine& engine) {
+    LOG_INFO("[PortfolioManager] Syncing positions with exchange...");
+    nlohmann::json positionsJson = engine.getOpenPositions();
+    
+    std::lock_guard<std::mutex> lock(mtx_);
+    positions_.clear();
+    
+    if (positionsJson.is_array()) {
+        for (const auto& posJson : positionsJson) {
+            try {
+                std::string symbol = posJson.value("symbol", "");
+                symbol.erase(std::remove(symbol.begin(), symbol.end(), '/'), symbol.end());
+                
+                Position pos;
+                pos.symbol = symbol;
+                pos.quantity = std::stod(posJson.value("qty", "0"));
+                pos.avg_price = std::stod(posJson.value("avg_entry_price", "0"));
+                pos.current_price = std::stod(posJson.value("current_price", "0"));
+                
+                positions_[symbol] = pos;
+                LOG_INFO("[PortfolioManager] Synced {} | Qty: {} | AvgPrice: {}", symbol, pos.quantity, pos.avg_price);
+            } catch (const std::exception& e) {
+                LOG_ERROR("[PortfolioManager] Error parsing synced position: {}", e.what());
+            }
+        }
+    }
 }
 
 double PortfolioManager::getTotalRealizedPnL() const {

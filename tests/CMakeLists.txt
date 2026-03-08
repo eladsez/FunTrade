@@ -30,3 +30,13 @@ gtest_discover_tests(test_alpaca_execution)
 add_executable(test_portfolio_manager test_portfolio_manager.cpp)
 target_link_libraries(test_portfolio_manager FunTradeLib GTest::gtest_main)
 gtest_discover_tests(test_portfolio_manager)
+
+# Add OrderManager tests
+add_executable(test_order_manager test_order_manager.cpp)
+target_link_libraries(test_order_manager FunTradeLib GTest::gtest_main)
+gtest_discover_tests(test_order_manager)
+
+# Add System Infra Integration tests
+add_executable(test_system_infra test_system_infra.cpp)
+target_link_libraries(test_system_infra FunTradeLib GTest::gtest_main)
+gtest_discover_tests(test_system_infra)

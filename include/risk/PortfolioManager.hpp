@@ -7,6 +7,8 @@
 
 namespace bot {
 
+class IExecutionEngine;
+
 struct Position {
     std::string symbol;
     double quantity = 0.0;
@@ -34,6 +36,9 @@ public:
     double getTotalUnrealizedPnL() const;
     double getNetPosition(const std::string& symbol) const;
     Position getPosition(const std::string& symbol) const;
+
+    // Syncs with the exchange's actual positions
+    void syncWithExchange(IExecutionEngine& engine);
 
 private:
     IEventBus& eventBus_;

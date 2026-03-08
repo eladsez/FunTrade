@@ -3,6 +3,8 @@
 
 #include <core/IEventBus.hpp>
 
+namespace bot {
+
 class DummyExecution : public IExecutionEngine {
 public:
     DummyExecution(IEventBus& eventBus);
@@ -12,7 +14,10 @@ public:
     
     std::optional<double> getPortfolioValue() override { return 100000.0; }
     nlohmann::json getOpenPositions() override { return nlohmann::json::array(); }
+    nlohmann::json getOpenOrders() override { return nlohmann::json::array(); }
 
 private:
     IEventBus& eventBus_;
 };
+
+} // namespace bot

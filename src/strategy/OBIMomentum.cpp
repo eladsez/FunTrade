@@ -52,7 +52,7 @@ void OBIMomentum::onTick(const MarketTick& tick) {
             LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Smoothed OBI ({:.2f}) > {}. Entering LONG position.", smoothedObi, buyThreshold_);
             
             // Use LIMIT order at Ask price to ensure aggressive entry but with price protection
-            OrderRequest req{symbol_, Side::BUY, OrderType::LIMIT, 0.001, tick.ask_price}; 
+            OrderRequest req{"", symbol_, Side::BUY, OrderType::LIMIT, 0.001, tick.ask_price}; 
             executionEngine->placeOrder(req);
             
             currentPosition_ = PositionState::LONG;
@@ -75,7 +75,7 @@ void OBIMomentum::onTick(const MarketTick& tick) {
 
             if (exactQtyToSell > 0) {
                 // Use LIMIT order at Bid price to exit aggressively
-                OrderRequest req{symbol_, Side::SELL, OrderType::LIMIT, exactQtyToSell, tick.bid_price};
+                OrderRequest req{"", symbol_, Side::SELL, OrderType::LIMIT, exactQtyToSell, tick.bid_price};
                 executionEngine->placeOrder(req);
             } else {
                 LOG_WARN("[OBIMomentum] Strategy tried to sell, but no position was found in Alpaca!");

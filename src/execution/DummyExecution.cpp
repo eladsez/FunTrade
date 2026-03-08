@@ -3,6 +3,8 @@
 
 #include <chrono>
 
+namespace bot {
+
 DummyExecution::DummyExecution(IEventBus& eventBus) : eventBus_(eventBus) {}
 
 bool DummyExecution::authenticate() {
@@ -11,14 +13,21 @@ bool DummyExecution::authenticate() {
 }
 
 std::string DummyExecution::placeOrder(const OrderRequest& request) {
+    std::string clientOrderId = request.client_order_id;
+    if (clientOrderId.empty()) {
+        clientOrderId = "dummy_cid_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    }
+
     std::string orderId = "dummy_order_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-    LOG_INFO("[DummyExecution] {} Order placed for {} qty: {} price: {} id: {}", 
+    
+    LOG_INFO("[DummyExecution] {} Order placed for {} qty: {} price: {} client_id: {} exchange_id: {}", 
              (request.type == OrderType::LIMIT ? "LIMIT" : "MARKET"),
-             request.symbol, request.quantity, request.price, orderId);
+             request.symbol, request.quantity, request.price, clientOrderId, orderId);
     
     // Simulate immediate fill
     ExecutionReport report;
     report.order_id = orderId;
+    report.client_order_id = clientOrderId;
     report.symbol = request.symbol;
     report.side = request.side;
     report.status = OrderStatus::FILLED;
@@ -35,10 +44,12 @@ std::string DummyExecution::placeOrder(const OrderRequest& request) {
 
     eventBus_.publishExecution(report);
 
-    return orderId;
+    return clientOrderId;
 }
 
 bool DummyExecution::cancelOrder(const std::string& orderId) {
     LOG_INFO("[DummyExecution] Order cancelled: {}", orderId);
     return true;
 }
+
+} // namespace bot

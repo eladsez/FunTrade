@@ -1,27 +1,26 @@
 # Algorithmic Trading Bot - Project Context & State
 
 ## 1. Project Overview
-High-performance, event-driven C++20 Algorithmic Trading Bot optimized for low-latency execution on Linux.
+High-performance, event-driven C++20 algorithmic trading bot optimized for low-latency execution on Linux via Alpaca.
 
-## 2. Tech Stack & Architecture
-* **Core:** C++20, Linux, CMake (Pitchfork layout).
-* **Libraries:** Boost.Asio/Beast (Async I/O), nlohmann/json, Eigen3 (Math), spdlog, moodycamel::ConcurrentQueue (Lock-free).
-* **Interfaces:** 
-    * `IEventBus`: Central dispatcher using `std::variant<MarketTick, ExecutionReport>`.
-    * `IDataFeed`: WebSocket-based market data normalization.
-    * `IExecutionEngine`: REST/WebSocket order routing and status reporting.
-    * `IStrategy`: Logic engine (currently OBI Momentum).
-    * `PortfolioManager`: Real-time PnL and position state tracking.
+## 2. AI Rules
+* **Test Filtering:** Run only project tests using `ctest -R test_` to skip external dependency suites.
+* **Verification:** Maintain a 100% pass rate. Every change to execution or risk modules requires a corresponding `PAPERTRADING` integration test.
+* **Security:** Never log or commit `APCA_API_KEY_ID` or `APCA_API_SECRET_KEY`.
 
-## 3. Current Codebase State
-* **Event System:** Thread-safe, non-blocking `EventBus` with subscriber filtering by symbol and event type.
-* **Execution:** `AlpacaExecutionEngine` supports `MARKET`, `LIMIT`, and `TRAILING_STOP`. Simulated fills implemented for testing.
-* **Risk/Portfolio:** `PortfolioManager` tracks realized/unrealized PnL, position flipping, and weighted average entry prices.
-* **Strategy:** `OBIMomentum` uses `Eigen` for rolling window SMA calculations and `LIMIT` orders for aggressive yet protected entry/exit.
-* **Testing:** 100% pass rate on unit tests for EventBus, DataFeed, Execution, and Portfolio modules with mocked network isolation.
+## 3. Tech Stack & Architecture
+* **Core:** C++20, Linux, CMake, Boost.Asio/Beast, nlohmann/json, Eigen3, spdlog, moodycamel::ConcurrentQueue.
+* **IEventBus:** Lock-free dispatcher for `MarketTick` and `ExecutionReport`.
+* **IDataFeed:** WebSocket-based market data normalization (Crypto v1beta3).
+* **IExecutionEngine:** Asynchronous REST order routing with dedicated WebSocket `trade_updates` stream.
+* **PortfolioManager:** Real-time PnL tracking and position reconciliation.
+* **OrderManager:** State tracking and reconciliation via `client_order_id`.
 
-## 4. Immediate Next Steps
-* **Goal1:** Continue implementing PAPERTRADING tests for a full coverage of AlpacaExecutionEngine and PortfolioManager, Also ExecutionReport full coverage testing
+## 4. Current Codebase State
+* **Asynchronous Execution:** `placeOrder` is non-blocking; status updates are handled via WS callbacks and published to the `EventBus`.
+* **State Reconciliation:** `PortfolioManager` and `OrderManager` implement `syncWithExchange()` to align local state with Alpaca on startup.
+* **Concurrency:** Multi-threaded architecture with dedicated IO contexts for REST, Market Data WS, and Trade Update WS.
+* **Validation:** All unit and paper-trading integration tests for core infrastructure are passing.
 
-
-* **Goal 2:** Add an `OrderManager` component to reconcile local order state with exchange state during initialization.
+## 5. Immediate Next Steps
+* **Infra Coverage Goal:** Implement a comprehensive `SystemStressTest` that exercises the full non-strategy loop (AlpacaDataFeed -> EventBus -> OrderManager -> PortfolioManager) under simulated high-frequency burst conditions using a real Paper Trading connection to verify race-condition safety and state integrity.
