@@ -7,9 +7,20 @@
 
 namespace bot {
 
+enum class PositionState {
+    FLAT,
+    LONG,
+    SHORT
+};
+
 class OBIMomentum : public IStrategy {
 public:
-    OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, const std::string& symbol = "BTC/USD", int windowSize = 5);
+    OBIMomentum(std::shared_ptr<IEventBus> bus, 
+                std::shared_ptr<IExecutionEngine> execEngine, 
+                const std::string& symbol = "BTC/USD", 
+                int windowSize = 5,
+                double buyThreshold = 0.4,
+                double sellThreshold = -0.4);
     void start() override;
     void onTick(const MarketTick& tick) override;
     void stop() override;
@@ -24,6 +35,12 @@ private:
     int currentIndex_;
     bool isWindowFull_;
     Eigen::VectorXd obiWindow_;
+    
+    double buyThreshold_;
+    double sellThreshold_;
+    
+    // Position tracking to prevent order spamming
+    PositionState currentPosition_;
 };
 
 } // namespace bot

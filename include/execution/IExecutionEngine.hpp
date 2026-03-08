@@ -1,5 +1,7 @@
 #pragma once
 #include <string>
+#include <optional>
+#include <nlohmann/json.hpp>
 #include <core/DomainModels.hpp>
 
 // Interface for routing orders to the exchange.
@@ -16,4 +18,8 @@ public:
 
     // Cancels an active open order.
     virtual bool cancelOrder(const std::string& orderId) = 0;
+    
+    // Portfolio tracking
+    virtual std::optional<double> getPortfolioValue() = 0;
+    virtual nlohmann::json getOpenPositions() = 0;
 };

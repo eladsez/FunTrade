@@ -3,14 +3,14 @@
 
 namespace bot {
 
-OBIMomentum::OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, const std::string& symbol, int windowSize)
-    : eventBus(bus), executionEngine(execEngine), symbol_(symbol), windowSize_(windowSize), currentIndex_(0), isWindowFull_(false) {
+OBIMomentum::OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, const std::string& symbol, int windowSize, double buyThreshold, double sellThreshold)
+    : eventBus(bus), executionEngine(execEngine), symbol_(symbol), windowSize_(windowSize), currentIndex_(0), isWindowFull_(false), buyThreshold_(buyThreshold), sellThreshold_(sellThreshold), currentPosition_(PositionState::FLAT) {
     // Initialize Eigen vector for the rolling window
     obiWindow_ = Eigen::VectorXd::Zero(windowSize_);
 }
 
 void OBIMomentum::start() {
-    LOG_INFO("[OBIMomentum] Strategy started for {} with window size {}.", symbol_, windowSize_);
+    LOG_INFO("[OBIMomentum] Strategy started for {} with window size {}. Thresholds: BUY > {}, SELL < {}. Initial state: FLAT.", symbol_, windowSize_, buyThreshold_, sellThreshold_);
     eventBus->subscribeToTick(symbol_, [this](const MarketTick& tick) {
         this->onTick(tick);
     });
@@ -42,22 +42,48 @@ void OBIMomentum::onTick(const MarketTick& tick) {
         // Calculate the Simple Moving Average using Eigen's built-in mean()
         double smoothedObi = obiWindow_.mean();
 
-        LOG_INFO("[OBIMomentum] Tick @ {} | Raw OBI: {} | Smoothed OBI (SMA): {}", tick.price, obi, smoothedObi);
+        // Print less frequently, only print if we are close to a threshold
+        if (std::abs(smoothedObi) > 0.3) {
+             LOG_INFO("[OBIMomentum] Tick @ {} | Raw OBI: {:.2f} | Smoothed OBI (SMA): {:.2f}", tick.price, obi, smoothedObi);
+        }
 
-        // 4. Trigger Orders based on momentum thresholds
-        if (smoothedObi > 0.4) {
-            LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Smoothed OBI > 0.4");
-            OrderRequest req{symbol_, Side::BUY, OrderType::MARKET, 0.001, 0.0}; // Smaller qty for crypto
+        // 4. Trigger Orders based on momentum thresholds AND current position
+        if (smoothedObi > buyThreshold_ && currentPosition_ != PositionState::LONG) {
+            LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Smoothed OBI ({:.2f}) > {}. Entering LONG position.", smoothedObi, buyThreshold_);
+            
+            OrderRequest req{symbol_, Side::BUY, OrderType::MARKET, 0.001, 0.0}; 
             executionEngine->placeOrder(req);
             
+            currentPosition_ = PositionState::LONG;
             isWindowFull_ = false;
             obiWindow_.setZero();
         } 
-        else if (smoothedObi < -0.4) {
-            LOG_INFO("<<< [OBIMomentum] STRONG SELL SIGNAL! Smoothed OBI < -0.4");
-            OrderRequest req{symbol_, Side::SELL, OrderType::MARKET, 0.001, 0.0};
-            executionEngine->placeOrder(req);
+        else if (smoothedObi < sellThreshold_ && currentPosition_ == PositionState::LONG) {
+            // Alpaca Crypto does NOT support short selling. We can only sell if we are currently LONG.
+            LOG_INFO("<<< [OBIMomentum] STRONG SELL SIGNAL! Smoothed OBI ({:.2f}) < {}. Exiting LONG position to FLAT.", smoothedObi, sellThreshold_);
             
+            // In a production bot, we must query the EXACT available balance to sell to avoid fractional fee failures.
+            // For this PoC, we will query the execution engine dynamically right here before selling.
+            auto positions = executionEngine->getOpenPositions();
+            double exactQtyToSell = 0.0;
+            if (positions.is_array()) {
+                for (const auto& pos : positions) {
+                    // Match BTCUSD or BTC/USD
+                    if (pos.value("symbol", "").find("BTC") != std::string::npos) {
+                        exactQtyToSell = std::stod(pos.value("qty_available", "0"));
+                        break;
+                    }
+                }
+            }
+
+            if (exactQtyToSell > 0) {
+                OrderRequest req{symbol_, Side::SELL, OrderType::MARKET, exactQtyToSell, 0.0};
+                executionEngine->placeOrder(req);
+            } else {
+                LOG_WARN("[OBIMomentum] Strategy tried to sell, but no position was found in Alpaca!");
+            }
+            
+            currentPosition_ = PositionState::FLAT;
             isWindowFull_ = false;
             obiWindow_.setZero();
         }

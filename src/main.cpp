@@ -2,6 +2,9 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include <csignal>
+#include <mutex>
+#include <condition_variable>
 #include <core/Logger.hpp>
 #include <core/EventBus.hpp>
 #include <data/CsvHistoricalDataFeed.hpp>
@@ -12,7 +15,26 @@
 
 using namespace bot;
 
-int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
+// Global coordination for graceful shutdown
+std::mutex g_shutdown_mutex;
+std::condition_variable g_shutdown_cv;
+bool g_shutdown_requested = false;
+
+void signalHandler(int signum) {
+    LOG_INFO("Interrupt signal ({}) received. Initiating graceful shutdown...", signum);
+    {
+        std::lock_guard<std::mutex> lock(g_shutdown_mutex);
+        g_shutdown_requested = true;
+    }
+    g_shutdown_cv.notify_all();
+}
+
+void setupSignalHandlers() {
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+}
+
+int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int windowSize = 20, double threshold = 0.3) {
     LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
     std::string baseUrl = "https://paper-api.alpaca.markets";
     
@@ -40,16 +62,22 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
 
     std::string symbol = "BTC/USD";
     LOG_INFO("[LIVE] Subscribing to {} market data stream...", symbol);
-    auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, symbol);
+    
+    // Use the dynamic parameters passed via command line
+    auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, symbol, windowSize, threshold, -threshold);
     strategy->start();
     dataFeed->subscribeToSymbol(symbol);
 
-    LOG_INFO("[LIVE] Listening for 20 seconds of live market data before shutting down...");
-    std::this_thread::sleep_for(std::chrono::seconds(20));
+    LOG_INFO("[LIVE] Bot is running. Press Ctrl+C to stop.");
+    
+    // Wait infinitely until a signal is received
+    std::unique_lock<std::mutex> lock(g_shutdown_mutex);
+    g_shutdown_cv.wait(lock, [] { return g_shutdown_requested; });
 
     LOG_INFO("[LIVE] Shutting down live session...");
     strategy->stop();
     dataFeed->disconnect();
+    LOG_INFO("[LIVE] Shutdown complete.");
     return 0;
 }
 
@@ -71,12 +99,19 @@ int runBacktestMode() {
     dataFeed->subscribeToSymbol("BTC/USD");
     
     dataFeed->startPlayback(true);
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    
+    LOG_INFO("Backtest running. Press Ctrl+C to abort early.");
+    
+    // Wait for shutdown signal OR a brief timeout (in reality backtests wait for EOF)
+    // Since our Csv feed is threaded, we should ideally wait for it to finish.
+    // For now, we just wait until the user stops it or 10 seconds pass.
+    std::unique_lock<std::mutex> lock(g_shutdown_mutex);
+    g_shutdown_cv.wait_for(lock, std::chrono::seconds(10), [] { return g_shutdown_requested; });
 
     strategy->stop();
     dataFeed->disconnect();
 
-    LOG_INFO("Backtest successful.");
+    LOG_INFO("Backtest completed.");
     return 0;
 }
 
@@ -84,12 +119,24 @@ int main(int argc, char* argv[]) {
     // Initialize the global spdlog logger
     bot::Logger::init();
 
-    LOG_INFO("Algorithmic Trading Bot PoC");
+    setupSignalHandlers();
+
+    LOG_INFO("==================================================");
+    LOG_INFO("          Algorithmic Trading Bot PoC             ");
+    LOG_INFO("==================================================");
 
     bool liveMode = false;
+    int windowSize = 20;      // Default to 20 ticks
+    double threshold = 0.3;   // Default to 0.3 imbalance
+
     for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--live") {
+        std::string arg = argv[i];
+        if (arg == "--live") {
             liveMode = true;
+        } else if (arg == "--window" && i + 1 < argc) {
+            windowSize = std::stoi(argv[++i]);
+        } else if (arg == "--threshold" && i + 1 < argc) {
+            threshold = std::stod(argv[++i]);
         }
     }
 
@@ -104,7 +151,7 @@ int main(int argc, char* argv[]) {
                       "  export APCA_API_SECRET_KEY=your_paper_secret\n");
             return 1;
         }
-        return runLiveMode(apiKey, apiSecret);
+        return runLiveMode(apiKey, apiSecret, windowSize, threshold);
     } else {
         return runBacktestMode();
     }
