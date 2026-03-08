@@ -23,4 +23,4 @@ High-performance, event-driven C++20 algorithmic trading bot optimized for low-l
 * **Validation:** All unit and paper-trading integration tests for core infrastructure are passing.
 
 ## 5. Immediate Next Steps
-* **Infra Coverage Goal:** Implement a comprehensive `SystemStressTest` that exercises the full non-strategy loop (AlpacaDataFeed -> EventBus -> OrderManager -> PortfolioManager) under simulated high-frequency burst conditions using a real Paper Trading connection to verify race-condition safety and state integrity.
+

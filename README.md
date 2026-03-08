@@ -13,7 +13,9 @@ The system is built around a central Publisher/Subscriber messaging system to pr
     *   `AlpacaDataFeed`: Connects to live Alpaca WebSocket streams (`Boost.Beast`) for 24/7 Crypto market data, parsing JSON arrays into domain models in real-time.
 *   **`IExecutionEngine`**: The interface for routing orders.
     *   `DummyExecution`: Mocks order placements for backtesting.
-    *   `AlpacaExecutionEngine`: A high-performance REST client (`Boost.Beast`) that formats domain `OrderRequest` structs into JSON schemas for the Alpaca Paper Trading API.
+    *   `AlpacaExecutionEngine`: A high-performance REST client (`Boost.Beast`) that formats domain `OrderRequest` structs into JSON schemas for the Alpaca Paper Trading API, and utilizes a dedicated WebSocket `trade_updates` stream for non-blocking asynchronous execution.
+*   **`PortfolioManager`**: Handles real-time PnL tracking and position reconciliation.
+*   **`OrderManager`**: Tracks order states and handles reconciliation via `client_order_id`.
 *   **`IStrategy`**: The "brain" of the bot. Strategies subscribe to the Event Bus and evaluate incoming ticks.
     *   `OBIMomentum`: The primary strategy. It utilizes the **Eigen3** library to maintain an optimized rolling window of Order Book Imbalance (OBI) calculations. It fires Buy/Sell signals when the Simple Moving Average (SMA) of the imbalance crosses specific thresholds.
 *   **`Logger`**: Thread-safe, colored, microsecond-precision console logging powered by `spdlog`.
@@ -70,4 +72,8 @@ source .env
 
 ## Current Project Status
 
-The core infrastructure is 100% complete and fully verified. The bot successfully handles live WebSockets, lock-free dispatching, math calculations, and live REST order execution via `Boost.Beast`. The next phase will focus on Risk Management (position sizing, tracking active PnL) and refining the algorithmic strategies.
+The core infrastructure is 100% complete and fully verified. The bot successfully handles live WebSockets, lock-free dispatching, math calculations, and live REST order execution via `Boost.Beast`. 
+
+Risk Management and Order Tracking have been implemented. `PortfolioManager` and `OrderManager` now support state reconciliation via `syncWithExchange()` to align local state with Alpaca on startup, and `placeOrder` is fully non-blocking with status updates published to the `EventBus`. 
+
+The next phase will focus on refining the algorithmic strategies.

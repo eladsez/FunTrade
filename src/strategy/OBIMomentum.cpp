@@ -1,16 +1,17 @@
 #include <strategy/OBIMomentum.hpp>
 #include <core/Logger.hpp>
+#include <cmath>
 
 namespace bot {
 
-OBIMomentum::OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, const std::string& symbol, int windowSize, double buyThreshold, double sellThreshold)
-    : eventBus(bus), executionEngine(execEngine), symbol_(symbol), windowSize_(windowSize), currentIndex_(0), isWindowFull_(false), buyThreshold_(buyThreshold), sellThreshold_(sellThreshold), currentPosition_(PositionState::FLAT) {
+OBIMomentum::OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, const std::string& symbol, int windowSize, double stdDevMultiplier, double riskPercentage, int emaWindowSize)
+    : eventBus(bus), executionEngine(execEngine), symbol_(symbol), windowSize_(windowSize), currentIndex_(0), isWindowFull_(false), stdDevMultiplier_(stdDevMultiplier), riskPercentage_(riskPercentage), emaWindowSize_(emaWindowSize), emaPrice_(0.0), isEmaInitialized_(false), currentPosition_(PositionState::FLAT) {
     // Initialize Eigen vector for the rolling window
     obiWindow_ = Eigen::VectorXd::Zero(windowSize_);
 }
 
 void OBIMomentum::start() {
-    LOG_INFO("[OBIMomentum] Strategy started for {} with window size {}. Thresholds: BUY > {}, SELL < {}. Initial state: FLAT.", symbol_, windowSize_, buyThreshold_, sellThreshold_);
+    LOG_INFO("[OBIMomentum] Strategy started for {} with window size {}. StdDev Multiplier: {}, Risk: {}%, EMA Window: {}. Initial state: FLAT.", symbol_, windowSize_, stdDevMultiplier_, riskPercentage_, emaWindowSize_);
     eventBus->subscribeToTick(symbol_, [this](const MarketTick& tick) {
         this->onTick(tick);
     });
@@ -19,9 +20,18 @@ void OBIMomentum::start() {
 void OBIMomentum::onTick(const MarketTick& tick) {
     // If we don't have level 2 data, we can't calculate OBI
     if (tick.bid_size == 0.0 && tick.ask_size == 0.0) {
-        // Fallback or print for live debug to see prices moving even without L2 OBI
-        // LOG_DEBUG("[DEBUG] {} price: {}", tick.symbol, tick.price);
         return; 
+    }
+
+    double midPrice = (tick.bid_price + tick.ask_price) / 2.0;
+
+    // Update EMA Price
+    if (!isEmaInitialized_) {
+        emaPrice_ = midPrice;
+        isEmaInitialized_ = true;
+    } else {
+        double alpha = 2.0 / (emaWindowSize_ + 1.0);
+        emaPrice_ = (alpha * midPrice) + (1.0 - alpha) * emaPrice_;
     }
 
     // 1. Calculate the raw Order Book Imbalance (OBI)
@@ -39,28 +49,39 @@ void OBIMomentum::onTick(const MarketTick& tick) {
 
     // 3. Evaluate signal if window is full
     if (isWindowFull_) {
-        // Calculate the Simple Moving Average using Eigen's built-in mean()
         double smoothedObi = obiWindow_.mean();
 
-        // Print less frequently, only print if we are close to a threshold
-        if (std::abs(smoothedObi) > 0.3) {
-             LOG_INFO("[OBIMomentum] Tick @ {} | Raw OBI: {:.2f} | Smoothed OBI (SMA): {:.2f}", tick.price, obi, smoothedObi);
+        // Calculate standard deviation of OBI
+        double variance = (obiWindow_.array() - smoothedObi).square().sum() / (windowSize_ - 1);
+        double stdDev = std::sqrt(variance);
+
+        double dynamicBuyThreshold = smoothedObi + (stdDevMultiplier_ * stdDev);
+        double dynamicSellThreshold = smoothedObi - (stdDevMultiplier_ * stdDev);
+
+        bool trendIsUp = midPrice > emaPrice_;
+        bool trendIsDown = midPrice < emaPrice_;
+
+        // Determine Trade Quantity based on Risk Percentage
+        double tradeQty = 0.001; // Safe Default
+        auto portfolioValueOpt = executionEngine->getPortfolioValue();
+        if (portfolioValueOpt && *portfolioValueOpt > 0) {
+            double riskValue = *portfolioValueOpt * (riskPercentage_ / 100.0);
+            tradeQty = riskValue / tick.ask_price;
         }
 
-        // 4. Trigger Orders based on momentum thresholds AND current position
-        if (smoothedObi > buyThreshold_ && currentPosition_ != PositionState::LONG) {
-            LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Smoothed OBI ({:.2f}) > {}. Entering LONG position.", smoothedObi, buyThreshold_);
+        // 4. Trigger Orders based on dynamic thresholds, EMA confluence AND current position
+        if (obi > dynamicBuyThreshold && trendIsUp && currentPosition_ != PositionState::LONG) {
+            LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Raw OBI ({:.2f}) > Buy Threshold ({:.2f}) & MidPrice ({:.2f}) > EMA ({:.2f}). Entering LONG.", obi, dynamicBuyThreshold, midPrice, emaPrice_);
             
-            // Use LIMIT order at Ask price to ensure aggressive entry but with price protection
-            OrderRequest req{"", symbol_, Side::BUY, OrderType::LIMIT, 0.001, tick.ask_price}; 
+            OrderRequest req{"", symbol_, Side::BUY, OrderType::LIMIT, tradeQty, tick.ask_price}; 
             executionEngine->placeOrder(req);
             
             currentPosition_ = PositionState::LONG;
             isWindowFull_ = false;
             obiWindow_.setZero();
         } 
-        else if (smoothedObi < sellThreshold_ && currentPosition_ == PositionState::LONG) {
-            LOG_INFO("<<< [OBIMomentum] STRONG SELL SIGNAL! Smoothed OBI ({:.2f}) < {}. Exiting LONG position to FLAT.", smoothedObi, sellThreshold_);
+        else if (obi < dynamicSellThreshold && trendIsDown && currentPosition_ == PositionState::LONG) {
+            LOG_INFO("<<< [OBIMomentum] STRONG SELL SIGNAL! Raw OBI ({:.2f}) < Sell Threshold ({:.2f}) & MidPrice ({:.2f}) < EMA ({:.2f}). Exiting LONG to FLAT.", obi, dynamicSellThreshold, midPrice, emaPrice_);
             
             auto positions = executionEngine->getOpenPositions();
             double exactQtyToSell = 0.0;
@@ -74,7 +95,6 @@ void OBIMomentum::onTick(const MarketTick& tick) {
             }
 
             if (exactQtyToSell > 0) {
-                // Use LIMIT order at Bid price to exit aggressively
                 OrderRequest req{"", symbol_, Side::SELL, OrderType::LIMIT, exactQtyToSell, tick.bid_price};
                 executionEngine->placeOrder(req);
             } else {

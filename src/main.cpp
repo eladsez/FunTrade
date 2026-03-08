@@ -36,7 +36,7 @@ void setupSignalHandlers() {
     std::signal(SIGTERM, signalHandler);
 }
 
-int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int windowSize = 20, double threshold = 0.3) {
+int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int windowSize = 20, double stdDevMultiplier = 2.0, double riskPercentage = 1.0, int emaWindowSize = 10) {
     LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
     std::string baseUrl = "https://paper-api.alpaca.markets";
     
@@ -72,7 +72,7 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
     LOG_INFO("[LIVE] Subscribing to {} market data stream...", symbol);
     
     // Use the dynamic parameters passed via command line
-    auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, symbol, windowSize, threshold, -threshold);
+    auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, symbol, windowSize, stdDevMultiplier, riskPercentage, emaWindowSize);
     
     // PortfolioManager should also get tick updates to track unrealized PnL
     eventBus->subscribeToTick(symbol, [portfolioManager](const MarketTick& tick) {
@@ -146,8 +146,11 @@ int main(int argc, char* argv[]) {
     LOG_INFO("==================================================");
 
     bool liveMode = false;
-    int windowSize = 20;      // Default to 20 ticks
-    double threshold = 0.3;   // Default to 0.3 imbalance
+    int windowSize = 20;
+    double stdDevMultiplier = 2.0;
+    double riskPercentage = 1.0;
+    int emaWindowSize = 10;
+    
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -155,8 +158,12 @@ int main(int argc, char* argv[]) {
             liveMode = true;
         } else if (arg == "--window" && i + 1 < argc) {
             windowSize = std::stoi(argv[++i]);
-        } else if (arg == "--threshold" && i + 1 < argc) {
-            threshold = std::stod(argv[++i]);
+        } else if (arg == "--stddev" && i + 1 < argc) {
+            stdDevMultiplier = std::stod(argv[++i]);
+        } else if (arg == "--risk" && i + 1 < argc) {
+            riskPercentage = std::stod(argv[++i]);
+        } else if (arg == "--ema" && i + 1 < argc) {
+            emaWindowSize = std::stoi(argv[++i]);
         }
     }
 
@@ -171,7 +178,7 @@ int main(int argc, char* argv[]) {
                       "  export APCA_API_SECRET_KEY=your_paper_secret\n");
             return 1;
         }
-        return runLiveMode(apiKey, apiSecret, windowSize, threshold);
+        return runLiveMode(apiKey, apiSecret, windowSize, stdDevMultiplier, riskPercentage, emaWindowSize);
     } else {
         return runBacktestMode();
     }

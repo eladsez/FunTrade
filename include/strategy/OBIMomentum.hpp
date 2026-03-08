@@ -19,8 +19,9 @@ public:
                 std::shared_ptr<IExecutionEngine> execEngine, 
                 const std::string& symbol = "BTC/USD", 
                 int windowSize = 5,
-                double buyThreshold = 0.4,
-                double sellThreshold = -0.4);
+                double stdDevMultiplier = 2.0,
+                double riskPercentage = 1.0,
+                int emaWindowSize = 10);
     void start() override;
     void onTick(const MarketTick& tick) override;
     void stop() override;
@@ -36,9 +37,14 @@ private:
     bool isWindowFull_;
     Eigen::VectorXd obiWindow_;
     
-    double buyThreshold_;
-    double sellThreshold_;
+    double stdDevMultiplier_;
+    double riskPercentage_;
     
+    // EMA for Signal Confluence
+    int emaWindowSize_;
+    double emaPrice_;
+    bool isEmaInitialized_;
+
     // Position tracking to prevent order spamming
     PositionState currentPosition_;
 };
