@@ -1,36 +1,11 @@
 #include <execution/AlpacaExecutionEngine.hpp>
 #include <core/Logger.hpp>
-#include <boost/beast/core.hpp>
-#include <boost/beast/http.hpp>
-#include <boost/beast/ssl.hpp>
-#include <boost/beast/websocket.hpp>
-#include <boost/beast/websocket/ssl.hpp>
-#include <boost/beast/version.hpp>
-#include <boost/asio/connect.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ssl/error.hpp>
-#include <boost/asio/ssl/stream.hpp>
-#include <boost/asio/strand.hpp>
-
 #include <iomanip>
 #include <sstream>
 #include <chrono>
-
-namespace beast = boost::beast;
-namespace http = beast::http;
-namespace websocket = beast::websocket;
-namespace net = boost::asio;
-namespace ssl = net::ssl;
-using tcp = net::ip::tcp;
+#include <thread>
 
 namespace bot {
-
-struct AlpacaWsState {
-    net::io_context ioc;
-    ssl::context ctx{ssl::context::tlsv12_client};
-    std::unique_ptr<websocket::stream<beast::ssl_stream<tcp::socket>>> ws;
-    beast::flat_buffer buffer;
-};
 
 static std::string formatDouble(double value) {
     std::ostringstream out;
@@ -41,42 +16,46 @@ static std::string formatDouble(double value) {
     return str;
 }
 
-AlpacaExecutionEngine::AlpacaExecutionEngine(IEventBus& eventBus, std::string apiKey, std::string apiSecret, std::string baseUrl)
-    : eventBus_(eventBus), apiKey_(std::move(apiKey)), apiSecret_(std::move(apiSecret)), baseUrl_(std::move(baseUrl)),
-      workGuard_(net::make_work_guard(ioc_)) {
+AlpacaExecutionEngine::AlpacaExecutionEngine(IEventBus& eventBus, std::shared_ptr<AlpacaInfra> infra, 
+                                             std::string apiKey, std::string apiSecret)
+    : eventBus_(eventBus), infra_(std::move(infra)), apiKey_(std::move(apiKey)), 
+      apiSecret_(std::move(apiSecret)), baseHost_("paper-api.alpaca.markets") {
     
-    ioThread_ = std::thread([this]() {
-        ioc_.run();
+    // Register the websocket callback for trade updates
+    infra_->setWsMessageCallback([this](const std::string& msg) {
+        onWebSocketMessage(msg);
     });
+
+    if (!connectToInfra()){
+        throw std::runtime_error("[AlpacaExecutionEngine] Failed connecting to Infra");
+    }
 }
 
 AlpacaExecutionEngine::~AlpacaExecutionEngine() {
-    isWsRunning_ = false;
-    {
-        std::lock_guard<std::mutex> lock(wsMutex_);
-        if (wsState_) {
-            net::post(wsState_->ioc, [this]() {
-                if (wsState_->ws && wsState_->ws->is_open()) {
-                    wsState_->ws->async_close(websocket::close_code::normal, [](beast::error_code){});
-                }
-            });
-        }
-    }
-    if (wsThread_.joinable()) wsThread_.join();
-
-    workGuard_.reset();
-    ioc_.stop();
-    if (ioThread_.joinable()) ioThread_.join();
+    disconnectFromInfra();
 }
 
-bool AlpacaExecutionEngine::authenticate() {
-    LOG_INFO("[AlpacaExecutionEngine] Authentication credentials loaded.");
+
+bool AlpacaExecutionEngine::connectToInfra() {
+    LOG_INFO("[AlpacaExecutionEngine] Authenticating via Infra...");
     
-    // Start WebSocket for trade updates
-    isWsRunning_ = true;
-    wsThread_ = std::thread(&AlpacaExecutionEngine::runWsLoop, this);
+    bool success = infra_->connectWs(baseHost_, "/v2/stream", WsType::EXECUTION);
     
-    return true;
+    if (success) {
+        nlohmann::json sub = {
+            {"action", "listen"}, 
+            {"data", {{"streams", {"trade_updates"}}}}
+        };
+        infra_->sendWsMessage(sub.dump());
+    } else {
+        LOG_ERROR("[AlpacaExecutionEngine] Failed to connect execution WS.");
+    }
+    
+    return success;
+}
+
+void AlpacaExecutionEngine::disconnectFromInfra(){
+    infra_->disconnectWs();
 }
 
 std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
@@ -101,9 +80,14 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
         else if (request.trail_percent > 0) orderPayload["trail_percent"] = formatDouble(request.trail_percent);
     }
 
-    LOG_INFO("[AlpacaExecutionEngine] Async Placing Order: {} | ClientID: {}", orderPayload.dump(), clientOrderId);
+    std::string payloadStr = orderPayload.dump();
 
-    sendHttpRequestAsync("POST", "/v2/orders", orderPayload.dump(), [this, clientOrderId](const std::string& response) {
+    LOG_INFO("[AlpacaExecutionEngine] Async Placing Order: {} | ClientID: {}", payloadStr, clientOrderId);
+
+    // Detach a thread to perform the HTTP request without blocking the Strategy
+    std::thread([this, payloadStr, clientOrderId]() {
+        std::string response = infra_->sendRestRequest("POST", baseHost_, "/v2/orders", payloadStr);
+        
         if (response.empty()) {
             LOG_ERROR("[AlpacaExecutionEngine] Async placeOrder failed for ClientID: {}", clientOrderId);
             return;
@@ -118,23 +102,23 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
         } catch (const std::exception& e) {
             LOG_ERROR("[AlpacaExecutionEngine] JSON Error on Async response: {}", e.what());
         }
-    });
+    }).detach();
 
     return clientOrderId;
 }
 
 bool AlpacaExecutionEngine::cancelOrder(const std::string& orderId) {
-    // For now, cancel remains blocking or we can make it async too. 
-    // Usually, strategies might want to wait for cancel confirmation, but non-blocking is better.
-    sendHttpRequestAsync("DELETE", "/v2/orders/" + orderId, "", [orderId](const std::string& response) {
+    std::thread([this, orderId]() {
+        std::string response = infra_->sendRestRequest("DELETE", baseHost_, "/v2/orders/" + orderId);
         LOG_INFO("[AlpacaExecutionEngine] Cancel request sent for order: {}", orderId);
-    });
+    }).detach();
     return true;
 }
 
 std::optional<double> AlpacaExecutionEngine::getPortfolioValue() {
-    std::string responseStr = sendHttpRequest("GET", "/v2/account");
+    std::string responseStr = infra_->sendRestRequest("GET", baseHost_, "/v2/account");
     if (responseStr.empty()) return std::nullopt;
+    
     try {
         auto responseJson = nlohmann::json::parse(responseStr);
         if (responseJson.contains("portfolio_value")) {
@@ -145,8 +129,9 @@ std::optional<double> AlpacaExecutionEngine::getPortfolioValue() {
 }
 
 nlohmann::json AlpacaExecutionEngine::getOpenPositions() {
-    std::string responseStr = sendHttpRequest("GET", "/v2/positions");
+    std::string responseStr = infra_->sendRestRequest("GET", baseHost_, "/v2/positions");
     if (responseStr.empty()) return nlohmann::json::array();
+    
     try {
         return nlohmann::json::parse(responseStr);
     } catch (...) {
@@ -155,7 +140,7 @@ nlohmann::json AlpacaExecutionEngine::getOpenPositions() {
 }
 
 nlohmann::json AlpacaExecutionEngine::getOpenOrders() {
-    std::string responseStr = sendHttpRequest("GET", "/v2/orders");
+    std::string responseStr = infra_->sendRestRequest("GET", baseHost_, "/v2/orders");
     if (responseStr.empty()) return nlohmann::json::array();
     try {
         return nlohmann::json::parse(responseStr);
@@ -164,131 +149,7 @@ nlohmann::json AlpacaExecutionEngine::getOpenOrders() {
     }
 }
 
-void AlpacaExecutionEngine::sendHttpRequestAsync(const std::string& method, const std::string& endpoint, const std::string& payload, 
-                                                std::function<void(const std::string&)> callback) {
-    // Offload the synchronous HTTP call to the IO thread
-    net::post(ioc_, [this, method, endpoint, payload, callback]() {
-        std::string result = sendHttpRequest(method, endpoint, payload);
-        callback(result);
-    });
-}
-
-std::string AlpacaExecutionEngine::sendHttpRequest(const std::string& method, const std::string& endpoint, const std::string& payload) {
-    try {
-        std::string host = baseUrl_;
-        if (host.find("https://") == 0) host = host.substr(8);
-        else if (host.find("http://") == 0) host = host.substr(7);
-        size_t slashPos = host.find('/');
-        if (slashPos != std::string::npos) host = host.substr(0, slashPos);
-
-        std::string port = "443";
-        net::io_context ioc;
-        ssl::context ctx(ssl::context::tlsv12_client);
-        ctx.set_default_verify_paths();
-
-        tcp::resolver resolver(ioc);
-        beast::ssl_stream<beast::tcp_stream> stream(ioc, ctx);
-
-        if(! SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) {
-            return "";
-        }
-
-        auto const results = resolver.resolve(host, port);
-        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
-        beast::get_lowest_layer(stream).connect(results);
-        
-        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
-        stream.handshake(ssl::stream_base::client);
-
-        http::verb verb = (method == "POST") ? http::verb::post : ((method == "DELETE") ? http::verb::delete_ : http::verb::get);
-        http::request<http::string_body> req{verb, endpoint, 11};
-        req.set(http::field::host, host);
-        req.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
-        req.set("APCA-API-KEY-ID", apiKey_);
-        req.set("APCA-API-SECRET-KEY", apiSecret_);
-
-        if (!payload.empty()) {
-            req.set(http::field::content_type, "application/json");
-            req.body() = payload;
-            req.prepare_payload();
-        }
-
-        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
-        http::write(stream, req);
-        
-        beast::flat_buffer buffer;
-        http::response<http::string_body> res;
-        beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(10));
-        http::read(stream, buffer, res);
-
-        beast::error_code ec;
-        stream.shutdown(ec);
-        return res.body();
-    } catch(std::exception const& e) {
-        LOG_ERROR("[AlpacaExecutionEngine] HTTP Error: {}", e.what());
-        return "";
-    }
-}
-
-void AlpacaExecutionEngine::runWsLoop() {
-    {
-        std::lock_guard<std::mutex> lock(wsMutex_);
-        wsState_ = std::make_unique<AlpacaWsState>();
-        wsState_->ctx.set_default_verify_paths();
-    }
-    
-    std::string host = "paper-api.alpaca.markets"; // Using paper-api for stream
-    std::string port = "443";
-    
-    while (isWsRunning_) {
-        try {
-            tcp::resolver resolver(wsState_->ioc);
-            {
-                std::lock_guard<std::mutex> lock(wsMutex_);
-                wsState_->ws = std::make_unique<websocket::stream<beast::ssl_stream<tcp::socket>>>(net::make_strand(wsState_->ioc), wsState_->ctx);
-            }
-
-            auto const results = resolver.resolve(host, port);
-            net::connect(beast::get_lowest_layer(*wsState_->ws), results);
-
-            if(! SSL_set_tlsext_host_name(wsState_->ws->next_layer().native_handle(), host.c_str())) throw std::runtime_error("SNI failed");
-
-            wsState_->ws->next_layer().handshake(ssl::stream_base::client);
-            wsState_->ws->handshake(host, "/v2/stream");
-
-            // Authenticate WS
-            nlohmann::json auth = {{"action", "authenticate"}, {"data", {{"key_id", apiKey_}, {"secret_key", apiSecret_}}}};
-            wsState_->ws->write(net::buffer(auth.dump()));
-
-            // Subscribe to trade updates
-            nlohmann::json sub = {{"action", "listen"}, {"data", {{"streams", {"trade_updates"}}}}};
-            wsState_->ws->write(net::buffer(sub.dump()));
-
-            std::function<void()> doRead;
-            doRead = [this, &doRead]() {
-                if (!isWsRunning_ || !wsState_->ws->is_open()) return;
-                wsState_->ws->async_read(wsState_->buffer, [this, &doRead](beast::error_code ec, std::size_t) {
-                    if (ec) return;
-                    std::string payload = beast::buffers_to_string(wsState_->buffer.data());
-                    wsState_->buffer.consume(wsState_->buffer.size());
-                    onWsMessage(payload);
-                    if (isWsRunning_) doRead();
-                });
-            };
-            doRead();
-            wsState_->ioc.run();
-            wsState_->ioc.restart();
-
-        } catch (const std::exception& e) {
-            if (isWsRunning_) {
-                LOG_ERROR("[AlpacaExecutionEngine] WS Error: {}. Reconnecting in 5s...", e.what());
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-            }
-        }
-    }
-}
-
-void AlpacaExecutionEngine::onWsMessage(const std::string& payload) {
+void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
     try {
         auto j = nlohmann::json::parse(payload);
         std::string stream = j.value("stream", "");

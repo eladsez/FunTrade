@@ -11,8 +11,8 @@ class IExecutionEngine {
 public:
     virtual ~IExecutionEngine() = default;
 
-    // Authenticates with the exchange API.
-    virtual bool authenticate() = 0;
+    virtual bool connectToInfra() = 0;
+    virtual void disconnectFromInfra() = 0;
 
     // Sends a new order request to the exchange.
     // Returns a unique client-assigned order ID (client_order_id), or empty string if send failed.

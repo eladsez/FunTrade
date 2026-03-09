@@ -8,9 +8,8 @@
 #include <atomic>
 #include <core/Logger.hpp>
 #include <core/EventBus.hpp>
-#include <data/CsvHistoricalDataFeed.hpp>
-#include <data/AlpacaDataFeed.hpp>
-#include <execution/DummyExecution.hpp>
+#include <infra/AlpacaInfra.hpp>
+#include <data/AlpacaRtDataFeed.hpp>
 #include <execution/AlpacaExecutionEngine.hpp>
 #include <strategy/OBIMomentum.hpp>
 #include <risk/PortfolioManager.hpp>
@@ -33,29 +32,30 @@ void setupSignalHandlers() {
 
 int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int windowSize = 20, double stdDevMultiplier = 2.0, double riskPercentage = 1.0, int emaWindowSize = 10) {
     LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
-    std::string baseUrl = "https://paper-api.alpaca.markets";
     
     auto eventBus = std::make_shared<EventBus>();
-    auto executionEngine = std::make_shared<AlpacaExecutionEngine>(*eventBus, apiKey, apiSecret, baseUrl);
-    auto dataFeed = std::make_shared<AlpacaDataFeed>(eventBus, apiKey, apiSecret);
+
+    // =========================================================================
+    // INFRASTRUCTURE INJECTION
+    // =========================================================================
+
+    // 1. Dedicated Infra for Execution (REST heavy + Account WS)
+    auto execInfra = std::make_shared<AlpacaInfra>(apiKey, apiSecret);
+    auto executionEngine = std::make_shared<AlpacaExecutionEngine>(*eventBus, execInfra, apiKey, apiSecret);
+
+    // 2. Dedicated Infra for Market Data (High throughput WS)
+    auto dataInfra = std::make_shared<AlpacaInfra>(apiKey, apiSecret);
+    auto dataFeed = std::make_shared<AlpacaRtDataFeed>(eventBus, dataInfra, apiKey, apiSecret);
+
+    // =========================================================================
+    // DOMAIN WIRING
+    // =========================================================================
+
     auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus, *executionEngine);
     auto orderManager = std::make_shared<OrderManager>(*eventBus, *executionEngine);
 
-    if (!executionEngine->authenticate()) {
-        LOG_ERROR("Live Execution Authentication Failed.");
-        return 1;
-    }
-
     // Sync state with exchange
     orderManager->syncWithExchange();
-
-    if (!dataFeed->connect()) {
-        LOG_ERROR("Live DataFeed Connection Failed.");
-        return 1;
-    }
-    
-    // Allow time for WS handshake and authentication to complete
-    std::this_thread::sleep_for(std::chrono::seconds(2));
     
     auto portfolioValue = executionEngine->getPortfolioValue();
     double initPv = 100000.0;
@@ -82,7 +82,6 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
 
     LOG_INFO("[LIVE] Shutting down live session...");
     strategy->stop();
-    dataFeed->disconnect();
     LOG_INFO("[LIVE] Shutdown complete.");
     return 0;
 }

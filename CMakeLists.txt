@@ -48,6 +48,7 @@ file(GLOB_RECURSE LIB_SRC_FILES
     "src/execution/*.cpp"
     "src/strategy/*.cpp"
     "src/risk/*.cpp"
+    "src/infra/*.cpp"
 )
 
 # Find Boost and OpenSSL
