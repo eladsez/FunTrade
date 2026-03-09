@@ -16,10 +16,11 @@ static std::string formatDouble(double value) {
     return str;
 }
 
-AlpacaExecutionEngine::AlpacaExecutionEngine(IEventBus& eventBus, std::shared_ptr<AlpacaInfra> infra, 
-                                             std::string apiKey, std::string apiSecret)
-    : eventBus_(eventBus), infra_(std::move(infra)), apiKey_(std::move(apiKey)), 
+AlpacaExecutionEngine::AlpacaExecutionEngine(std::shared_ptr<IEventBus> eventBus, std::string apiKey, std::string apiSecret)
+    : eventBus_(eventBus), apiKey_(std::move(apiKey)), 
       apiSecret_(std::move(apiSecret)), baseHost_("paper-api.alpaca.markets") {
+
+    infra_ = std::make_unique<AlpacaInfra>(apiKey_, apiSecret_);
     
     // Register the websocket callback for trade updates
     infra_->setWsMessageCallback([this](const std::string& msg) {
@@ -68,7 +69,9 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
         {"symbol", request.symbol},
         {"qty", formatDouble(request.quantity)},
         {"side", request.side == Side::BUY ? "buy" : "sell"},
-        {"type", request.type == OrderType::MARKET ? "market" : (request.type == OrderType::LIMIT ? "limit" : "trailing_stop")},
+        {"type", request.type == OrderType::MARKET ? "market" :
+                (request.type == OrderType::LIMIT ? "limit" 
+                : "trailing_stop")},
         {"time_in_force", "gtc"},
         {"client_order_id", clientOrderId}
     };
@@ -153,9 +156,11 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
     try {
         auto j = nlohmann::json::parse(payload);
         std::string stream = j.value("stream", "");
+        
         if (stream == "trade_updates") {
             auto data = j["data"];
             LOG_DEBUG("[AlpacaExecutionEngine] Raw Trade Update: {}", data.dump());
+            
             std::string event = data["event"].get<std::string>();
             auto order = data["order"];
 
@@ -167,26 +172,40 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
             std::string sideStr = order["side"].get<std::string>();
             report.side = (sideStr == "buy") ? Side::BUY : Side::SELL;
 
-            std::string statusStr = data["event"].get<std::string>(); // 'fill', 'partial_fill', etc.
+            std::string statusStr = event; 
             if (statusStr == "fill") report.status = OrderStatus::FILLED;
             else if (statusStr == "partial_fill") report.status = OrderStatus::PARTIALLY_FILLED;
             else if (statusStr == "canceled") report.status = OrderStatus::CANCELED;
             else if (statusStr == "rejected") report.status = OrderStatus::REJECTED;
-            else if (statusStr == "new") report.status = OrderStatus::NEW;
+            else if (statusStr == "new" || statusStr == "accepted") report.status = OrderStatus::NEW;
             else return; // Ignore other events for now
 
-            report.last_quantity = std::stod(data.value("qty", "0"));
-            report.last_price = std::stod(data.value("price", "0"));
-            report.cumulative_quantity = std::stod(order.value("filled_qty", "0"));
-            report.avg_price = std::stod(order.value("filled_avg_price", "0"));
+            // Helper lambda to safely parse floats/doubles that might be null or strings
+            auto safeStod = [](const nlohmann::json& j_obj, const std::string& key) -> double {
+                if (j_obj.contains(key) && !j_obj[key].is_null()) {
+                    if (j_obj[key].is_string()) return std::stod(j_obj[key].get<std::string>());
+                    if (j_obj[key].is_number()) return j_obj[key].get<double>();
+                }
+                return 0.0;
+            };
+
+            report.last_quantity = safeStod(data, "qty");
+            report.last_price = safeStod(data, "price");
+            report.cumulative_quantity = safeStod(order, "filled_qty");
+            report.avg_price = safeStod(order, "filled_avg_price");
+            
             report.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
             LOG_INFO("[AlpacaExecutionEngine] Execution Report: Symbol={}, Event={}, Status={}, Qty={}, Price={}", 
-                     report.symbol, event, statusStr, report.last_quantity, report.last_price);
+                     report.symbol, event, static_cast<int>(report.status), report.last_quantity, report.last_price);
             
-            eventBus_.publishExecution(report);
+            eventBus_->publishExecution(report);
         }
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        LOG_ERROR("[AlpacaExecutionEngine] JSON parsing error in WS message: {} | Payload: {}", e.what(), payload);
+    } catch (...) {
+        LOG_ERROR("[AlpacaExecutionEngine] Unknown error parsing WS message.");
+    }
 }
 
 } // namespace bot

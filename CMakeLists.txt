@@ -74,13 +74,6 @@ target_link_libraries(FunTradeLib PUBLIC
 add_executable(${PROJECT_NAME} src/main.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE FunTradeLib)
 
-# # Enable testing and add the tests directory
-# enable_testing()
-
-# option(ENABLE_PAPERTRADING_TEST "Enable live paper trading integration tests" OFF)
-# if(ENABLE_PAPERTRADING_TEST)
-#     add_definitions(-DPAPERTRADING)
-#     message(STATUS "Paper trading integration tests ENABLED")
-# endif()
-
-# add_subdirectory(tests)
+# Enable testing and add the tests directory
+enable_testing()
+add_subdirectory(tests)

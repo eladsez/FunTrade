@@ -3,108 +3,182 @@
 #include <cstdlib>
 #include <thread>
 #include <chrono>
+#include <mutex>
+#include <condition_variable>
+#include <unordered_map>
+#include <vector>
+#include <atomic>
 
 #include <core/EventBus.hpp>
 
 using namespace bot;
 
-// Mock Subclass to isolate networking
-class MockAlpacaExecutionEngine : public AlpacaExecutionEngine {
-public:
-    MockAlpacaExecutionEngine(IEventBus& eventBus, std::string apiKey, std::string apiSecret, std::string baseUrl)
-        : AlpacaExecutionEngine(eventBus, std::move(apiKey), std::move(apiSecret), std::move(baseUrl)) {}
-
-protected:
-    std::string sendHttpRequest(const std::string& method, const std::string& endpoint, const std::string& payload = "") override {
-        // Return simulated JSON responses instead of hitting the live network
-        if (method == "POST" && endpoint == "/v2/orders") {
-            return R"({"id": "alpaca-mock-id-9999", "status": "accepted"})";
-        } else if (method == "DELETE") {
-            return R"({})";
-        } else if (method == "GET" && endpoint == "/v2/account") {
-            return R"({"portfolio_value": "100500.25"})";
-        } else if (method == "GET" && endpoint == "/v2/positions") {
-            return R"([{"symbol": "BTC/USD", "qty": "1.5"}])";
-        }
-        return "";
-    }
-};
-
 class AlpacaExecutionEngineTest : public ::testing::Test {
 protected:
     std::shared_ptr<EventBus> eventBus;
-    std::unique_ptr<MockAlpacaExecutionEngine> engine;
+    std::unique_ptr<AlpacaExecutionEngine> engine;
+
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::unordered_map<std::string, OrderStatus> orderStatuses;
+    std::unordered_map<std::string, std::string> clientToExchangeId;
 
     void SetUp() override {
+        const char* apiKey = std::getenv("APCA_API_KEY_ID");
+        const char* apiSecret = std::getenv("APCA_API_SECRET_KEY");
+
+        if (!apiKey || !apiSecret) {
+            GTEST_SKIP() << "Skipping tests: APCA_API_KEY_ID or APCA_API_SECRET_KEY not found in environment.";
+        }
+
         eventBus = std::make_shared<EventBus>();
-        engine = std::make_unique<MockAlpacaExecutionEngine>(*eventBus, "FAKE_KEY", "FAKE_SECRET", "https://paper-api.alpaca.markets");
+        engine = std::make_unique<AlpacaExecutionEngine>(eventBus, apiKey, apiSecret);
+
+        eventBus->start();
+
+        eventBus->subscribeToExecution([this](const ExecutionReport& report) {
+            std::lock_guard<std::mutex> lock(mtx);
+            orderStatuses[report.client_order_id] = report.status;
+            clientToExchangeId[report.client_order_id] = report.order_id; 
+            cv.notify_all();
+        });
+    }
+
+    void TearDown() override {
+        if (engine) engine->disconnectFromInfra();
+    }
+
+    bool waitForStatus(const std::vector<std::string>& clientIds, OrderStatus expected, int timeoutSeconds = 15) {
+        std::unique_lock<std::mutex> lock(mtx);
+        return cv.wait_for(lock, std::chrono::seconds(timeoutSeconds), [this, &clientIds, expected]() {
+            for (const auto& cid : clientIds) {
+                auto it = orderStatuses.find(cid);
+                if (it == orderStatuses.end() || it->second != expected) {
+                    return false; 
+                }
+            }
+            return true; 
+        });
+    }
+
+    std::string getExchangeId(const std::string& clientId) {
+        std::lock_guard<std::mutex> lock(mtx);
+        auto it = clientToExchangeId.find(clientId);
+        return (it != clientToExchangeId.end()) ? it->second : "";
+    }
+
+    // Helper to guarantee unique client order IDs on every test run
+    std::string genId(const std::string& prefix) {
+        static std::atomic<int> counter{0};
+        auto now = std::chrono::system_clock::now().time_since_epoch().count();
+        return prefix + "_" + std::to_string(now) + "_" + std::to_string(++counter);
     }
 };
 
-TEST_F(AlpacaExecutionEngineTest, AuthenticateReturnsTrue) {
-    EXPECT_TRUE(engine->authenticate());
-}
+TEST_F(AlpacaExecutionEngineTest, PlaceMarket) {
+    std::string b1 = genId("mkt_buy_btc_1");
+    std::string b2 = genId("mkt_buy_btc_2");
 
-TEST_F(AlpacaExecutionEngineTest, PlaceMarketOrderReturnsClientOrderId) {
-    OrderRequest req{"", "BTC/USD", Side::BUY, OrderType::MARKET, 1.5, 0.0};
-    std::string orderId = engine->placeOrder(req);
+    OrderRequest buy1{b1, "BTC/USD", Side::BUY, OrderType::MARKET, 0.01, 0.0, 0.0, 0.0};
+    OrderRequest buy2{b2, "BTC/USD", Side::BUY, OrderType::MARKET, 0.01, 0.0, 0.0, 0.0};
 
-    // Should return a bot-generated ID since we passed empty
-    EXPECT_FALSE(orderId.empty());
-    EXPECT_TRUE(orderId.find("bot_") == 0 || orderId == ""); 
+    engine->placeOrder(buy1);
+    engine->placeOrder(buy2);
+
+    ASSERT_TRUE(waitForStatus({b1, b2}, OrderStatus::FILLED)) 
+        << "Market buy orders did not fill in time.";
+
+    std::string s1 = genId("mkt_sell_btc_1");
+    std::string s2 = genId("mkt_sell_btc_2");
+
+    OrderRequest sell1{s1, "BTC/USD", Side::SELL, OrderType::MARKET, 0.005, 0.0, 0.0, 0.0};
+    OrderRequest sell2{s2, "BTC/USD", Side::SELL, OrderType::MARKET, 0.005, 0.0, 0.0, 0.0};
+
+    engine->placeOrder(sell1);
+    engine->placeOrder(sell2);
+
+    ASSERT_TRUE(waitForStatus({s1, s2}, OrderStatus::FILLED))
+        << "Market sell orders did not fill in time.";
 }
 
 TEST_F(AlpacaExecutionEngineTest, CancelOrderReturnsTrue) {
-    bool success = engine->cancelOrder("alpaca-mock-id-9999");
-    EXPECT_TRUE(success);
+    std::string l1 = genId("limit_cancel_eth");
+
+    OrderRequest lowLimit{l1, "ETH/USD", Side::BUY, OrderType::LIMIT, 1.0, 100.0, 0.0, 0.0};
+    engine->placeOrder(lowLimit);
+
+    ASSERT_TRUE(waitForStatus({l1}, OrderStatus::NEW))
+        << "Limit order was never accepted as NEW.";
+
+    std::string exchangeOrderId = getExchangeId(l1);
+    ASSERT_FALSE(exchangeOrderId.empty()) << "Failed to capture exchange order ID.";
+
+    engine->cancelOrder(exchangeOrderId);
+
+    ASSERT_TRUE(waitForStatus({l1}, OrderStatus::CANCELED))
+        << "Order was not successfully canceled.";
 }
 
-TEST_F(AlpacaExecutionEngineTest, GetPortfolioValueParsesCorrectly) {
-    auto value = engine->getPortfolioValue();
-    ASSERT_TRUE(value.has_value());
-    EXPECT_DOUBLE_EQ(value.value(), 100500.25);
+TEST_F(AlpacaExecutionEngineTest, PlaceLimit) {
+    std::string b1 = genId("limit_buy_eth_1");
+    std::string b2 = genId("limit_buy_eth_2");
+
+    OrderRequest buy1{b1, "ETH/USD", Side::BUY, OrderType::LIMIT, 0.1, 200000.0, 0.0, 0.0};
+    OrderRequest buy2{b2, "ETH/USD", Side::BUY, OrderType::LIMIT, 0.1, 200000.0, 0.0, 0.0};
+
+    engine->placeOrder(buy1);
+    engine->placeOrder(buy2);
+
+    ASSERT_TRUE(waitForStatus({b1, b2}, OrderStatus::FILLED))
+        << "High-priced limit buy orders did not fill instantly.";
+
+    std::string s1 = genId("limit_sell_eth_1");
+    std::string s2 = genId("limit_sell_eth_2");
+
+    OrderRequest sell1{s1, "ETH/USD", Side::SELL, OrderType::LIMIT, 0.05, 10.0, 0.0, 0.0};
+    OrderRequest sell2{s2, "ETH/USD", Side::SELL, OrderType::LIMIT, 0.05, 10.0, 0.0, 0.0};
+
+    engine->placeOrder(sell1);
+    engine->placeOrder(sell2);
+
+    ASSERT_TRUE(waitForStatus({s1, s2}, OrderStatus::FILLED))
+        << "Low-priced limit sell orders did not fill instantly.";
 }
 
-TEST_F(AlpacaExecutionEngineTest, GetOpenPositionsParsesCorrectly) {
-    auto positions = engine->getOpenPositions();
-    ASSERT_TRUE(positions.is_array());
-    ASSERT_EQ(positions.size(), 1);
-    EXPECT_EQ(positions[0]["symbol"], "BTC/USD");
-    EXPECT_EQ(positions[0]["qty"], "1.5");
-}
+TEST_F(AlpacaExecutionEngineTest, PlaceTrailingStop) {
+    std::string b1 = genId("ts_buy_aapl_1");
+    std::string b2 = genId("ts_buy_aapl_2");
 
-TEST_F(AlpacaExecutionEngineTest, PlaceLimitOrderSendsPrice) {
-    OrderRequest req{"my_custom_id", "ETH/USD", Side::SELL, OrderType::LIMIT, 2.0, 4000.0};
-    std::string orderId = engine->placeOrder(req);
-    EXPECT_EQ(orderId, "my_custom_id");
-}
+    OrderRequest buy1{b1, "AAPL", Side::BUY, OrderType::TRAILING_STOP, 1.0, 0.0, 0.0, 5.0};
+    OrderRequest buy2{b2, "AAPL", Side::BUY, OrderType::TRAILING_STOP, 1.0, 0.0, 0.0, 5.0};
 
-// Integration Test - Only runs if ENABLE_PAPERTRADING_TEST=ON and credentials are set
-#ifdef PAPERTRADING
-TEST(AlpacaExecutionIntegration, LivePaperTradingFlow) {
-    const char* apiKeyEnv = std::getenv("APCA_API_KEY_ID");
-    const char* apiSecretEnv = std::getenv("APCA_API_SECRET_KEY");
+    engine->placeOrder(buy1);
+    engine->placeOrder(buy2);
 
-    ASSERT_NE(apiKeyEnv, nullptr) << "APCA_API_KEY_ID environment variable is missing.";
-    ASSERT_NE(apiSecretEnv, nullptr) << "APCA_API_SECRET_KEY environment variable is missing.";
+    ASSERT_TRUE(waitForStatus({b1, b2}, OrderStatus::NEW))
+        << "Trailing stop buys were not accepted.";
 
-    std::string apiKey(apiKeyEnv);
-    std::string apiSecret(apiSecretEnv);
-    std::string baseUrl = "https://paper-api.alpaca.markets";
+    // Cancel the pending buys BEFORE placing sells to avoid Alpaca's long/short conflict rule
+    engine->cancelOrder(getExchangeId(b1));
+    engine->cancelOrder(getExchangeId(b2));
     
-    EventBus eventBus;
-    AlpacaExecutionEngine engine(eventBus, apiKey, apiSecret, baseUrl);
+    // Wait for the cancellations to clear the exchange risk engine
+    ASSERT_TRUE(waitForStatus({b1, b2}, OrderStatus::CANCELED))
+        << "Failed to cancel trailing stop buys.";
 
-    EXPECT_TRUE(engine.authenticate());
+    std::string s1 = genId("ts_sell_aapl_1");
+    std::string s2 = genId("ts_sell_aapl_2");
 
-    auto portfolioValue = engine.getPortfolioValue();
-    EXPECT_TRUE(portfolioValue.has_value());
+    OrderRequest sell1{s1, "AAPL", Side::SELL, OrderType::TRAILING_STOP, 1.0, 0.0, 0.0, 5.0};
+    OrderRequest sell2{s2, "AAPL", Side::SELL, OrderType::TRAILING_STOP, 1.0, 0.0, 0.0, 5.0};
 
-    OrderRequest marketBuy{"", "BTC/USD", Side::BUY, OrderType::MARKET, 0.0001, 0.0};
-    std::string orderId = engine.placeOrder(marketBuy);
-    ASSERT_FALSE(orderId.empty());
-    std::cout << "[INTEGRATION] Market Order Client ID: " << orderId << std::endl;
+    engine->placeOrder(sell1);
+    engine->placeOrder(sell2);
 
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    ASSERT_TRUE(waitForStatus({s1, s2}, OrderStatus::NEW))
+        << "Trailing stop sells were not accepted.";
+
+    // Clean up the resting sells
+    engine->cancelOrder(getExchangeId(s1));
+    engine->cancelOrder(getExchangeId(s2));
 }
-#endif

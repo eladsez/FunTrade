@@ -13,7 +13,7 @@ namespace bot {
 class AlpacaExecutionEngine : public IExecutionEngine {
 public:
     // We inject the shared Infra instance here
-    AlpacaExecutionEngine(IEventBus& eventBus, std::shared_ptr<AlpacaInfra> infra, std::string apiKey, std::string apiSecret);
+    AlpacaExecutionEngine(std::shared_ptr<IEventBus> eventBus, std::string apiKey, std::string apiSecret);
     ~AlpacaExecutionEngine() override;
 
     // IExecutionEngine Implementation
@@ -28,7 +28,7 @@ public:
     nlohmann::json getOpenOrders() override;
 
 private:
-    IEventBus& eventBus_;
+    std::shared_ptr<IEventBus> eventBus_;
     std::shared_ptr<AlpacaInfra> infra_;
     std::string apiKey_;
     std::string apiSecret_;

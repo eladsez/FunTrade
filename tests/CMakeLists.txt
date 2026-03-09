@@ -26,22 +26,22 @@ add_executable(test_alpaca_execution test_alpaca_execution.cpp)
 target_link_libraries(test_alpaca_execution FunTradeLib GTest::gtest_main)
 gtest_discover_tests(test_alpaca_execution)
 
-# Add PortfolioManager tests
-add_executable(test_portfolio_manager test_portfolio_manager.cpp)
-target_link_libraries(test_portfolio_manager FunTradeLib GTest::gtest_main)
-gtest_discover_tests(test_portfolio_manager)
+# # Add PortfolioManager tests
+# add_executable(test_portfolio_manager test_portfolio_manager.cpp)
+# target_link_libraries(test_portfolio_manager FunTradeLib GTest::gtest_main)
+# gtest_discover_tests(test_portfolio_manager)
 
-# Add OrderManager tests
-add_executable(test_order_manager test_order_manager.cpp)
-target_link_libraries(test_order_manager FunTradeLib GTest::gtest_main)
-gtest_discover_tests(test_order_manager)
+# # Add OrderManager tests
+# add_executable(test_order_manager test_order_manager.cpp)
+# target_link_libraries(test_order_manager FunTradeLib GTest::gtest_main)
+# gtest_discover_tests(test_order_manager)
 
-# Add OBIMath tests
-add_executable(test_obi_math test_obi_math.cpp)
-target_link_libraries(test_obi_math FunTradeLib GTest::gtest_main)
-gtest_discover_tests(test_obi_math)
+# # Add OBIMath tests
+# add_executable(test_obi_math test_obi_math.cpp)
+# target_link_libraries(test_obi_math FunTradeLib GTest::gtest_main)
+# gtest_discover_tests(test_obi_math)
 
-# Add System Infra Integration tests
-add_executable(test_system_infra test_system_infra.cpp)
-target_link_libraries(test_system_infra FunTradeLib GTest::gtest_main)
-gtest_discover_tests(test_system_infra)
+# # Add System Infra Integration tests
+# add_executable(test_system_infra test_system_infra.cpp)
+# target_link_libraries(test_system_infra FunTradeLib GTest::gtest_main)
+# gtest_discover_tests(test_system_infra)

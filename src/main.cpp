@@ -39,13 +39,8 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
     // INFRASTRUCTURE INJECTION
     // =========================================================================
 
-    // 1. Dedicated Infra for Execution (REST heavy + Account WS)
-    auto execInfra = std::make_shared<AlpacaInfra>(apiKey, apiSecret);
-    auto executionEngine = std::make_shared<AlpacaExecutionEngine>(*eventBus, execInfra, apiKey, apiSecret);
-
-    // 2. Dedicated Infra for Market Data (High throughput WS)
-    auto dataInfra = std::make_shared<AlpacaInfra>(apiKey, apiSecret);
-    auto dataFeed = std::make_shared<AlpacaRtDataFeed>(eventBus, dataInfra, apiKey, apiSecret);
+    auto executionEngine = std::make_shared<AlpacaExecutionEngine>(eventBus, apiKey, apiSecret);
+    auto dataFeed = std::make_shared<AlpacaRtDataFeed>(eventBus, apiKey, apiSecret);
 
     // =========================================================================
     // DOMAIN WIRING

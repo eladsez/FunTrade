@@ -14,7 +14,7 @@ namespace bot {
 class AlpacaRtDataFeed : public IDataFeed {
 public:
     // We now inject the shared AlpacaInfra instance
-    AlpacaRtDataFeed(std::shared_ptr<IEventBus> eventBus, std::shared_ptr<AlpacaInfra> infra, std::string apiKey, std::string apiSecret);
+    AlpacaRtDataFeed(std::shared_ptr<IEventBus> eventBus, std::string apiKey, std::string apiSecret);
     ~AlpacaRtDataFeed() override;
 
     bool connectToInfra() override;

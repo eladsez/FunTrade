@@ -5,8 +5,11 @@
 
 namespace bot {
 
-AlpacaRtDataFeed::AlpacaRtDataFeed(std::shared_ptr<IEventBus> eventBus, std::shared_ptr<AlpacaInfra> infra, std::string apiKey, std::string apiSecret)
-    : eventBus_(std::move(eventBus)), infra_(std::move(infra)), apiKey_(std::move(apiKey)), apiSecret_(std::move(apiSecret)) {
+AlpacaRtDataFeed::AlpacaRtDataFeed(std::shared_ptr<IEventBus> eventBus, std::string apiKey, std::string apiSecret)
+    : eventBus_(std::move(eventBus)), apiKey_(std::move(apiKey)), 
+    apiSecret_(std::move(apiSecret)) {
+
+    infra_ = std::make_unique<AlpacaInfra>(apiKey_, apiSecret_);
     
     // Register our parser directly with the Infra layer
     infra_->setWsMessageCallback([this](const std::string& msg) {
