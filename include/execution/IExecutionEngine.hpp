@@ -21,6 +21,7 @@ public:
 
     // Cancels an active open order.
     virtual bool cancelOrder(const std::string& orderId) = 0;
+    virtual bool cancelAllOrders() = 0;
     
     // Portfolio tracking
     virtual std::optional<double> getPortfolioValue() = 0;

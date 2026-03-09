@@ -38,7 +38,7 @@ AlpacaExecutionEngine::~AlpacaExecutionEngine() {
 
 
 bool AlpacaExecutionEngine::connectToInfra() {
-    LOG_INFO("[AlpacaExecutionEngine] Authenticating via Infra...");
+    LOG_INFO("[AlpacaExecutionEngine] connecting to Infra...");
     
     bool success = infra_->connectWs(baseHost_, "/v2/stream", WsType::EXECUTION);
     
@@ -59,6 +59,31 @@ void AlpacaExecutionEngine::disconnectFromInfra(){
     infra_->disconnectWs();
 }
 
+const char* AlpacaExecutionEngine::sideToString(Side side) {
+    return side == Side::BUY ? "buy" : "sell";
+}
+
+const char* AlpacaExecutionEngine::orderTypeToString(OrderType type) {
+    switch (type) {
+        case OrderType::MARKET: return "market";
+        case OrderType::LIMIT: return "limit";
+        case OrderType::STOP: return "stop";
+        case OrderType::STOP_LIMIT: return "stop_limit";
+        case OrderType::TRAILING_STOP: return "trailing_stop";
+        default: return "unknown";
+    }
+}
+
+const char* AlpacaExecutionEngine::timeInForceToString(TimeInForce tif) {
+    switch (tif) {
+        case TimeInForce::GTC: return "gtc";
+        case TimeInForce::DAY: return "day";
+        case TimeInForce::IOC: return "ioc";
+        case TimeInForce::FOK: return "fok";
+        default: return "gtc"; 
+    }
+}
+
 std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
     std::string clientOrderId = request.client_order_id;
     if (clientOrderId.empty()) {
@@ -68,19 +93,34 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
     nlohmann::json orderPayload = {
         {"symbol", request.symbol},
         {"qty", formatDouble(request.quantity)},
-        {"side", request.side == Side::BUY ? "buy" : "sell"},
-        {"type", request.type == OrderType::MARKET ? "market" :
-                (request.type == OrderType::LIMIT ? "limit" 
-                : "trailing_stop")},
-        {"time_in_force", "gtc"},
+        {"side", sideToString(request.side)},
+        {"type", orderTypeToString(request.type)},
+        {"time_in_force", timeInForceToString(request.tif)},
         {"client_order_id", clientOrderId}
     };
 
-    if (request.type == OrderType::LIMIT) {
-        orderPayload["limit_price"] = formatDouble(request.price);
-    } else if (request.type == OrderType::TRAILING_STOP) {
-        if (request.trail_price > 0) orderPayload["trail_price"] = formatDouble(request.trail_price);
-        else if (request.trail_percent > 0) orderPayload["trail_percent"] = formatDouble(request.trail_percent);
+    // Append pricing fields based on the specific order type
+    switch (request.type) {
+        case OrderType::LIMIT:
+            orderPayload["limit_price"] = formatDouble(request.price);
+            break;
+        case OrderType::STOP:
+            orderPayload["stop_price"] = formatDouble(request.stop_price);
+            break;
+        case OrderType::STOP_LIMIT:
+            orderPayload["limit_price"] = formatDouble(request.price);
+            orderPayload["stop_price"] = formatDouble(request.stop_price);
+            break;
+        case OrderType::TRAILING_STOP:
+            if (request.trail_price > 0) {
+                orderPayload["trail_price"] = formatDouble(request.trail_price);
+            } else if (request.trail_percent > 0) {
+                orderPayload["trail_percent"] = formatDouble(request.trail_percent);
+            }
+            break;
+        case OrderType::MARKET:
+        default:
+            break;
     }
 
     std::string payloadStr = orderPayload.dump();
@@ -115,6 +155,23 @@ bool AlpacaExecutionEngine::cancelOrder(const std::string& orderId) {
         std::string response = infra_->sendRestRequest("DELETE", baseHost_, "/v2/orders/" + orderId);
         LOG_INFO("[AlpacaExecutionEngine] Cancel request sent for order: {}", orderId);
     }).detach();
+    return true;
+}
+
+bool AlpacaExecutionEngine::cancelAllOrders() {
+    LOG_INFO("[AlpacaExecutionEngine] EMERGENCY: Canceling ALL open orders...");
+    
+    std::thread([this]() {
+        // Alpaca's endpoint to cancel all open orders is a DELETE to /v2/orders
+        std::string response = infra_->sendRestRequest("DELETE", baseHost_, "/v2/orders");
+        
+        if (response.empty()) {
+            LOG_ERROR("[AlpacaExecutionEngine] Failed to send Cancel All request.");
+        } else {
+            LOG_INFO("[AlpacaExecutionEngine] Cancel All request sent. Exchange Response: {}", response);
+        }
+    }).detach();
+    
     return true;
 }
 
@@ -175,9 +232,9 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
             std::string statusStr = event; 
             if (statusStr == "fill") report.status = OrderStatus::FILLED;
             else if (statusStr == "partial_fill") report.status = OrderStatus::PARTIALLY_FILLED;
-            else if (statusStr == "canceled") report.status = OrderStatus::CANCELED;
+            else if (statusStr == "canceled" || statusStr == "pending_cancel") report.status = OrderStatus::CANCELED;
             else if (statusStr == "rejected") report.status = OrderStatus::REJECTED;
-            else if (statusStr == "new" || statusStr == "accepted") report.status = OrderStatus::NEW;
+            else if (statusStr == "new" || statusStr == "accepted" || statusStr == "pending_new") report.status = OrderStatus::NEW;
             else return; // Ignore other events for now
 
             // Helper lambda to safely parse floats/doubles that might be null or strings

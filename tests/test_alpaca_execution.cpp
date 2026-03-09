@@ -45,7 +45,13 @@ protected:
     }
 
     void TearDown() override {
-        if (engine) engine->disconnectFromInfra();
+        if (engine) {
+            // The ultimate cleanup: Wipe all resting orders so the next test starts with a clean slate
+            engine->cancelAllOrders();
+            
+            // Give the exchange a moment to process the mass-cancel before disconnecting
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));    
+        }
     }
 
     bool waitForStatus(const std::vector<std::string>& clientIds, OrderStatus expected, int timeoutSeconds = 15) {
@@ -79,8 +85,8 @@ TEST_F(AlpacaExecutionEngineTest, PlaceMarket) {
     std::string b1 = genId("mkt_buy_btc_1");
     std::string b2 = genId("mkt_buy_btc_2");
 
-    OrderRequest buy1{b1, "BTC/USD", Side::BUY, OrderType::MARKET, 0.01, 0.0, 0.0, 0.0};
-    OrderRequest buy2{b2, "BTC/USD", Side::BUY, OrderType::MARKET, 0.01, 0.0, 0.0, 0.0};
+    OrderRequest buy1{b1, "BTC/USD", Side::BUY, OrderType::MARKET, TimeInForce::GTC, 0.01, 0.0, 0.0, 0.0};
+    OrderRequest buy2{b2, "BTC/USD", Side::BUY, OrderType::MARKET, TimeInForce::GTC, 0.01, 0.0, 0.0, 0.0};
 
     engine->placeOrder(buy1);
     engine->placeOrder(buy2);
@@ -91,8 +97,8 @@ TEST_F(AlpacaExecutionEngineTest, PlaceMarket) {
     std::string s1 = genId("mkt_sell_btc_1");
     std::string s2 = genId("mkt_sell_btc_2");
 
-    OrderRequest sell1{s1, "BTC/USD", Side::SELL, OrderType::MARKET, 0.005, 0.0, 0.0, 0.0};
-    OrderRequest sell2{s2, "BTC/USD", Side::SELL, OrderType::MARKET, 0.005, 0.0, 0.0, 0.0};
+    OrderRequest sell1{s1, "BTC/USD", Side::SELL, OrderType::MARKET, TimeInForce::GTC, 0.005, 0.0, 0.0, 0.0};
+    OrderRequest sell2{s2, "BTC/USD", Side::SELL, OrderType::MARKET, TimeInForce::GTC, 0.005, 0.0, 0.0, 0.0};
 
     engine->placeOrder(sell1);
     engine->placeOrder(sell2);
@@ -104,7 +110,7 @@ TEST_F(AlpacaExecutionEngineTest, PlaceMarket) {
 TEST_F(AlpacaExecutionEngineTest, CancelOrderReturnsTrue) {
     std::string l1 = genId("limit_cancel_eth");
 
-    OrderRequest lowLimit{l1, "ETH/USD", Side::BUY, OrderType::LIMIT, 1.0, 100.0, 0.0, 0.0};
+    OrderRequest lowLimit{l1, "ETH/USD", Side::BUY, OrderType::LIMIT, TimeInForce::GTC, 1.0, 100.0, 0.0, 0.0};
     engine->placeOrder(lowLimit);
 
     ASSERT_TRUE(waitForStatus({l1}, OrderStatus::NEW))
@@ -123,8 +129,8 @@ TEST_F(AlpacaExecutionEngineTest, PlaceLimit) {
     std::string b1 = genId("limit_buy_eth_1");
     std::string b2 = genId("limit_buy_eth_2");
 
-    OrderRequest buy1{b1, "ETH/USD", Side::BUY, OrderType::LIMIT, 0.1, 200000.0, 0.0, 0.0};
-    OrderRequest buy2{b2, "ETH/USD", Side::BUY, OrderType::LIMIT, 0.1, 200000.0, 0.0, 0.0};
+    OrderRequest buy1{b1, "ETH/USD", Side::BUY, OrderType::LIMIT, TimeInForce::GTC, 0.1, 200000.0, 0.0, 0.0};
+    OrderRequest buy2{b2, "ETH/USD", Side::BUY, OrderType::LIMIT, TimeInForce::GTC, 0.1, 200000.0, 0.0, 0.0};
 
     engine->placeOrder(buy1);
     engine->placeOrder(buy2);
@@ -135,8 +141,8 @@ TEST_F(AlpacaExecutionEngineTest, PlaceLimit) {
     std::string s1 = genId("limit_sell_eth_1");
     std::string s2 = genId("limit_sell_eth_2");
 
-    OrderRequest sell1{s1, "ETH/USD", Side::SELL, OrderType::LIMIT, 0.05, 10.0, 0.0, 0.0};
-    OrderRequest sell2{s2, "ETH/USD", Side::SELL, OrderType::LIMIT, 0.05, 10.0, 0.0, 0.0};
+    OrderRequest sell1{s1, "ETH/USD", Side::SELL, OrderType::LIMIT, TimeInForce::GTC, 0.05, 10.0, 0.0, 0.0};
+    OrderRequest sell2{s2, "ETH/USD", Side::SELL, OrderType::LIMIT, TimeInForce::GTC, 0.05, 10.0, 0.0, 0.0};
 
     engine->placeOrder(sell1);
     engine->placeOrder(sell2);
@@ -149,8 +155,8 @@ TEST_F(AlpacaExecutionEngineTest, PlaceTrailingStop) {
     std::string b1 = genId("ts_buy_aapl_1");
     std::string b2 = genId("ts_buy_aapl_2");
 
-    OrderRequest buy1{b1, "AAPL", Side::BUY, OrderType::TRAILING_STOP, 1.0, 0.0, 0.0, 5.0};
-    OrderRequest buy2{b2, "AAPL", Side::BUY, OrderType::TRAILING_STOP, 1.0, 0.0, 0.0, 5.0};
+    OrderRequest buy1{b1, "AAPL", Side::BUY, OrderType::TRAILING_STOP, TimeInForce::GTC, 1.0, 0.0, 0.0, 0.0, 5.0};
+    OrderRequest buy2{b2, "AAPL", Side::BUY, OrderType::TRAILING_STOP, TimeInForce::GTC, 1.0, 0.0, 0.0, 0.0, 5.0};
 
     engine->placeOrder(buy1);
     engine->placeOrder(buy2);
@@ -169,8 +175,8 @@ TEST_F(AlpacaExecutionEngineTest, PlaceTrailingStop) {
     std::string s1 = genId("ts_sell_aapl_1");
     std::string s2 = genId("ts_sell_aapl_2");
 
-    OrderRequest sell1{s1, "AAPL", Side::SELL, OrderType::TRAILING_STOP, 1.0, 0.0, 0.0, 5.0};
-    OrderRequest sell2{s2, "AAPL", Side::SELL, OrderType::TRAILING_STOP, 1.0, 0.0, 0.0, 5.0};
+    OrderRequest sell1{s1, "AAPL", Side::SELL, OrderType::TRAILING_STOP, TimeInForce::GTC, 1.0, 0.0, 0.0, 0.0, 5.0};
+    OrderRequest sell2{s2, "AAPL", Side::SELL, OrderType::TRAILING_STOP, TimeInForce::GTC, 1.0, 0.0, 0.0, 0.0, 5.0};
 
     engine->placeOrder(sell1);
     engine->placeOrder(sell2);
@@ -178,7 +184,90 @@ TEST_F(AlpacaExecutionEngineTest, PlaceTrailingStop) {
     ASSERT_TRUE(waitForStatus({s1, s2}, OrderStatus::NEW))
         << "Trailing stop sells were not accepted.";
 
-    // Clean up the resting sells
     engine->cancelOrder(getExchangeId(s1));
     engine->cancelOrder(getExchangeId(s2));
+
+    // MUST wait for the cancels to process before the test exits
+    ASSERT_TRUE(waitForStatus({s1, s2}, OrderStatus::CANCELED))
+        << "Failed to clean up trailing stop sells.";
+}
+
+TEST_F(AlpacaExecutionEngineTest, PlaceStop) {
+    std::string b1 = genId("stop_buy_msft_1");
+    std::string b2 = genId("stop_buy_msft_2");
+
+    // Use MSFT to completely isolate from the previous test
+    OrderRequest buy1{b1, "MSFT", Side::BUY, OrderType::STOP, TimeInForce::GTC, 1.0, 0.0, 450.0, 0.0, 0.0};
+    OrderRequest buy2{b2, "MSFT", Side::BUY, OrderType::STOP, TimeInForce::GTC, 1.0, 0.0, 450.0, 0.0, 0.0};
+
+    engine->placeOrder(buy1);
+    engine->placeOrder(buy2);
+
+    ASSERT_TRUE(waitForStatus({b1, b2}, OrderStatus::NEW))
+        << "Stop buys were not accepted.";
+
+    engine->cancelOrder(getExchangeId(b1));
+    engine->cancelOrder(getExchangeId(b2));
+    
+    ASSERT_TRUE(waitForStatus({b1, b2}, OrderStatus::CANCELED))
+        << "Failed to cancel stop buys.";
+
+    std::string s1 = genId("stop_sell_msft_1");
+    std::string s2 = genId("stop_sell_msft_2");
+
+    OrderRequest sell1{s1, "MSFT", Side::SELL, OrderType::STOP, TimeInForce::GTC, 1.0, 0.0, 350.0, 0.0, 0.0};
+    OrderRequest sell2{s2, "MSFT", Side::SELL, OrderType::STOP, TimeInForce::GTC, 1.0, 0.0, 350.0, 0.0, 0.0};
+
+    engine->placeOrder(sell1);
+    engine->placeOrder(sell2);
+
+    ASSERT_TRUE(waitForStatus({s1, s2}, OrderStatus::NEW))
+        << "Stop sells were not accepted.";
+
+    engine->cancelOrder(getExchangeId(s1));
+    engine->cancelOrder(getExchangeId(s2));
+
+    // Wait for cleanup
+    ASSERT_TRUE(waitForStatus({s1, s2}, OrderStatus::CANCELED))
+        << "Failed to clean up stop sells.";
+}
+
+TEST_F(AlpacaExecutionEngineTest, PlaceStopLimit) {
+    std::string b1 = genId("stop_limit_buy_tsla_1");
+    std::string b2 = genId("stop_limit_buy_tsla_2");
+
+    // Use TSLA for isolation
+    OrderRequest buy1{b1, "TSLA", Side::BUY, OrderType::STOP_LIMIT, TimeInForce::GTC, 1.0, 255.0, 250.0, 0.0, 0.0};
+    OrderRequest buy2{b2, "TSLA", Side::BUY, OrderType::STOP_LIMIT, TimeInForce::GTC, 1.0, 255.0, 250.0, 0.0, 0.0};
+
+    engine->placeOrder(buy1);
+    engine->placeOrder(buy2);
+
+    ASSERT_TRUE(waitForStatus({b1, b2}, OrderStatus::NEW))
+        << "Stop Limit buys were not accepted.";
+
+    engine->cancelOrder(getExchangeId(b1));
+    engine->cancelOrder(getExchangeId(b2));
+    
+    ASSERT_TRUE(waitForStatus({b1, b2}, OrderStatus::CANCELED))
+        << "Failed to cancel Stop Limit buys.";
+
+    std::string s1 = genId("stop_limit_sell_tsla_1");
+    std::string s2 = genId("stop_limit_sell_tsla_2");
+
+    OrderRequest sell1{s1, "TSLA", Side::SELL, OrderType::STOP_LIMIT, TimeInForce::GTC, 1.0, 145.0, 150.0, 0.0, 0.0};
+    OrderRequest sell2{s2, "TSLA", Side::SELL, OrderType::STOP_LIMIT, TimeInForce::GTC, 1.0, 145.0, 150.0, 0.0, 0.0};
+
+    engine->placeOrder(sell1);
+    engine->placeOrder(sell2);
+
+    ASSERT_TRUE(waitForStatus({s1, s2}, OrderStatus::NEW))
+        << "Stop Limit sells were not accepted.";
+
+    engine->cancelOrder(getExchangeId(s1));
+    engine->cancelOrder(getExchangeId(s2));
+
+    // Wait for cleanup
+    ASSERT_TRUE(waitForStatus({s1, s2}, OrderStatus::CANCELED))
+        << "Failed to clean up stop limit sells.";
 }

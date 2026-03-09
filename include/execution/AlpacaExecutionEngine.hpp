@@ -21,6 +21,7 @@ public:
     void disconnectFromInfra() override;
     std::string placeOrder(const OrderRequest& request) override;
     bool cancelOrder(const std::string& orderId) override;
+    bool cancelAllOrders() override;
 
     // Extended Domain Specific API
     std::optional<double> getPortfolioValue() override;
@@ -34,6 +35,9 @@ private:
     std::string apiSecret_;
     std::string baseHost_;
 
+    const char* sideToString(Side side);
+    const char* orderTypeToString(OrderType type);
+    const char* timeInForceToString(TimeInForce tif);
     void onWebSocketMessage(const std::string& payload);
 };
 

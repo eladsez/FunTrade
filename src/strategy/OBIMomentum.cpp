@@ -94,7 +94,7 @@ void OBIMomentum::onTick(const MarketTick& tick) {
         if (currentObi > dynamicBuyThreshold && trendIsUp && !isLong) {
             LOG_INFO(">>> [OBIMomentum] STRONG BUY SIGNAL! Raw OBI ({:.2f}) > Buy Threshold ({:.2f}) & MidPrice ({:.2f}) > EMA ({:.2f}). Entering LONG.", currentObi, dynamicBuyThreshold, midPrice, emaPrice_);
             
-            OrderRequest req{"", symbol_, Side::BUY, OrderType::LIMIT, tradeQty, tick.ask_price}; 
+            OrderRequest req{"", symbol_, Side::BUY, OrderType::LIMIT, TimeInForce::GTC, tradeQty, tick.ask_price}; 
             executionEngine->placeOrder(req);
             
             // FIX: Do NOT zero out the window. We just reset the index and fullness 
@@ -105,7 +105,7 @@ void OBIMomentum::onTick(const MarketTick& tick) {
         else if (currentObi < dynamicSellThreshold && trendIsDown && isLong) {
             LOG_INFO("<<< [OBIMomentum] STRONG SELL SIGNAL! Raw OBI ({:.2f}) < Sell Threshold ({:.2f}) & MidPrice ({:.2f}) < EMA ({:.2f}). Exiting LONG to FLAT.", currentObi, dynamicSellThreshold, midPrice, emaPrice_);
             
-            OrderRequest req{"", symbol_, Side::SELL, OrderType::LIMIT, netQty, tick.bid_price};
+            OrderRequest req{"", symbol_, Side::SELL, OrderType::LIMIT, TimeInForce::GTC, netQty, tick.bid_price};
             executionEngine->placeOrder(req);
             
             // FIX: Same here. Act as a cooldown, keep the historical data alive.
