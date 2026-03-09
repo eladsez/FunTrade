@@ -6,44 +6,75 @@
 
 namespace bot {
 
-PortfolioManager::PortfolioManager(IEventBus& eventBus) : eventBus_(eventBus) {
-    // PortfolioManager should subscribe to all executions
+PortfolioManager::PortfolioManager(IEventBus& eventBus, IExecutionEngine& engine) 
+    : eventBus_(eventBus) {
+    
+    // 1. Subscribe to all executions immediately
     eventBus_.subscribeToExecution([this](const ExecutionReport& report) {
         this->onExecution(report);
     });
     
-    // We don't subscribe to ticks here globally because we don't know which symbols yet.
-    // Or we can subscribe as symbols are added to the portfolio.
-    // For simplicity in this OBI bot, we'll assume we know the symbols or subscribe on first execution.
+    // 2. Automatically sync with the exchange on startup
+    syncWithExchange(engine);
+}
+
+void PortfolioManager::ensureTickSubscription(const std::string& symbol) {
+    // Check if we are already subscribed to this symbol's tick data
+    if (subscribedSymbols_.find(symbol) == subscribedSymbols_.end()) {
+        subscribedSymbols_.insert(symbol);
+        
+        LOG_INFO("[PortfolioManager] Auto-subscribing to market ticks for {}", symbol);
+        
+        eventBus_.subscribeToTick(symbol, [this](const MarketTick& tick) {
+            this->onTick(tick);
+        });
+    }
 }
 
 void PortfolioManager::onTick(const MarketTick& tick) {
-    if (tick.type != TickType::TRADE) {
+    std::string symbol = tick.symbol;
+    
+    double updatedPrice = 0.0;
+
+    if (tick.type == TickType::TRADE) {
+        // Use the exact last traded price
+        updatedPrice = tick.price;
+    } 
+    else if (tick.type == TickType::QUOTE) {
+        // Mark-to-Market using the mid-price of the spread
+        if (tick.bid_price > 0 && tick.ask_price > 0) {
+            updatedPrice = (tick.bid_price + tick.ask_price) / 2.0;
+        }
+    } 
+    else {
+        // Ignore ORDERBOOK ticks for PnL to save CPU, Quotes are enough
         return; 
     }
-    std::string symbol = tick.symbol;
-    symbol.erase(std::remove(symbol.begin(), symbol.end(), '/'), symbol.end());
-    
-    std::lock_guard<std::mutex> lock(mtx_);
-    if (positions_.count(symbol)) {
-        LOG_DEBUG("[PortfolioManager] Update price for {}:{:.2f}: -> {:.2f}", 
-            tick.symbol, 
-            positions_[symbol].current_price, 
-            tick.price);
-        positions_[symbol].current_price = tick.price;
+
+    // Only update if we derived a valid price
+    if (updatedPrice > 0.0) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (positions_.count(symbol)) {
+            LOG_DEBUG("[PortfolioManager] Update price for {}:{:.2f}: -> {:.2f}", 
+                tick.symbol, 
+                positions_[symbol].current_price, 
+                updatedPrice);
+            positions_[symbol].current_price = updatedPrice;
+        }
     }
 }
 
 void PortfolioManager::onExecution(const ExecutionReport& report) {
     std::lock_guard<std::mutex> lock(mtx_);
     
-    // We only care about fills
     if (report.status != OrderStatus::FILLED && report.status != OrderStatus::PARTIALLY_FILLED) {
         return;
     }
 
     std::string symbol = report.symbol;
-    symbol.erase(std::remove(symbol.begin(), symbol.end(), '/'), symbol.end());
+
+    // Ensure we are getting live price updates for this newly traded symbol
+    ensureTickSubscription(symbol);
 
     Position& pos = positions_[symbol];
     pos.symbol = symbol;
@@ -121,13 +152,16 @@ void PortfolioManager::syncWithExchange(IExecutionEngine& engine) {
                 pos.current_price = std::stod(posJson.value("current_price", "0"));
                 
                 positions_[symbol] = pos;
+                
+                // Ensure we get live price updates for symbols we ALREADY own from a previous run
+                ensureTickSubscription(symbol);
+                
                 LOG_INFO("[PortfolioManager] Synced {} | Qty: {} | AvgPrice: {}", symbol, pos.quantity, pos.avg_price);
             } catch (const std::exception& e) {
                 LOG_ERROR("[PortfolioManager] Error parsing synced position: {}", e.what());
             }
         }
     }
-
     // --- LOG THE FINAL STATE AFTER SYNC ---
     LOG_INFO("[PortfolioManager] === Sync Complete. Current Portfolio State ===");
     LOG_INFO("[PortfolioManager] Total open positions: {}", positions_.size());

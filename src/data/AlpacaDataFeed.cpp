@@ -310,7 +310,9 @@ void AlpacaDataFeed::parseTradeUpdate(const nlohmann::json& data) {
     try {
         MarketTick tick;
         tick.type = TickType::TRADE;
-        tick.symbol = data.at("S").get<std::string>();
+        std::string rawSymbol = data.at("S").get<std::string>();
+        rawSymbol.erase(std::remove(rawSymbol.begin(), rawSymbol.end(), '/'), rawSymbol.end());
+        tick.symbol = rawSymbol;
         tick.price = data.at("p").get<double>();
         tick.volume = data.at("s").get<double>();
         
@@ -331,7 +333,9 @@ void AlpacaDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
     try {
         MarketTick tick;
         tick.type = TickType::QUOTE;
-        tick.symbol = data.at("S").get<std::string>();
+        std::string rawSymbol = data.at("S").get<std::string>();
+        rawSymbol.erase(std::remove(rawSymbol.begin(), rawSymbol.end(), '/'), rawSymbol.end());
+        tick.symbol = rawSymbol;
         tick.ask_price = data.at("ap").get<double>();
         tick.ask_size = data.at("as").get<double>();
         tick.bid_price = data.at("bp").get<double>();
@@ -353,7 +357,9 @@ void AlpacaDataFeed::parseOrderBookUpdate(const nlohmann::json& data) {
     try {
         MarketTick tick;
         tick.type = TickType::ORDERBOOK;
-        tick.symbol = data.at("S").get<std::string>();
+        std::string rawSymbol = data.at("S").get<std::string>();
+        rawSymbol.erase(std::remove(rawSymbol.begin(), rawSymbol.end(), '/'), rawSymbol.end());
+        tick.symbol = rawSymbol;
         
         const auto& bids = data.at("b");
         const auto& asks = data.at("a");

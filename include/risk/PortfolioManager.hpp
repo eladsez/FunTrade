@@ -2,6 +2,7 @@
 #include <core/IEventBus.hpp>
 #include <core/DomainModels.hpp>
 #include <map>
+#include <set>
 #include <string>
 #include <mutex>
 
@@ -24,25 +25,27 @@ struct Position {
 
 class PortfolioManager {
 public:
-    PortfolioManager(IEventBus& eventBus);
+    // Updated: Pass the engine into the constructor
+    PortfolioManager(IEventBus& eventBus, IExecutionEngine& engine);
     ~PortfolioManager() = default;
 
-    // Callbacks for EventBus
     void onTick(const MarketTick& tick);
     void onExecution(const ExecutionReport& report);
 
-    // Getters for risk checks and monitoring
     double getTotalRealizedPnL() const;
     double getTotalUnrealizedPnL() const;
     double getNetPosition(const std::string& symbol) const;
     Position getPosition(const std::string& symbol) const;
 
-    // Syncs with the exchange's actual positions
-    void syncWithExchange(IExecutionEngine& engine);
-
 private:
+    void syncWithExchange(IExecutionEngine& engine);
+    
+    // Helper to dynamically subscribe to ticks without duplicating
+    void ensureTickSubscription(const std::string& symbol);
+
     IEventBus& eventBus_;
     std::map<std::string, Position> positions_;
+    std::set<std::string> subscribedSymbols_; // Tracks active tick subscriptions
     mutable std::mutex mtx_;
     double total_realized_pnl_ = 0.0;
 };

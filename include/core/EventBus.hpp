@@ -24,9 +24,11 @@ public:
     void stop();
 
 private:
+    using Event = std::variant<MarketTick, ExecutionReport>;
+    
+    void dispatchEvent(const Event& event);
     void processEvents();
 
-    using Event = std::variant<MarketTick, ExecutionReport>;
 
     std::vector<std::pair<std::string, TickCallback>> tickSubscribers;
     std::vector<ExecutionCallback> executionSubscribers;
