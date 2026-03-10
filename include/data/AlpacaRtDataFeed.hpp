@@ -20,6 +20,11 @@ public:
     bool connectToInfra() override;
     void disconnectFromInfra() override;
     void subscribeToSymbol(const std::string& symbol) override;
+    std::vector<HistoricalBar> fetchHistoricalBars(
+        const std::string& symbol, 
+        const std::string& start, 
+        const std::string& end, 
+        const std::string& timeframe) override;
 
 private:
     std::shared_ptr<IEventBus> eventBus_;

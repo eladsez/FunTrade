@@ -115,3 +115,15 @@ struct ExecutionReport {
     double avg_price;     // Average price of all fills for this order
     uint64_t timestamp_ms;
 };
+
+struct HistoricalBar {
+    std::string symbol;
+    uint64_t timestamp_ms = 0;
+    double open = 0.0;
+    double high = 0.0;
+    double low = 0.0;
+    double close = 0.0;
+    double volume = 0.0;
+    uint64_t trade_count = 0;
+    double vwap = 0.0;
+};

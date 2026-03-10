@@ -27,7 +27,7 @@ AlpacaRtDataFeed::~AlpacaRtDataFeed() {
 
 bool AlpacaRtDataFeed::connectToInfra() {
     // Blocks until network connection AND Alpaca authentication are successful
-    bool success = infra_->connectWs("stream.data.alpaca.markets", "/v1beta3/crypto/us", WsType::DATA);
+    bool success = infra_->connectWs("stream.data.alpaca.markets", "/v2/iex", WsType::DATA);
     if (!success) {
         LOG_ERROR("[AlpacaRtDataFeed] Failed to connect and authenticate.");
     }
@@ -249,6 +249,71 @@ QuoteCondition AlpacaRtDataFeed::stringToQuoteCondition(const std::string& cond)
     if (cond == "R") return QuoteCondition::NON_FIRM;
     if (cond == "C") return QuoteCondition::CLOSING;
     return QuoteCondition::OTHER;
+}
+
+std::vector<HistoricalBar> AlpacaRtDataFeed::fetchHistoricalBars(
+    const std::string& symbol, 
+    const std::string& start, 
+    const std::string& end, 
+    const std::string& timeframe) {
+    
+    std::vector<HistoricalBar> bars;
+
+    // Construct the endpoint for Alpaca Market Data V2 Stocks
+    std::string target = "/v2/stocks/bars?symbols=" + symbol + 
+                         "&timeframe=" + timeframe + 
+                         "&start=" + start + 
+                         "&end=" + end;
+
+    try {
+        // Alpaca's data API uses data.alpaca.markets
+        LOG_INFO("[AlpacaRtDataFeed] Fetching historical {} bars for {}", timeframe, symbol);
+        std::string response = infra_->sendRestRequest("GET", "data.alpaca.markets", target);
+
+        if (response.empty()) {
+            LOG_ERROR("[AlpacaRtDataFeed] Received empty response for historical bars.");
+            return bars;
+        }
+
+        auto jsonResp = nlohmann::json::parse(response);
+
+        // Check if Alpaca returned an error message
+        if (jsonResp.contains("code") && jsonResp.contains("message")) {
+            LOG_ERROR("[AlpacaRtDataFeed] API Error: {}", jsonResp["message"].get<std::string>());
+            return bars;
+        }
+
+        // Parse the bars out of the JSON structure
+        if (jsonResp.contains("bars") && jsonResp["bars"].contains(symbol)) {
+            for (const auto& item : jsonResp["bars"][symbol]) {
+                HistoricalBar bar;
+                bar.symbol = symbol;
+                
+                // Reuse your existing timestamp parser
+                bar.timestamp_ms = parseAlpacaTimestamp(item.value("t", ""));
+                
+                bar.open = item.value("o", 0.0);
+                bar.high = item.value("h", 0.0);
+                bar.low = item.value("l", 0.0);
+                bar.close = item.value("c", 0.0);
+                bar.volume = item.value("v", 0.0);
+                bar.trade_count = item.value("n", 0ull);
+                bar.vwap = item.value("vw", 0.0);
+                
+                bars.push_back(bar);
+            }
+            LOG_INFO("[AlpacaRtDataFeed] Successfully parsed {} historical bars for {}", bars.size(), symbol);
+        } else {
+            LOG_WARN("[AlpacaRtDataFeed] No bars found in response for {}", symbol);
+        }
+
+    } catch (const nlohmann::json::parse_error& e) {
+        LOG_ERROR("[AlpacaRtDataFeed] JSON Parse Error in fetchHistoricalBars: {}", e.what());
+    } catch (const std::exception& e) {
+        LOG_ERROR("[AlpacaRtDataFeed] Exception in fetchHistoricalBars: {}", e.what());
+    }
+
+    return bars;
 }
 
 } // namespace bot

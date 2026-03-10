@@ -30,7 +30,7 @@ void setupSignalHandlers() {
     std::signal(SIGTERM, signalHandler);
 }
 
-int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int windowSize = 20, double stdDevMultiplier = 2.0, double riskPercentage = 1.0, int emaWindowSize = 10) {
+int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
     
     auto eventBus = std::make_shared<EventBus>();
@@ -46,9 +46,6 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
     // DOMAIN WIRING
     // =========================================================================
 
-    auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus, *executionEngine);
-    auto orderManager = std::make_shared<OrderManager>(*eventBus, *executionEngine);
-    
     auto portfolioValue = executionEngine->getPortfolioValue();
     double initPv = 100000.0;
     if (portfolioValue) {
@@ -56,14 +53,10 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
         LOG_INFO("[LIVE] Current Portfolio Value: ${}", initPv);
     }
 
-    std::string symbol = "BTC/USD";
+    std::string symbol = "NVDA";
     LOG_INFO("[LIVE] Subscribing to {} market data stream...", symbol);
     
-    // Use the dynamic parameters passed via command line
-    auto strategy = std::make_shared<OBIMomentum>(eventBus, executionEngine, portfolioManager, initPv, "BTCUSD", windowSize, stdDevMultiplier, riskPercentage, emaWindowSize);
-
-    strategy->start();
-    dataFeed->subscribeToSymbol("BTC/USD");
+    dataFeed->subscribeToSymbol(symbol);
 
     LOG_INFO("[LIVE] Bot is running. Press Ctrl+C to stop.");
     
@@ -72,8 +65,6 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    LOG_INFO("[LIVE] Shutting down live session...");
-    strategy->stop();
     LOG_INFO("[LIVE] Shutdown complete.");
     return 0;
 }
@@ -88,25 +79,6 @@ int main(int argc, char* argv[]) {
     LOG_INFO("          Algorithmic Trading Bot                 ");
     LOG_INFO("==================================================");
 
-    int windowSize = 100;
-    double stdDevMultiplier = 1.5;
-    double riskPercentage = 1.0;
-    int emaWindowSize = 500;
-    
-
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--window" && i + 1 < argc) {
-            windowSize = std::stoi(argv[++i]);
-        } else if (arg == "--stddev" && i + 1 < argc) {
-            stdDevMultiplier = std::stod(argv[++i]);
-        } else if (arg == "--risk" && i + 1 < argc) {
-            riskPercentage = std::stod(argv[++i]);
-        } else if (arg == "--ema" && i + 1 < argc) {
-            emaWindowSize = std::stoi(argv[++i]);
-        }
-    }
-
     const char* apiKey = std::getenv("APCA_API_KEY_ID");
     const char* apiSecret = std::getenv("APCA_API_SECRET_KEY");
 
@@ -117,5 +89,5 @@ int main(int argc, char* argv[]) {
                     "  export APCA_API_SECRET_KEY=your_paper_secret\n");
         return 1;
     }
-    return runLiveMode(apiKey, apiSecret, windowSize, stdDevMultiplier, riskPercentage, emaWindowSize);
+    return runLiveMode(apiKey, apiSecret);
 }
