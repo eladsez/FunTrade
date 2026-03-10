@@ -48,9 +48,6 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, int win
 
     auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus, *executionEngine);
     auto orderManager = std::make_shared<OrderManager>(*eventBus, *executionEngine);
-
-    // Sync state with exchange
-    orderManager->syncWithExchange();
     
     auto portfolioValue = executionEngine->getPortfolioValue();
     double initPv = 100000.0;

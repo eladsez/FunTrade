@@ -29,7 +29,7 @@ public:
     PortfolioManager(IEventBus& eventBus, IExecutionEngine& engine);
     ~PortfolioManager() = default;
 
-    void onTick(const MarketTick& tick);
+    void onMarketEvent(const MarketEvent& event);
     void onExecution(const ExecutionReport& report);
 
     double getTotalRealizedPnL() const;
@@ -41,7 +41,7 @@ private:
     void syncWithExchange(IExecutionEngine& engine);
     
     // Helper to dynamically subscribe to ticks without duplicating
-    void ensureTickSubscription(const std::string& symbol);
+    void ensureMarketSubscription(const std::string& symbol);
 
     IEventBus& eventBus_;
     std::map<std::string, Position> positions_;

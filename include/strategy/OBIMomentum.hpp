@@ -20,7 +20,7 @@ public:
                 double riskPercentage = 1.0,
                 int emaWindowSize = 10);
     void start() override;
-    void onTick(const MarketTick& tick) override;
+    virtual void onMarketEvent(const MarketEvent& event);
     void stop() override;
 
 private:

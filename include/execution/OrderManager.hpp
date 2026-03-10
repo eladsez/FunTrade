@@ -23,8 +23,6 @@ public:
     OrderManager(IEventBus& eventBus, IExecutionEngine& engine);
     ~OrderManager() = default;
 
-    void syncWithExchange();
-    
     // Callbacks
     void onExecution(const ExecutionReport& report);
 
@@ -33,6 +31,8 @@ public:
     std::vector<OrderState> getOpenOrders() const;
 
 private:
+    void syncWithExchange();
+    
     IEventBus& eventBus_;
     IExecutionEngine& engine_;
     

@@ -36,6 +36,10 @@ private:
     void parseTradeUpdate(const nlohmann::json& data);
     void parseQuoteUpdate(const nlohmann::json& data);
     void parseOrderBookUpdate(const nlohmann::json& data);
+
+    Side stringToSide(const std::string& side);
+    TradeCondition stringToTradeCondition(const std::string& cond);
+    QuoteCondition stringToQuoteCondition(const std::string& cond);
 };
 
 } // namespace bot

@@ -9,6 +9,8 @@ OrderManager::OrderManager(IEventBus& eventBus, IExecutionEngine& engine)
     eventBus_.subscribeToExecution([this](const ExecutionReport& report) {
         this->onExecution(report);
     });
+
+    syncWithExchange();
 }
 
 void OrderManager::syncWithExchange() {

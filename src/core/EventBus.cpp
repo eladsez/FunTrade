@@ -26,15 +26,15 @@ void EventBus::stop() {
     LOG_INFO("[EventBus] Background dispatcher thread stopped.");
 }
 
-void EventBus::subscribeToTick(const std::string& symbol, TickCallback callback) {
+void EventBus::subscribeToMarketEvents(const std::string& symbol, MarketEventCallback callback) {
     std::lock_guard<std::mutex> lock(subMtx);
-    tickSubscribers.push_back({symbol, callback});
+    marketEventSubscribers.push_back({symbol, callback});
     LOG_INFO("[EventBus] Subscribed to tick: {}", symbol);
 }
 
-void EventBus::publishTick(const MarketTick& tick) {
+void EventBus::publishMarketEvent(const MarketEvent& event) {
     // Lock-free enqueue: Network thread returns immediately
-    queue.enqueue(tick);
+    queue.enqueue(event);
 }
 
 void EventBus::subscribeToExecution(ExecutionCallback callback) {
@@ -49,21 +49,22 @@ void EventBus::publishExecution(const ExecutionReport& report) {
 
 void EventBus::dispatchEvent(const Event& event) {
     // 1. Snapshot the subscribers quickly under the lock to prevent deadlocks
-    std::vector<std::pair<std::string, TickCallback>> localTickSubs;
+    std::vector<std::pair<std::string, MarketEventCallback>> localMarketSubs;
     std::vector<ExecutionCallback> localExecSubs;
     {
         std::lock_guard<std::mutex> lock(subMtx);
-        localTickSubs = tickSubscribers;
+        localMarketSubs = marketEventSubscribers;
         localExecSubs = executionSubscribers;
-    } // Lock is completely released here!
+    }
 
     // 2. Safely execute the callbacks using the local copies
     std::visit([&](auto&& arg) {
         using T = std::decay_t<decltype(arg)>;
         
-        if constexpr (std::is_same_v<T, MarketTick>) {
-            for (const auto& sub : localTickSubs) {
-                if (sub.first == arg.symbol) {
+        if constexpr (std::is_same_v<T, MarketEvent>) {
+            std::string symbol = std::visit([](auto&& e) { return e.symbol; }, arg);
+            for (const auto& sub : localMarketSubs) {
+                if (sub.first == symbol) {
                     sub.second(arg);
                 }
             }

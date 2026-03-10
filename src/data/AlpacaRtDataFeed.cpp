@@ -120,8 +120,8 @@ inline uint64_t parseAlpacaTimestamp(const std::string& ts) {
 void AlpacaRtDataFeed::parseTradeUpdate(const nlohmann::json& data) {
     // LOG_DEBUG("[AlpacaRtDataFeed] TradeUpdate Received: {}", data);
     try {
-        MarketTick tick;
-        tick.type = TickType::TRADE;
+        TradeTick tick; 
+        
         std::string rawSymbol = data.at("S").get<std::string>();
         rawSymbol.erase(std::remove(rawSymbol.begin(), rawSymbol.end(), '/'), rawSymbol.end());
         tick.symbol = rawSymbol;
@@ -132,8 +132,20 @@ void AlpacaRtDataFeed::parseTradeUpdate(const nlohmann::json& data) {
         std::string tsString = data.value("t", "");
         tick.timestamp_ms = parseAlpacaTimestamp(tsString);
 
+        // Parse Taker Side (if available, mostly for Crypto)
+        if (data.contains("tks")) {
+            tick.taker_side = stringToSide(data.at("tks").get<std::string>());
+        }
+
+        // Parse Trade Conditions (if available, mostly for Stocks)
+        if (data.contains("c") && data.at("c").is_array()) {
+            for (const auto& cond : data.at("c")) {
+                tick.conditions.push_back(stringToTradeCondition(cond.get<std::string>()));
+            }
+        }
+
         if (eventBus_) {
-            eventBus_->publishTick(tick);
+            eventBus_->publishMarketEvent(tick); 
         }
     } catch (const std::exception& e) {
         LOG_ERROR("[AlpacaRtDataFeed] Error parsing trade: {}", e.what());
@@ -143,21 +155,30 @@ void AlpacaRtDataFeed::parseTradeUpdate(const nlohmann::json& data) {
 void AlpacaRtDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
     // LOG_DEBUG("[AlpacaRtDataFeed] QuoteUpdate Received: {}", data);
     try {
-        MarketTick tick;
-        tick.type = TickType::QUOTE;
+        QuoteTick tick; 
+        
         std::string rawSymbol = data.at("S").get<std::string>();
         rawSymbol.erase(std::remove(rawSymbol.begin(), rawSymbol.end(), '/'), rawSymbol.end());
         tick.symbol = rawSymbol;
+        
         tick.ask_price = data.at("ap").get<double>();
         tick.ask_size = data.at("as").get<double>();
         tick.bid_price = data.at("bp").get<double>();
         tick.bid_size = data.at("bs").get<double>();
+        
         // Parse the timestamp string to epoch milliseconds
         std::string tsString = data.value("t", "");
         tick.timestamp_ms = parseAlpacaTimestamp(tsString);
 
+        // Parse Quote Conditions
+        if (data.contains("c") && data.at("c").is_array()) {
+            for (const auto& cond : data.at("c")) {
+                tick.conditions.push_back(stringToQuoteCondition(cond.get<std::string>()));
+            }
+        }
+
         if (eventBus_) {
-            eventBus_->publishTick(tick);
+            eventBus_->publishMarketEvent(tick);
         }
     } catch (const std::exception& e) {
         LOG_ERROR("[AlpacaRtDataFeed] Error parsing quote: {}", e.what());
@@ -167,31 +188,67 @@ void AlpacaRtDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
 void AlpacaRtDataFeed::parseOrderBookUpdate(const nlohmann::json& data) {
     // LOG_DEBUG("[AlpacaRtDataFeed] BookUpdate Received: {}", data);
     try {
-        MarketTick tick;
-        tick.type = TickType::ORDERBOOK;
+        OrderBookUpdate update; // Changed from MarketTick
+        
         std::string rawSymbol = data.at("S").get<std::string>();
         rawSymbol.erase(std::remove(rawSymbol.begin(), rawSymbol.end(), '/'), rawSymbol.end());
-        tick.symbol = rawSymbol;
+        update.symbol = rawSymbol;
         
+        // Parse the timestamp string to epoch milliseconds
+        std::string tsString = data.value("t", "");
+        update.timestamp_ms = parseAlpacaTimestamp(tsString);
+
+        // Capture the reset/snapshot flag (defaulting to false if not present)
+        update.is_snapshot = data.value("r", false);
+
         const auto& bids = data.at("b");
         const auto& asks = data.at("a");
 
-        if (!bids.empty() && !asks.empty()) {
-            tick.ask_price = asks[0].at("p").get<double>();
-            tick.ask_size = asks[0].at("s").get<double>();
-            tick.bid_price = bids[0].at("p").get<double>();
-            tick.bid_size = bids[0].at("s").get<double>();
-            // Parse the timestamp string to epoch milliseconds
-            std::string tsString = data.value("t", "");
-            tick.timestamp_ms = parseAlpacaTimestamp(tsString);
+        // Iterate through the full array of bids to capture market depth
+        for (const auto& b : bids) {
+            update.bids.push_back({
+                b.at("p").get<double>(), 
+                b.at("s").get<double>()
+            });
+        }
 
-            if (eventBus_) {
-                eventBus_->publishTick(tick);
-            }
+        // Iterate through the full array of asks to capture market depth
+        for (const auto& a : asks) {
+            update.asks.push_back({
+                a.at("p").get<double>(), 
+                a.at("s").get<double>()
+            });
+        }
+
+        if (eventBus_) {
+            eventBus_->publishMarketEvent(update);
         }
     } catch (const std::exception& e) {
         LOG_ERROR("[AlpacaRtDataFeed] Error parsing orderbook: {}", e.what());
     }
+}
+
+Side AlpacaRtDataFeed::stringToSide(const std::string& side) {
+        if (side == "B") return Side::BUY;
+        if (side == "S") return Side::SELL;
+        return Side::UNKNOWN;
+    }
+
+TradeCondition AlpacaRtDataFeed::stringToTradeCondition(const std::string& cond) {
+    if (cond == "@" || cond == " ") return TradeCondition::REGULAR;
+    if (cond == "F") return TradeCondition::ISO;
+    if (cond == "I") return TradeCondition::ODD_LOT;
+    if (cond == "U") return TradeCondition::EXTENDED_HOURS;
+    if (cond == "Z") return TradeCondition::LATE_PRINT;
+    if (cond == "C") return TradeCondition::CASH_TRADE;
+    if (cond == "P") return TradeCondition::PRIOR_REFERENCE;
+    return TradeCondition::OTHER;
+}
+
+QuoteCondition AlpacaRtDataFeed::stringToQuoteCondition(const std::string& cond) {
+    if (cond == "R") return QuoteCondition::NON_FIRM;
+    if (cond == "C") return QuoteCondition::CLOSING;
+    return QuoteCondition::OTHER;
 }
 
 } // namespace bot

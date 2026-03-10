@@ -2,8 +2,9 @@
 #include <functional>
 #include <core/DomainModels.hpp>
 
-// Callback type for receiving ticks.
-using TickCallback = std::function<void(const MarketTick&)>;
+// Callback type for receiving market events.
+using MarketEventCallback = std::function<void(const MarketEvent&)>;
+
 
 // Callback type for receiving execution reports.
 using ExecutionCallback = std::function<void(const ExecutionReport&)>;
@@ -14,11 +15,11 @@ class IEventBus {
 public:
     virtual ~IEventBus() = default;
 
-    // Registers a callback to be triggered when a tick arrives for a symbol.
-    virtual void subscribeToTick(const std::string& symbol, TickCallback callback) = 0;
+    // Registers a callback to be triggered when a event arrives for a symbol.
+    virtual void subscribeToMarketEvents(const std::string& symbol, MarketEventCallback callback) = 0;
 
-    // Publishes a tick to all registered subscribers.
-    virtual void publishTick(const MarketTick& tick) = 0;
+    // Publishes a market events to all registered subscribers.
+    virtual void publishMarketEvent(const MarketEvent& event) = 0;
 
     // Registers a callback to be triggered when an execution report arrives.
     virtual void subscribeToExecution(ExecutionCallback callback) = 0;

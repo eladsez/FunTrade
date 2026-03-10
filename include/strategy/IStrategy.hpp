@@ -11,7 +11,7 @@ public:
     virtual void start() = 0;
 
     // The core logic loop, triggered upon receiving a new market event.
-    virtual void onTick(const MarketTick& tick) = 0;
+    virtual void onMarketEvent(const MarketEvent& event) = 0;
     
     // Halts the strategy and cleans up.
     virtual void stop() = 0;

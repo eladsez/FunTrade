@@ -18,50 +18,53 @@ PortfolioManager::PortfolioManager(IEventBus& eventBus, IExecutionEngine& engine
     syncWithExchange(engine);
 }
 
-void PortfolioManager::ensureTickSubscription(const std::string& symbol) {
-    // Check if we are already subscribed to this symbol's tick data
-    if (subscribedSymbols_.find(symbol) == subscribedSymbols_.end()) {
-        subscribedSymbols_.insert(symbol);
+// void PortfolioManager::ensureMarketSubscription(const std::string& symbol) {
+//     // Check if we are already subscribed to this symbol's tick data
+//     if (subscribedSymbols_.find(symbol) == subscribedSymbols_.end()) {
+//         subscribedSymbols_.insert(symbol);
         
-        LOG_INFO("[PortfolioManager] Auto-subscribing to market ticks for {}", symbol);
+//         LOG_INFO("[PortfolioManager] Auto-subscribing to market ticks for {}", symbol);
         
-        eventBus_.subscribeToTick(symbol, [this](const MarketTick& tick) {
-            this->onTick(tick);
-        });
-    }
-}
+//         eventBus_.subscribeToMarketEvents(symbol, [this](const MarketEvent& event) {
+//             this->onMarketEvent(event);
+//         });
+//     }
+// }
 
-void PortfolioManager::onTick(const MarketTick& tick) {
-    std::string symbol = tick.symbol;
-    
-    double updatedPrice = 0.0;
+void PortfolioManager::onMarketEvent(const MarketEvent& event) {
+    std::visit([this](auto&& tick) {
+        using T = std::decay_t<decltype(tick)>;
+        
+        std::string symbol = tick.symbol;
+        double updatedPrice = 0.0;
 
-    if (tick.type == TickType::TRADE) {
-        // Use the exact last traded price
-        updatedPrice = tick.price;
-    } 
-    else if (tick.type == TickType::QUOTE) {
-        // Mark-to-Market using the mid-price of the spread
-        if (tick.bid_price > 0 && tick.ask_price > 0) {
-            updatedPrice = (tick.bid_price + tick.ask_price) / 2.0;
+        if constexpr (std::is_same_v<T, TradeTick>) {
+            // Use the exact last traded price
+            updatedPrice = tick.price;
+        } 
+        else if constexpr (std::is_same_v<T, QuoteTick>) {
+            // Mark-to-Market using the mid-price of the spread
+            if (tick.bid_price > 0 && tick.ask_price > 0) {
+                updatedPrice = (tick.bid_price + tick.ask_price) / 2.0;
+            }
+        } 
+        else if constexpr (std::is_same_v<T, OrderBookUpdate>) {
+            // Ignore ORDERBOOK ticks for PnL to save CPU, Quotes are enough
+            return; 
         }
-    } 
-    else {
-        // Ignore ORDERBOOK ticks for PnL to save CPU, Quotes are enough
-        return; 
-    }
 
-    // Only update if we derived a valid price
-    if (updatedPrice > 0.0) {
-        std::lock_guard<std::mutex> lock(mtx_);
-        if (positions_.count(symbol)) {
-            LOG_DEBUG("[PortfolioManager] Update price for {}:{:.2f}: -> {:.2f}", 
-                tick.symbol, 
-                positions_[symbol].current_price, 
-                updatedPrice);
-            positions_[symbol].current_price = updatedPrice;
+        // Only update if we derived a valid price
+        if (updatedPrice > 0.0) {
+            std::lock_guard<std::mutex> lock(mtx_);
+            if (positions_.count(symbol)) {
+                LOG_DEBUG("[PortfolioManager] Update price for {}:{:.2f} -> {:.2f}", 
+                    symbol, 
+                    positions_[symbol].current_price, 
+                    updatedPrice);
+                positions_[symbol].current_price = updatedPrice;
+            }
         }
-    }
+    }, event);
 }
 
 void PortfolioManager::onExecution(const ExecutionReport& report) {
@@ -74,7 +77,7 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
     std::string symbol = report.symbol;
 
     // Ensure we are getting live price updates for this newly traded symbol
-    ensureTickSubscription(symbol);
+    // ensureMarketSubscription(symbol);
 
     Position& pos = positions_[symbol];
     pos.symbol = symbol;
@@ -153,8 +156,8 @@ void PortfolioManager::syncWithExchange(IExecutionEngine& engine) {
                 
                 positions_[symbol] = pos;
                 
-                // Ensure we get live price updates for symbols we ALREADY own from a previous run
-                ensureTickSubscription(symbol);
+                // // Ensure we get live price updates for symbols we ALREADY own from a previous run
+                // ensureMarketSubscription(symbol);
                 
                 LOG_INFO("[PortfolioManager] Synced {} | Qty: {} | AvgPrice: {}", symbol, pos.quantity, pos.avg_price);
             } catch (const std::exception& e) {

@@ -5,7 +5,6 @@
 #include <thread>
 #include <atomic>
 #include <concurrentqueue.h> // moodycamel lock-free queue
-
 #include <variant>
 
 class EventBus : public IEventBus {
@@ -13,8 +12,8 @@ public:
     EventBus();
     ~EventBus() override;
 
-    void subscribeToTick(const std::string& symbol, TickCallback callback) override;
-    void publishTick(const MarketTick& tick) override;
+    void subscribeToMarketEvents(const std::string& symbol, MarketEventCallback callback) override;
+    void publishMarketEvent(const MarketEvent& event);
 
     void subscribeToExecution(ExecutionCallback callback) override;
     void publishExecution(const ExecutionReport& report) override;
@@ -24,13 +23,13 @@ public:
     void stop();
 
 private:
-    using Event = std::variant<MarketTick, ExecutionReport>;
+    using Event = std::variant<MarketEvent, ExecutionReport>;
     
     void dispatchEvent(const Event& event);
     void processEvents();
 
 
-    std::vector<std::pair<std::string, TickCallback>> tickSubscribers;
+    std::vector<std::pair<std::string, MarketEventCallback>> marketEventSubscribers;
     std::vector<ExecutionCallback> executionSubscribers;
     std::mutex subMtx; // Mutex only for registering subscribers, not for publishing
 

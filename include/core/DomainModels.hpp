@@ -1,11 +1,67 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include <variant>
+#include <vector>
 
 enum class Side {
     BUY,
-    SELL
+    SELL,
+    UNKNOWN // For stock trades where taker side isn't explicitly provided
 };
+
+enum class TradeCondition {
+    REGULAR,         // '@' or ' '
+    ISO,             // 'F' - Intermarket Sweep Order
+    ODD_LOT,         // 'I'
+    EXTENDED_HOURS,  // 'U'
+    LATE_PRINT,      // 'Z'
+    CASH_TRADE,      // 'C'
+    PRIOR_REFERENCE, // 'P'
+    OTHER            // Fallback for conditions we don't explicitly filter
+};
+
+enum class QuoteCondition {
+    REGULAR,
+    NON_FIRM,        // 'R'
+    CLOSING,         // 'C'
+    OTHER
+};
+
+struct PriceLevel {
+    double price;
+    double size;
+};
+
+struct TradeTick {
+    std::string symbol;
+    double price = 0.0;
+    double volume = 0.0;
+    uint64_t timestamp_ms = 0;
+    Side taker_side = Side::UNKNOWN;
+    std::vector<TradeCondition> conditions;
+};
+
+struct QuoteTick {
+    std::string symbol;
+    double bid_price = 0.0;
+    double bid_size = 0.0;
+    double ask_price = 0.0;
+    double ask_size = 0.0;
+    uint64_t timestamp_ms = 0;
+    std::vector<QuoteCondition> conditions;
+};
+
+struct OrderBookUpdate {
+    std::string symbol;
+    std::vector<PriceLevel> bids;
+    std::vector<PriceLevel> asks;
+    uint64_t timestamp_ms = 0;
+    bool is_snapshot = false; // Optional: Useful if Alpaca sends a full reset
+};
+
+// The unified MarketEvent variant
+using MarketEvent = std::variant<TradeTick, QuoteTick, OrderBookUpdate>;
 
 enum class OrderType {
     MARKET,
@@ -22,29 +78,6 @@ enum class OrderStatus {
     CANCELED,
     REJECTED,
     EXPIRED
-};
-
-enum class TickType {
-    TRADE,
-    QUOTE,
-    ORDERBOOK
-};
-
-struct MarketTick {
-    std::string symbol;
-    TickType type;
-    
-    // Trade Data
-    double price = 0.0;       // Last trade price
-    double volume = 0.0;      // Last trade volume
-    
-    // Quote / Order Book Data
-    double bid_price = 0.0;
-    double bid_size = 0.0;
-    double ask_price = 0.0;
-    double ask_size = 0.0;
-
-    uint64_t timestamp_ms = 0;
 };
 
 // Represents time-frame for an order.
