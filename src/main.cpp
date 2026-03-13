@@ -11,7 +11,6 @@
 #include <infra/AlpacaInfra.hpp>
 #include <data/AlpacaRtDataFeed.hpp>
 #include <execution/AlpacaExecutionEngine.hpp>
-#include <strategy/OBIMomentum.hpp>
 #include <risk/PortfolioManager.hpp>
 #include <execution/OrderManager.hpp>
 

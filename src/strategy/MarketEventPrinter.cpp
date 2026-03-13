@@ -1,18 +1,15 @@
-#include <strategy/OBIMomentum.hpp>
+#include <strategy/MarketEventPrinter.hpp>
 #include <core/Logger.hpp>
 #include <cmath>
 #include <algorithm>
 
 namespace bot {
 
-OBIMomentum::OBIMomentum(std::shared_ptr<IEventBus> bus, std::shared_ptr<IExecutionEngine> execEngine, std::shared_ptr<PortfolioManager> portfolioManager, double initialPortfolioValue, const std::string& symbol, int windowSize, double stdDevMultiplier, double riskPercentage, int emaWindowSize)
-    : eventBus(bus), executionEngine(execEngine), portfolioManager_(portfolioManager), symbol_(symbol), windowSize_(windowSize), currentIndex_(0), isWindowFull_(false), stdDevMultiplier_(stdDevMultiplier), riskPercentage_(riskPercentage), emaWindowSize_(emaWindowSize), emaPrice_(0.0), isEmaInitialized_(false), portfolioValue_(initialPortfolioValue) {
-    // Initialize Eigen vector for the rolling window
-    obiWindow_ = Eigen::VectorXd::Zero(windowSize_);
-}
+MarketEventPrinter::MarketEventPrinter(std::shared_ptr<IEventBus> bus, const std::string& symbol)
+    : eventBus(bus), symbol_(symbol) {}
 
-void OBIMomentum::start() {
-    LOG_INFO("[OBIMomentum] Strategy started");
+void MarketEventPrinter::start() {
+    LOG_INFO("[MarketEventPrinter] Strategy started");
 
     eventBus->subscribeToMarketEvents(symbol_, [this](const MarketEvent& event) {
         this->onMarketEvent(event);
@@ -103,12 +100,12 @@ void printMarketEvent(const MarketEvent& event) {
     }, event);
 }
 
-void OBIMomentum::onMarketEvent(const MarketEvent& event) {
+void MarketEventPrinter::onMarketEvent(const MarketEvent& event) {
     printMarketEvent(event);
 }
 
-void OBIMomentum::stop() {
-    LOG_INFO("[OBIMomentum] Strategy stopped.");
+void MarketEventPrinter::stop() {
+    LOG_INFO("[MarketEventPrinter] Strategy stopped.");
 }
 
 } // namespace bot
