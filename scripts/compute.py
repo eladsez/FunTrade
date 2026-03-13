@@ -26,53 +26,59 @@ def calculate_half_life(spread):
     lam = model.params.iloc[1]
     return -np.log(2) / lam if lam < 0 else np.inf
 
-def find_best_params(spread, window_size):
+def find_best_params(spread, window_size, cost_per_trade):
     """ 
-    Grid Search: Entry Z vs Exit Z using ROLLING statistics 
-    to match the C++ engine logic.
+    Grid Search: Entry Z vs Exit Z using ROLLING statistics.
+    Now includes transaction costs to prevent selecting hyper-active, 
+    fee-burning parameter combinations.
     """
     entry_range = np.arange(1.5, 3.25, 0.25)
     exit_range = np.arange(-0.25, 0.75, 0.25)
     
     # Calculate rolling mean and std to avoid look-ahead bias
-    # This mimics the C++ rolling window
     rolling_mu = spread.rolling(window=window_size).mean()
     rolling_std = spread.rolling(window=window_size).std()
     
-    # Calculate rolling Z-Score
-    z_spread = (spread - rolling_mu) / rolling_std
-    
-    # Drop NaNs created by the rolling window (the 'warm-up' period)
-    z_spread = z_spread.dropna()
+    z_spread = ((spread - rolling_mu) / rolling_std).dropna()
     valid_spread_diff = spread.diff().loc[z_spread.index]
+    aligned_spread = spread.loc[z_spread.index] # Needed for cost calculation
 
     results = []
 
     for entry_z, exit_z in product(entry_range, exit_range):
         if exit_z >= entry_z: continue 
 
-        # Vectorized simulation logic is faster, but a loop is clearer for state machines
         positions = []
         current_pos = 0
         
+        # State machine logic
         for z in z_spread:
             if current_pos == 0:
                 if z > entry_z: current_pos = -1
                 elif z < -entry_z: current_pos = 1
-            elif current_pos == -1: # Short position
+            elif current_pos == -1: 
                 if z <= exit_z: current_pos = 0
-            elif current_pos == 1: # Long position
+            elif current_pos == 1: 
                 if z >= -exit_z: current_pos = 0
             positions.append(current_pos)
 
         pos_series = pd.Series(positions, index=z_spread.index)
         
-        # Calculate PnL: Position of 'yesterday' * change in spread 'today'
-        daily_pnl = pos_series.shift(1).fillna(0) * valid_spread_diff
+        # Calculate Gross PnL
+        raw_daily_pnl = pos_series.shift(1).fillna(0) * valid_spread_diff
         
-        # Calculate Sharpe Ratio (Annualized)
-        mean_pnl = daily_pnl.mean()
-        std_pnl = daily_pnl.std()
+        # Calculate Transaction Costs
+        # cost_per_trade is applied every time the position changes
+        trades = pos_series.diff().abs().fillna(0)
+        # In log-space, the cost is just the flat percentage deducted directly
+        daily_costs = trades * cost_per_trade
+        
+        # Calculate Net PnL
+        net_daily_pnl = raw_daily_pnl - daily_costs
+        
+        # Calculate Sharpe Ratio on NET PnL
+        mean_pnl = net_daily_pnl.mean()
+        std_pnl = net_daily_pnl.std()
         
         sharpe = np.sqrt(252) * (mean_pnl / std_pnl) if std_pnl > 0 else 0
         
@@ -88,61 +94,121 @@ def find_best_params(spread, window_size):
     return round(float(best['entry']), 2), round(float(best['exit']), 2), round(float(best['sharpe']), 3)
 
 
-def test_basket(df, combo):
+def test_basket(df, combo, cost_per_trade=0.001):
     subset_df = df[list(combo)]
+    
     try:
-        joh_res = coint_johansen(subset_df.values, 0, 1)
+        # Convert raw prices to log prices to ensure dollar-neutrality
+        # and proportional capital allocation.
+        log_df = np.log(subset_df)
+        
+        # Run Johansen on the log prices
+        joh_res = coint_johansen(log_df.values, 0, 1)
         raw_weights = joh_res.evec[:, 0]
         weights = {combo[i]: round(raw_weights[i]/raw_weights[0], 4) for i in range(len(combo))}
         
-        spread = sum(subset_df[t] * weights[t] for t in combo)
+        # Spread is now a log-spread
+        spread = sum(log_df[t] * weights[t] for t in combo)
         p_val = adfuller(spread)[1]
         hl = calculate_half_life(spread)
 
         # Gatekeeper
-        if p_val > 0.05 or not (2 <= hl <= 60): return None
+        if p_val > 0.05 or not (2 <= hl <= 60): 
+            return None
 
-        # Define window size based on Half-Life (e.g., 2x HL)
         window_size = int(max(round(hl * 2), 20))
 
-        # Pass the window_size to the grid search
-        entry_z, exit_z, sharpe = find_best_params(spread, window_size)
+        # Grid search will now operate on the log-spread
+        entry_z, exit_z, sharpe = find_best_params(spread, window_size, cost_per_trade)
         
-        if sharpe <= 0.1: return None # Filter out low-performing noise
+        # Filter out noise - require a solid baseline Sharpe
+        if sharpe <= 0.1: 
+            return None 
 
         return {
-            "tickers": combo, "weights": weights, "p_value": p_val,
-            "half_life": hl, "entry_z": entry_z, "exit_z": exit_z,
-            "sharpe": sharpe, "rank_score": sharpe / (p_val + 0.001)
+            "tickers": combo, 
+            "weights": weights, 
+            "p_value": p_val,
+            "half_life": hl, 
+            "entry_z": entry_z, 
+            "exit_z": exit_z,
+            "sharpe": sharpe
         }
 
-    except: return None
+    except Exception as e: 
+        return None
 
-def validate_oos_advanced(df_oos, train_res):
+def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.001):
     """
-    Returns OOS stats only if they are reasonably stable.
+    Simulates OOS performance using Log Prices and counts the number of trades.
+    Disqualifies baskets that rely on a single lucky anomaly.
     """
     tickers = train_res['tickers']
     weights = train_res['weights']
+    entry_z = train_res['entry_z']
+    exit_z = train_res['exit_z']
     
-    # Reconstruct spread on NEW data
-    oos_spread = sum(df_oos[t] * weights[t] for t in tickers)
+    # 1. Reconstruct the log-spread on OOS data
+    log_df_oos = np.log(df_oos[list(tickers)])
+    oos_spread = sum(log_df_oos[t] * weights[t] for t in tickers)
     
-    # Calculate OOS Stats
+    # 2. Calculate rolling Z-Score
+    window_size = int(max(round(train_res['half_life'] * 2), 20))
+    rolling_mu = oos_spread.rolling(window=window_size).mean()
+    rolling_std = oos_spread.rolling(window=window_size).std()
+    z_spread = ((oos_spread - rolling_mu) / rolling_std).dropna()
+    
+    if len(z_spread) < 20: 
+        return {"is_robust": False}
+
+    # 3. Trading simulation
+    pos = pd.Series(0, index=z_spread.index)
+    current_pos = 0
+    
+    for i in range(len(z_spread)):
+        z = z_spread.iloc[i]
+        if current_pos == 0:
+            if z > entry_z: current_pos = -1
+            elif z < -entry_z: current_pos = 1
+        elif current_pos == -1: 
+            if z <= exit_z: current_pos = 0
+        elif current_pos == 1:  
+            if z >= -exit_z: current_pos = 0
+            
+        pos.iloc[i] = current_pos
+
+    # 4. Count Trades to prevent the "1 lucky trade" illusion
+    # A position change from 0 to 1, or 1 to 0, counts as 1 trade action.
+    # Two actions = roughly one round-trip trade.
+    trade_actions = pos.diff().abs().fillna(0)
+    total_trade_actions = trade_actions[trade_actions > 0].count()
+    round_trip_trades = int(total_trade_actions / 2)
+
+    # STRICT FILTER: If the basket made fewer than 4 round-trips in a year, it's noise.
+    if round_trip_trades < 4:
+        return {"is_robust": False}
+
+    # 5. Calculate returns and transaction costs
+    # Since we are using log prices, spread_diff is approx the percentage return
+    log_return = oos_spread.loc[z_spread.index].diff().shift(-1)
+    raw_pnl = pos * log_return
+    
+    # Subtract flat percentage cost on every trade action
+    transaction_costs = trade_actions * cost_per_trade
+    net_pnl = raw_pnl - transaction_costs
+    
+    # 6. OOS Performance Metrics
+    oos_sharpe = np.sqrt(252) * (net_pnl.mean() / net_pnl.std()) if net_pnl.std() > 0 else 0
     oos_p_val = adfuller(oos_spread)[1]
-    oos_hl = calculate_half_life(oos_spread)
     
-    # Stability Check: Half-life shouldn't explode (e.g., > 2x training HL)
-    hl_ratio = oos_hl / train_res['half_life']
-    is_stable_hl = 0.5 < hl_ratio < 2.5 
-    
-    is_robust = (oos_p_val < 0.05) and is_stable_hl
+    # Robustness criteria: Stationary, profitable, and actively trading
+    is_robust = (oos_p_val < 0.05) and (oos_sharpe > 0.5) 
 
     return {
         "oos_p": oos_p_val,
-        "oos_hl": oos_hl,
-        "is_robust": is_robust,
-        "hl_drift": hl_ratio
+        "oos_sharpe": round(oos_sharpe, 3),
+        "trades": round_trip_trades,
+        "is_robust": is_robust
     }
 
 def export_robust_configs(robust_list, train_dates, test_dates):
@@ -167,11 +233,10 @@ def export_robust_configs(robust_list, train_dates, test_dates):
                 "train_p": round(item['train_p'], 6),
                 "oos_p": round(item['oos_p'], 6),
                 "train_hl": round(item['train_hl'], 2),
-                "oos_hl": round(item['oos_hl'], 2),
-                "sharpe": item['train_sharpe']
+                "oos_sharpe": item['oos_sharpe']
             },
             "trading_params": {
-                "window_size": int(max(round(item['oos_hl'] * 2.0), 20)),
+                "window_size": int(max(round(item['train_hl'] * 2.0), 20)),
                 "entry_z": item['entry_z'],
                 "exit_z": item['exit_z']
             },
@@ -240,11 +305,11 @@ def run_over_universe(universe):
                 export_data = {
                     "tickers": train_res['tickers'],
                     "weights": train_res['weights'],
-                    "train_p": train_res['p_value'],      # Renaming for export
-                    "train_hl": train_res['half_life'],   # Renaming for export
+                    "train_p": train_res['p_value'],      
+                    "train_hl": train_res['half_life'], 
                     "train_sharpe": train_res['sharpe'],
                     "oos_p": oos_metrics['oos_p'],
-                    "oos_hl": oos_metrics['oos_hl'],
+                    "oos_sharpe": oos_metrics['oos_sharpe'],
                     "entry_z": train_res['entry_z'],
                     "exit_z": train_res['exit_z']
                 }

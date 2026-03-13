@@ -1,14 +1,14 @@
 {
-    "basket_id": "cl_cost_pg",
+    "basket_id": "cost_kmb_pg",
     "tickers": [
-        "CL",
         "COST",
+        "KMB",
         "PG"
     ],
     "weights": {
-        "CL": 1.0,
-        "COST": -0.3171,
-        "PG": 3.8219
+        "COST": 1.0,
+        "KMB": 0.0378,
+        "PG": -3.24
     },
     "backtest_periods": {
         "training": {
@@ -21,16 +21,15 @@
         }
     },
     "metrics": {
-        "train_p": 0.000893,
-        "oos_p": 0.034517,
-        "train_hl": 21.2,
-        "oos_hl": 12.69,
-        "sharpe": 1.247
+        "train_p": 0.00144,
+        "oos_p": 0.044611,
+        "train_hl": 22.34,
+        "oos_sharpe": 1.916
     },
     "trading_params": {
-        "window_size": 25,
+        "window_size": 45,
         "entry_z": 2.5,
         "exit_z": 0.0
     },
-    "exported_at": "2026-03-13 16:08:19"
+    "exported_at": "2026-03-13 23:07:03"
 }

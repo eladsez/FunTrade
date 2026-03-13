@@ -1,14 +1,14 @@
 {
-    "basket_id": "cost_pg_pm",
+    "basket_id": "cost_pep_pg",
     "tickers": [
         "COST",
-        "PG",
-        "PM"
+        "PEP",
+        "PG"
     ],
     "weights": {
         "COST": 1.0,
-        "PG": -10.2354,
-        "PM": -3.2567
+        "PEP": -0.1864,
+        "PG": -3.4567
     },
     "backtest_periods": {
         "training": {
@@ -21,16 +21,15 @@
         }
     },
     "metrics": {
-        "train_p": 0.001382,
-        "oos_p": 0.033368,
-        "train_hl": 21.9,
-        "oos_hl": 11.71,
-        "sharpe": 1.209
+        "train_p": 0.001962,
+        "oos_p": 0.040929,
+        "train_hl": 23.81,
+        "oos_sharpe": 2.04
     },
     "trading_params": {
-        "window_size": 23,
-        "entry_z": 2.5,
-        "exit_z": 0.25
+        "window_size": 48,
+        "entry_z": 1.75,
+        "exit_z": 0.0
     },
-    "exported_at": "2026-03-13 16:08:19"
+    "exported_at": "2026-03-13 23:07:03"
 }
