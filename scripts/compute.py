@@ -4,18 +4,16 @@ import yfinance as yf
 import statsmodels.api as sm
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.vector_ar.vecm import coint_johansen
-from itertools import combinations
+from itertools import combinations, product
 from datetime import datetime, timedelta
 import json
 import warnings
 
-# Suppress warnings for a clean CLI output
 warnings.filterwarnings("ignore")
 
-# --- CORE MATH FUNCTIONS ---
 
 def fetch_data(tickers, start_date, end_date):
-    print(f"[*] Fetching data for {len(tickers)} tickers from {start_date} to {end_date}...")
+    print(f"[*] Downloading {len(tickers)} tickers...")
     data = yf.download(tickers, start=start_date, end=end_date)['Close']
     return data.dropna()
 
@@ -27,93 +25,105 @@ def calculate_half_life(spread):
     lam = model.params.iloc[1]
     return -np.log(2) / lam if lam < 0 else np.inf
 
-def find_robust_z_score(spread):
-    """ Script 2's Simulation: Finds a stable 'plateau' of profitability """
-    z_range = np.arange(1.5, 3.25, 0.25)
-    sharpe_results = {}
-    mu, std = spread.mean(), spread.std()
-    z_spread = (spread - mu) / std
+def find_best_params(spread, window_size):
+    """ 
+    Grid Search: Entry Z vs Exit Z using ROLLING statistics 
+    to match the C++ engine logic.
+    """
+    entry_range = np.arange(1.5, 3.25, 0.25)
+    exit_range = np.arange(-0.25, 0.75, 0.25)
+    
+    # Calculate rolling mean and std to avoid look-ahead bias
+    # This mimics the C++ rolling window
+    rolling_mu = spread.rolling(window=window_size).mean()
+    rolling_std = spread.rolling(window=window_size).std()
+    
+    # Calculate rolling Z-Score
+    z_spread = (spread - rolling_mu) / rolling_std
+    
+    # Drop NaNs created by the rolling window (the 'warm-up' period)
+    z_spread = z_spread.dropna()
+    valid_spread_diff = spread.diff().loc[z_spread.index]
 
-    for z in z_range:
-        pos = pd.Series(0, index=spread.index)
+    results = []
+
+    for entry_z, exit_z in product(entry_range, exit_range):
+        if exit_z >= entry_z: continue 
+
+        # Vectorized simulation logic is faster, but a loop is clearer for state machines
+        positions = []
         current_pos = 0
-        for i in range(len(z_spread)):
+        
+        for z in z_spread:
             if current_pos == 0:
-                if z_spread.iloc[i] > z: current_pos = -1
-                elif z_spread.iloc[i] < -z: current_pos = 1
-            else: # Exit at mean reversion (0.0)
-                if (current_pos == -1 and z_spread.iloc[i] <= 0) or \
-                   (current_pos == 1 and z_spread.iloc[i] >= 0):
-                    current_pos = 0
-            pos.iloc[i] = current_pos
+                if z > entry_z: current_pos = -1
+                elif z < -entry_z: current_pos = 1
+            elif current_pos == -1: # Short position
+                if z <= exit_z: current_pos = 0
+            elif current_pos == 1: # Long position
+                if z >= -exit_z: current_pos = 0
+            positions.append(current_pos)
 
-        daily_pnl = pos.shift(1) * spread.diff()
-        sharpe = np.sqrt(252) * (daily_pnl.mean() / daily_pnl.std()) if daily_pnl.std() != 0 else 0
-        sharpe_results[z] = sharpe
+        pos_series = pd.Series(positions, index=z_spread.index)
+        
+        # Calculate PnL: Position of 'yesterday' * change in spread 'today'
+        daily_pnl = pos_series.shift(1).fillna(0) * valid_spread_diff
+        
+        # Calculate Sharpe Ratio (Annualized)
+        mean_pnl = daily_pnl.mean()
+        std_pnl = daily_pnl.std()
+        
+        sharpe = np.sqrt(252) * (mean_pnl / std_pnl) if std_pnl > 0 else 0
+        
+        results.append({
+            'entry': entry_z, 
+            'exit': exit_z, 
+            'sharpe': sharpe
+        })
 
-    # Find the best Z where neighbors are also profitable (Robustness Check)
-    best_z, max_smoothed_sharpe = 2.0, -np.inf
-    keys = sorted(sharpe_results.keys())
-    for i in range(1, len(keys) - 1):
-        smoothed = (sharpe_results[keys[i-1]] + sharpe_results[keys[i]] + sharpe_results[keys[i+1]]) / 3
-        if smoothed > max_smoothed_sharpe:
-            max_smoothed_sharpe, best_z = smoothed, keys[i]
-            
-    return round(float(best_z), 2), round(float(sharpe_results.get(best_z, 0)), 3)
+    if not results: return 2.0, 0.0, 0.0
+    
+    best = max(results, key=lambda x: x['sharpe'])
+    return round(float(best['entry']), 2), round(float(best['exit']), 2), round(float(best['sharpe']), 3)
 
-def test_basket(df, subset_tickers):
-    """ Evaluates a combination using a hybrid of Stats + Backtest """
-    subset_df = df[list(subset_tickers)]
+
+def test_basket(df, combo):
+    subset_df = df[list(combo)]
     try:
-        # Johansen Cointegration
         joh_res = coint_johansen(subset_df.values, 0, 1)
         raw_weights = joh_res.evec[:, 0]
-        if raw_weights[0] == 0: return None
+        weights = {combo[i]: round(raw_weights[i]/raw_weights[0], 4) for i in range(len(combo))}
         
-        # Normalize weights relative to the first asset
-        norm_weights = {subset_tickers[i]: round(raw_weights[i]/raw_weights[0], 4) for i in range(len(subset_tickers))}
-        
-        # Build Spread
-        spread = pd.Series(0.0, index=subset_df.index)
-        for t in subset_tickers:
-            spread += subset_df[t] * norm_weights[t]
-        
-        # ADF Test (Stationarity)
+        spread = sum(subset_df[t] * weights[t] for t in combo)
         p_val = adfuller(spread)[1]
         hl = calculate_half_life(spread)
 
-        # --- FILTERS ---
-        # 1. Must be stationary
-        # 2. Half-life must be tradable (between 2 days and 2 months)
-        if p_val > 0.05 or not (2 <= hl <= 50):
-            return None
+        # Gatekeeper
+        if p_val > 0.05 or not (2 <= hl <= 60): return None
 
-        # --- OPTIMIZATION ---
-        opt_z, sharpe = find_robust_z_score(spread)
+        # Define window size based on Half-Life (e.g., 2x HL)
+        window_size = int(max(round(hl * 2), 20))
+
+        # Pass the window_size to the grid search
+        entry_z, exit_z, sharpe = find_best_params(spread, window_size)
         
-        # We only want profitable baskets
-        if sharpe <= 0: return None
+        if sharpe <= 0.1: return None # Filter out low-performing noise
 
         return {
-            "tickers": subset_tickers,
-            "weights": norm_weights,
-            "p_value": p_val,
-            "half_life": hl,
-            "opt_z": opt_z,
-            "sharpe": sharpe,
-            "rank_score": sharpe / (p_val + 0.0001) # Hybrid Ranking
+            "tickers": combo, "weights": weights, "p_value": p_val,
+            "half_life": hl, "entry_z": entry_z, "exit_z": exit_z,
+            "sharpe": sharpe, "rank_score": sharpe / (p_val + 0.001)
         }
-    except:
-        return None
 
-# --- MAIN EXECUTION LOOP ---
+    except: return None
+
 
 def main():
-    # Setup
+    # Research Window: 5 Years
     end_date = datetime.now().strftime('%Y-%m-%d')
     start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y-%m-%d')
     
-    # Define a focused universe (e.g., Top Tech/Semiconductors)
+     # Define a focused universe (e.g., Top Tech/Semiconductors)
     # Trying to brute force all 500 will take too long, so we start with a sector.
     universe = [
         'INTC', 'AMD', 'NVDA', 'TXN', 'QCOM', 
@@ -122,49 +132,40 @@ def main():
     ]
     df = fetch_data(universe, start_date, end_date)
     
-    all_combos = list(combinations(df.columns, 3))
-    print(f"[*] Starting search through {len(all_combos)} combinations...")
+    combos = list(combinations(df.columns, 3))
+    print(f"[*] Brute-forcing {len(combos)} baskets")
 
-    best_basket = None
-    max_score = -np.inf
+    results_list = []
+    for i, combo in enumerate(combos):
+        if i % 10 == 0: print(f"    Searching... {i}/{len(combos)}")
+        res = test_basket(df, combo)
+        if res: results_list.append(res)
 
-    for i, combo in enumerate(all_combos):
-        if i % 20 == 0:
-            print(f"    Progress: {i}/{len(all_combos)}...")
-
-        result = test_basket(df, combo)
+    if results_list:
+        # Sort by the hybrid rank score
+        best = max(results_list, key=lambda x: x['rank_score'])
         
-        if result and result['rank_score'] > max_score:
-            max_score = result['rank_score']
-            best_basket = result
+        print("\n" + "🚀" * 20)
+        print(f"OPTIMAL CONFIGURATION FOUND")
+        print(f"BASKET: {best['tickers']}")
+        print(f"ENTRY Z: {best['entry_z']} | EXIT Z: {best['exit_z']}")
+        print(f"SHARPE: {best['sharpe']} | HALF-LIFE: {best['half_life']:.2f}")
+        print(f"P: {best['p_value']:.6f}")
+        print("🚀" * 20)
 
-    if best_basket:
-        print("\n" + "="*40)
-        print("🥇 SUPER-BASKET FOUND")
-        print(f"Tickers: {best_basket['tickers']}")
-        print(f"Sharpe Ratio: {best_basket['sharpe']}")
-        print(f"P-Value: {best_basket['p_value']:.5f}")
-        print(f"Half-Life: {best_basket['half_life']:.2f} days")
-        print(f"Optimal Entry Z: {best_basket['opt_z']}")
-        print("="*40)
-
-        # Export for FunTrade Bot
-        # Window size is usually 2x half-life to capture the full cycle
-        window = int(max(round(best_basket['half_life'] * 2.0), 20))
-        
         config = {
-            "basket_id": f"hybrid_opt_{datetime.now().strftime('%Y%m%d')}",
-            "window_size": window,
-            "entry_z_score": best_basket['opt_z'],
-            "exit_z_score": 0.5,
-            "components": best_basket['weights']
+            "basket_id": f"grid_opt_{datetime.now().strftime('%Y%m%d')}",
+            "window_size": int(max(round(best['half_life'] * 2.0), 20)),
+            "entry_z_score": best['entry_z'],
+            "exit_z_score": best['exit_z'],
+            "components": best['weights']
         }
 
         with open('basket_config.json', 'w') as f:
             json.dump(config, f, indent=4)
-        print("\n[!] Configuration exported to basket_config.json")
+        print("\n[!] Config saved.")
     else:
-        print("\n[!] No basket met the statistical and profitability requirements.")
+        print("\n[!] No profitable stationary baskets found.")
 
 if __name__ == "__main__":
     main()
