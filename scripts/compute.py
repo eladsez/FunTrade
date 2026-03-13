@@ -184,43 +184,30 @@ def export_robust_configs(robust_list, train_dates, test_dates):
 
     print(f"\n[!] Successfully exported {len(robust_list)} configs to /{folder}")
 
-def main():
+def load_sector_universe(file_path):
+    """
+    Reads a JSON file and returns a dictionary where 
+    keys are sectors and values are lists of stock symbols.
+    """
+    try:
+        with open(file_path, 'r') as file:
+            sector_dict = json.load(file)
+        return sector_dict
+    
+    except FileNotFoundError:
+        print(f"Error: The file at {file_path} was not found.")
+    except json.JSONDecodeError as e:
+        print(f"Error: Failed to decode JSON. {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+    
+    return None
+
+def run_over_universe(universe):
     # Research Window: 5 Years
     end_date = datetime.now().strftime('%Y-%m-%d')
     start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y-%m-%d')
-    
-    # Top Tech/Semiconductors
-    # universe = [
-    #     'INTC', 'AMD', 'NVDA', 'TXN', 'QCOM', 
-    #     'MU', 'AMAT', 'LRCX', 'ASML', 'AVGO',
-    #     'TSM', 'NXPI', 'MRVL', 'ADI', 'KLAC',
-    #     'WDC'
-    # ]
 
-    # Big Banks
-    # universe = [
-    #     'JPM', 'BAC', 'WFC', 'C', 'GS', 
-    #     'MS', 'USB', 'PNC', 'TFC', 'BK'
-    # ]
-
-    # Energy - Big Oil
-    # universe = [
-    #     'XOM', 'CVX', 'COP', 'SLB', 'EOG', 
-    #     'MPC', 'VLO', 'OXY', 'HAL', 'DVN', 'FANG'
-    # ]
-
-    # Consumer Staples
-    # universe = [
-    #     'PG', 'KO', 'PEP', 'COST', 'WMT', 
-    #     'TGT', 'PM', 'MO', 'CL', 'KMB'
-    # ]
-     
-    # Utilities
-    universe = [
-        'NEE', 'DUK', 'SO', 'AEP', 'D', 
-        'EXC', 'PCG', 'XEL', 'ED', 'WEC'
-    ]
-    
     # 2. Fetch and Split
     df = fetch_data(universe, start_date, end_date)
     split_idx = int(len(df) * 0.8)
@@ -271,6 +258,14 @@ def main():
         print(f"\n🚀 BEST ROBUST BASKET: {best_oos['tickers']} (OOS P: {best_oos['oos_p']:.6f})")
     else:
         print("\n[!] No baskets survived the stability tests.")
+
+
+def main():
+    universes = load_sector_universe("./sectors_symbols.json")
+
+    for sector, symbols in universes.items():
+        print(f"[*] Running on {sector} sector")
+        run_over_universe(symbols)
 
 if __name__ == "__main__":
     main()

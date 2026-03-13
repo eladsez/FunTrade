@@ -1,0 +1,24 @@
+{
+  "Tech/Semiconductors": [
+    "INTC", "AMD", "NVDA", "TXN", "QCOM",
+    "MU", "AMAT", "LRCX", "ASML", "AVGO",
+    "TSM", "NXPI", "MRVL", "ADI", "KLAC",
+    "WDC"
+  ],
+  "Big Banks": [
+    "JPM", "BAC", "WFC", "C", "GS",
+    "MS", "USB", "PNC", "TFC", "BK"
+  ],
+  "Energy - Big Oil": [
+    "XOM", "CVX", "COP", "SLB", "EOG",
+    "MPC", "VLO", "OXY", "HAL", "DVN", "FANG"
+  ],
+  "Consumer Staples": [
+    "PG", "KO", "PEP", "COST", "WMT",
+    "TGT", "PM", "MO", "CL", "KMB"
+  ],
+  "Utilities": [
+    "NEE", "DUK", "SO", "AEP", "D",
+    "EXC", "PCG", "XEL", "ED", "WEC"
+  ]
+}

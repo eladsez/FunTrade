@@ -8,7 +8,7 @@
     "weights": {
         "COST": 1.0,
         "MO": -11.9324,
-        "PG": -9.3137
+        "PG": -9.3136
     },
     "backtest_periods": {
         "training": {
@@ -32,5 +32,5 @@
         "entry_z": 2.75,
         "exit_z": -0.25
     },
-    "exported_at": "2026-03-13 15:51:49"
+    "exported_at": "2026-03-13 16:08:19"
 }
