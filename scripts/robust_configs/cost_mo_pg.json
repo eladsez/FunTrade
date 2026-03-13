@@ -1,0 +1,36 @@
+{
+    "basket_id": "cost_mo_pg",
+    "tickers": [
+        "COST",
+        "MO",
+        "PG"
+    ],
+    "weights": {
+        "COST": 1.0,
+        "MO": -11.9324,
+        "PG": -9.3137
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-12"
+        }
+    },
+    "metrics": {
+        "train_p": 0.003135,
+        "oos_p": 0.041932,
+        "train_hl": 24.3,
+        "oos_hl": 12.44,
+        "sharpe": 1.125
+    },
+    "trading_params": {
+        "window_size": 25,
+        "entry_z": 2.75,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-13 15:51:49"
+}

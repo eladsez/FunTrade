@@ -1,0 +1,36 @@
+{
+    "basket_id": "amat_intc_txn",
+    "tickers": [
+        "AMAT",
+        "INTC",
+        "TXN"
+    ],
+    "weights": {
+        "AMAT": 1.0,
+        "INTC": -3.1045,
+        "TXN": -5.163
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-12"
+        }
+    },
+    "metrics": {
+        "train_p": 0.019896,
+        "oos_p": 0.039244,
+        "train_hl": 24.09,
+        "oos_hl": 19.08,
+        "sharpe": 1.773
+    },
+    "trading_params": {
+        "window_size": 38,
+        "entry_z": 2.0,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-13 15:39:55"
+}

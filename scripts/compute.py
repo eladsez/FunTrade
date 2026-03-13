@@ -8,6 +8,7 @@ from itertools import combinations, product
 from datetime import datetime, timedelta
 import json
 import warnings
+import os
 
 warnings.filterwarnings("ignore")
 
@@ -117,55 +118,159 @@ def test_basket(df, combo):
 
     except: return None
 
+def validate_oos_advanced(df_oos, train_res):
+    """
+    Returns OOS stats only if they are reasonably stable.
+    """
+    tickers = train_res['tickers']
+    weights = train_res['weights']
+    
+    # Reconstruct spread on NEW data
+    oos_spread = sum(df_oos[t] * weights[t] for t in tickers)
+    
+    # Calculate OOS Stats
+    oos_p_val = adfuller(oos_spread)[1]
+    oos_hl = calculate_half_life(oos_spread)
+    
+    # Stability Check: Half-life shouldn't explode (e.g., > 2x training HL)
+    hl_ratio = oos_hl / train_res['half_life']
+    is_stable_hl = 0.5 < hl_ratio < 2.5 
+    
+    is_robust = (oos_p_val < 0.05) and is_stable_hl
+
+    return {
+        "oos_p": oos_p_val,
+        "oos_hl": oos_hl,
+        "is_robust": is_robust,
+        "hl_drift": hl_ratio
+    }
+
+def export_robust_configs(robust_list, train_dates, test_dates):
+    # Create directory if it doesn't exist
+    folder = "robust_configs"
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+        
+    for i, item in enumerate(robust_list):
+        # Create a unique ID based on the tickers
+        basket_id = "_".join(item['tickers']).lower()
+        
+        config = {
+            "basket_id": basket_id,
+            "tickers": item['tickers'],
+            "weights": item['weights'],
+            "backtest_periods": {
+                "training": {"start": train_dates[0], "end": train_dates[1]},
+                "testing": {"start": test_dates[0], "end": test_dates[1]}
+            },
+            "metrics": {
+                "train_p": round(item['train_p'], 6),
+                "oos_p": round(item['oos_p'], 6),
+                "train_hl": round(item['train_hl'], 2),
+                "oos_hl": round(item['oos_hl'], 2),
+                "sharpe": item['train_sharpe']
+            },
+            "trading_params": {
+                "window_size": int(max(round(item['oos_hl'] * 2.0), 20)),
+                "entry_z": item['entry_z'],
+                "exit_z": item['exit_z']
+            },
+            "exported_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        file_path = os.path.join(folder, f"{basket_id}.json")
+        with open(file_path, 'w') as f:
+            json.dump(config, f, indent=4)
+
+    print(f"\n[!] Successfully exported {len(robust_list)} configs to /{folder}")
 
 def main():
     # Research Window: 5 Years
     end_date = datetime.now().strftime('%Y-%m-%d')
     start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y-%m-%d')
     
-     # Define a focused universe (e.g., Top Tech/Semiconductors)
-    # Trying to brute force all 500 will take too long, so we start with a sector.
+    # Top Tech/Semiconductors
+    # universe = [
+    #     'INTC', 'AMD', 'NVDA', 'TXN', 'QCOM', 
+    #     'MU', 'AMAT', 'LRCX', 'ASML', 'AVGO',
+    #     'TSM', 'NXPI', 'MRVL', 'ADI', 'KLAC',
+    #     'WDC'
+    # ]
+
+    # Big Banks
+    # universe = [
+    #     'JPM', 'BAC', 'WFC', 'C', 'GS', 
+    #     'MS', 'USB', 'PNC', 'TFC', 'BK'
+    # ]
+
+    # Energy - Big Oil
+    # universe = [
+    #     'XOM', 'CVX', 'COP', 'SLB', 'EOG', 
+    #     'MPC', 'VLO', 'OXY', 'HAL', 'DVN', 'FANG'
+    # ]
+
+    # Consumer Staples
+    # universe = [
+    #     'PG', 'KO', 'PEP', 'COST', 'WMT', 
+    #     'TGT', 'PM', 'MO', 'CL', 'KMB'
+    # ]
+     
+    # Utilities
     universe = [
-        'INTC', 'AMD', 'NVDA', 'TXN', 'QCOM', 
-        'MU', 'AMAT', 'LRCX', 'ASML', 'AVGO',
-        'TSM', 'NXPI', 'MRVL', 'ADI', 'KLAC'
+        'NEE', 'DUK', 'SO', 'AEP', 'D', 
+        'EXC', 'PCG', 'XEL', 'ED', 'WEC'
     ]
+    
+    # 2. Fetch and Split
     df = fetch_data(universe, start_date, end_date)
+    split_idx = int(len(df) * 0.8)
+    df_train = df.iloc[:split_idx]
+    df_test = df.iloc[split_idx:]
+
+    # Capture Date Ranges for the Config
+    train_dates = (df_train.index[0].strftime('%Y-%m-%d'), df_train.index[-1].strftime('%Y-%m-%d'))
+    test_dates = (df_test.index[0].strftime('%Y-%m-%d'), df_test.index[-1].strftime('%Y-%m-%d'))
+    
+    print(f"[*] Train Period: {train_dates[0]} to {train_dates[1]}")
+    print(f"[*] Test Period:  {test_dates[0]} to {test_dates[1]}")
     
     combos = list(combinations(df.columns, 3))
-    print(f"[*] Brute-forcing {len(combos)} baskets")
+    print(f"[*] Brute-forcing {len(combos)} baskets...")
 
     results_list = []
     for i, combo in enumerate(combos):
-        if i % 10 == 0: print(f"    Searching... {i}/{len(combos)}")
-        res = test_basket(df, combo)
-        if res: results_list.append(res)
-
-    if results_list:
-        # Sort by the hybrid rank score
-        best = max(results_list, key=lambda x: x['rank_score'])
+        if i % 50 == 0: print(f"    Searching... {i}/{len(combos)}")
         
-        print("\n" + "🚀" * 20)
-        print(f"OPTIMAL CONFIGURATION FOUND")
-        print(f"BASKET: {best['tickers']}")
-        print(f"ENTRY Z: {best['entry_z']} | EXIT Z: {best['exit_z']}")
-        print(f"SHARPE: {best['sharpe']} | HALF-LIFE: {best['half_life']:.2f}")
-        print(f"P: {best['p_value']:.6f}")
-        print("🚀" * 20)
+        # 1. Train the basket
+        train_res = test_basket(df_train, combo)
+        
+        if train_res:
+            # 2. Validate with Out-of-Sample data
+            oos_metrics = validate_oos_advanced(df_test, train_res)
+            
+            if oos_metrics['is_robust']:
+                # 3. CRITICAL: Map the keys correctly for the export function
+                export_data = {
+                    "tickers": train_res['tickers'],
+                    "weights": train_res['weights'],
+                    "train_p": train_res['p_value'],      # Renaming for export
+                    "train_hl": train_res['half_life'],   # Renaming for export
+                    "train_sharpe": train_res['sharpe'],
+                    "oos_p": oos_metrics['oos_p'],
+                    "oos_hl": oos_metrics['oos_hl'],
+                    "entry_z": train_res['entry_z'],
+                    "exit_z": train_res['exit_z']
+                }
+                results_list.append(export_data)
 
-        config = {
-            "basket_id": f"grid_opt_{datetime.now().strftime('%Y%m%d')}",
-            "window_size": int(max(round(best['half_life'] * 2.0), 20)),
-            "entry_z_score": best['entry_z'],
-            "exit_z_score": best['exit_z'],
-            "components": best['weights']
-        }
-
-        with open('basket_config.json', 'w') as f:
-            json.dump(config, f, indent=4)
-        print("\n[!] Config saved.")
+    # 4. Final Export
+    if results_list:
+        export_robust_configs(results_list, train_dates, test_dates)
+        # Optional: Print the top survivor
+        best_oos = min(results_list, key=lambda x: x['oos_p'])
+        print(f"\n🚀 BEST ROBUST BASKET: {best_oos['tickers']} (OOS P: {best_oos['oos_p']:.6f})")
     else:
-        print("\n[!] No profitable stationary baskets found.")
+        print("\n[!] No baskets survived the stability tests.")
 
 if __name__ == "__main__":
     main()
