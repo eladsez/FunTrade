@@ -38,6 +38,8 @@ private:
     const char* sideToString(Side side);
     const char* orderTypeToString(OrderType type);
     const char* timeInForceToString(TimeInForce tif);
+    std::string generateClientOrderId(const std::string& prefix);
+
     void onWebSocketMessage(const std::string& payload);
 };
 
