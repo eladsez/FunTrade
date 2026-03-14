@@ -31,7 +31,7 @@ protected:
             GTEST_SKIP() << "Skipping tests: APCA_API_KEY_ID or APCA_API_SECRET_KEY not found in environment.";
         }
 
-        eventBus = std::make_shared<EventBus>();
+        eventBus = std::make_shared<EventBus>(nullptr);
         engine = std::make_unique<AlpacaExecutionEngine>(eventBus, apiKey, apiSecret);
 
         eventBus->start();

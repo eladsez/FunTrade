@@ -18,6 +18,7 @@ public:
 private:
     std::shared_ptr<IEventBus> eventBus;
     std::string symbol_;
+    uint64_t sub_id_;
 };
 
 } // namespace bot

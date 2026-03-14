@@ -11,7 +11,7 @@ MarketEventPrinter::MarketEventPrinter(std::shared_ptr<IEventBus> bus, const std
 void MarketEventPrinter::start() {
     LOG_INFO("[MarketEventPrinter] Strategy started");
 
-    eventBus->subscribeToMarketEvents(symbol_, [this](const MarketEvent& event) {
+    sub_id_ = eventBus->subscribeToMarketEvents(symbol_, [this](const MarketEvent& event) {
         this->onMarketEvent(event);
     });
 }
@@ -105,6 +105,7 @@ void MarketEventPrinter::onMarketEvent(const MarketEvent& event) {
 }
 
 void MarketEventPrinter::stop() {
+    eventBus->unsubscribeFromMarketEvents(symbol_, sub_id_);
     LOG_INFO("[MarketEventPrinter] Strategy stopped.");
 }
 

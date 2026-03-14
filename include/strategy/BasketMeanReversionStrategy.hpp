@@ -18,7 +18,6 @@ class BasketMeanReversionStrategy : public IStrategy {
 public:
     BasketMeanReversionStrategy(
         std::shared_ptr<IEventBus> eventBus,
-        std::shared_ptr<IDataFeed> dataFeed,
         std::shared_ptr<IExecutionEngine> executionEngine,
         const std::string& configFilePath);
 
@@ -36,7 +35,6 @@ private:
     void executeBasket(PositionState targetState);
 
     std::shared_ptr<IEventBus> event_bus_;
-    std::shared_ptr<IDataFeed> data_feed_;
     std::shared_ptr<IExecutionEngine> exec_engine_;
     
     std::string config_path_;

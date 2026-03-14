@@ -5,9 +5,8 @@
 
 namespace bot {
 
-AlpacaRtDataFeed::AlpacaRtDataFeed(std::shared_ptr<IEventBus> eventBus, std::string apiKey, std::string apiSecret)
-    : eventBus_(std::move(eventBus)), apiKey_(std::move(apiKey)), 
-    apiSecret_(std::move(apiSecret)) {
+AlpacaRtDataFeed::AlpacaRtDataFeed(std::string apiKey, std::string apiSecret)
+    :apiKey_(std::move(apiKey)), apiSecret_(std::move(apiSecret)), stopBatcher_(false) {
 
     infra_ = std::make_unique<AlpacaInfra>(apiKey_, apiSecret_);
     
@@ -19,15 +18,23 @@ AlpacaRtDataFeed::AlpacaRtDataFeed(std::shared_ptr<IEventBus> eventBus, std::str
     if (!connectToInfra()){
         throw std::runtime_error("[AlpacaRtDataFeed] Failed connecting to Infra");
     }
+
+    // Launch the background batching thread
+    batchThread_ = std::thread(&AlpacaRtDataFeed::batcherLoop, this);
 }
 
 AlpacaRtDataFeed::~AlpacaRtDataFeed() {
+    stopBatcher_ = true;
+    batchCv_.notify_all();
+    if (batchThread_.joinable()) {
+        batchThread_.join();
+    }
     disconnectFromInfra();
 }
 
 bool AlpacaRtDataFeed::connectToInfra() {
     // Blocks until network connection AND Alpaca authentication are successful
-    bool success = infra_->connectWs("stream.data.alpaca.markets", "/v2/iex", WsType::DATA);
+    bool success = infra_->connectWs("stream.data.alpaca.markets", "/v1beta3/crypto/us", WsType::DATA);
     if (!success) {
         LOG_ERROR("[AlpacaRtDataFeed] Failed to connect and authenticate.");
     }
@@ -38,16 +45,49 @@ void AlpacaRtDataFeed::disconnectFromInfra() {
     infra_->disconnectWs();
 }
 
+void AlpacaRtDataFeed::setMarketTickCallback(std::function<void(const MarketEvent&)> callback) {
+    tickCallback_ = std::move(callback);
+}
+
 void AlpacaRtDataFeed::subscribeToSymbol(const std::string& symbol) {
-    nlohmann::json subPayload = {
-        {"action", "subscribe"},
-        {"trades", {symbol}},
-        {"quotes", {symbol}},
-        {"orderbooks", {symbol}}
-    };
+    std::lock_guard<std::mutex> lock(batchMutex_);
+    // If we are already streaming this symbol, do nothing!
+    if (activeSubscriptions_.find(symbol) != activeSubscriptions_.end()) {
+        return;
+    }
+
+    // Otherwise, mark it as active and queue it for the next network batch
+    activeSubscriptions_.insert(symbol);
+    pendingSubscriptions_.insert(symbol);
+    batchCv_.notify_one();
+}
+
+void AlpacaRtDataFeed::unsubscribeFromSymbol(const std::string& symbol) {
+    std::lock_guard<std::mutex> lock(batchMutex_);
     
-    LOG_INFO("[AlpacaRtDataFeed] Subscribing to {}", symbol);
-    infra_->sendWsMessage(subPayload.dump());
+    // If we aren't actively tracking this as a subscription, do nothing
+    if (activeSubscriptions_.find(symbol) == activeSubscriptions_.end()) {
+        return;
+    }
+
+    // Remove it from our active state
+    activeSubscriptions_.erase(symbol);
+
+    // Edge case: If it was queued to be subscribed in the NEXT batch, just cancel it
+    if (pendingSubscriptions_.erase(symbol) > 0) {
+        // If the pending queue is now empty and there are no unsubs, we could technically skip notifying,
+        // but notifying is harmless.
+    } else {
+        // Otherwise, it's a live stream that needs an explicit network unsubscribe
+        pendingUnsubscriptions_.insert(symbol);
+    }
+    
+    batchCv_.notify_one();
+}
+
+std::vector<std::string> AlpacaRtDataFeed::getActiveSubscriptions() const {
+    std::lock_guard<std::mutex> lock(batchMutex_); // Protect access if needed
+    return std::vector<std::string>(activeSubscriptions_.begin(), activeSubscriptions_.end());
 }
 
 void AlpacaRtDataFeed::onWebSocketMessage(const std::string& payload) {
@@ -123,7 +163,6 @@ void AlpacaRtDataFeed::parseTradeUpdate(const nlohmann::json& data) {
         TradeTick tick; 
         
         std::string rawSymbol = data.at("S").get<std::string>();
-        rawSymbol.erase(std::remove(rawSymbol.begin(), rawSymbol.end(), '/'), rawSymbol.end());
         tick.symbol = rawSymbol;
         tick.price = data.at("p").get<double>();
         tick.volume = data.at("s").get<double>();
@@ -144,8 +183,8 @@ void AlpacaRtDataFeed::parseTradeUpdate(const nlohmann::json& data) {
             }
         }
 
-        if (eventBus_) {
-            eventBus_->publishMarketEvent(tick); 
+        if (tickCallback_) {
+            tickCallback_(tick);
         }
     } catch (const std::exception& e) {
         LOG_ERROR("[AlpacaRtDataFeed] Error parsing trade: {}", e.what());
@@ -158,7 +197,6 @@ void AlpacaRtDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
         QuoteTick tick; 
         
         std::string rawSymbol = data.at("S").get<std::string>();
-        rawSymbol.erase(std::remove(rawSymbol.begin(), rawSymbol.end(), '/'), rawSymbol.end());
         tick.symbol = rawSymbol;
         
         tick.ask_price = data.at("ap").get<double>();
@@ -177,8 +215,8 @@ void AlpacaRtDataFeed::parseQuoteUpdate(const nlohmann::json& data) {
             }
         }
 
-        if (eventBus_) {
-            eventBus_->publishMarketEvent(tick);
+        if (tickCallback_) {
+            tickCallback_(tick);
         }
     } catch (const std::exception& e) {
         LOG_ERROR("[AlpacaRtDataFeed] Error parsing quote: {}", e.what());
@@ -191,7 +229,6 @@ void AlpacaRtDataFeed::parseOrderBookUpdate(const nlohmann::json& data) {
         OrderBookUpdate update; // Changed from MarketTick
         
         std::string rawSymbol = data.at("S").get<std::string>();
-        rawSymbol.erase(std::remove(rawSymbol.begin(), rawSymbol.end(), '/'), rawSymbol.end());
         update.symbol = rawSymbol;
         
         // Parse the timestamp string to epoch milliseconds
@@ -220,8 +257,8 @@ void AlpacaRtDataFeed::parseOrderBookUpdate(const nlohmann::json& data) {
             });
         }
 
-        if (eventBus_) {
-            eventBus_->publishMarketEvent(update);
+        if (tickCallback_) {
+            tickCallback_(update);
         }
     } catch (const std::exception& e) {
         LOG_ERROR("[AlpacaRtDataFeed] Error parsing orderbook: {}", e.what());
@@ -314,6 +351,62 @@ std::vector<HistoricalBar> AlpacaRtDataFeed::fetchHistoricalBars(
     }
 
     return bars;
+}
+
+void AlpacaRtDataFeed::batcherLoop() {
+    while (!stopBatcher_) {
+        std::unique_lock<std::mutex> lock(batchMutex_);
+        
+        // Wait until there is EITHER a pending sub or a pending unsub
+        batchCv_.wait(lock, [this]{ 
+            return !pendingSubscriptions_.empty() || !pendingUnsubscriptions_.empty() || stopBatcher_; 
+        });
+
+        if (stopBatcher_) break;
+
+        bool flushed = false;
+        while (!flushed && !stopBatcher_) {
+            auto status = batchCv_.wait_for(lock, std::chrono::milliseconds(100));
+            
+            if (status == std::cv_status::timeout) {
+                // Timer expired. Capture both queues.
+                std::vector<std::string> subs(pendingSubscriptions_.begin(), pendingSubscriptions_.end());
+                std::vector<std::string> unsubs(pendingUnsubscriptions_.begin(), pendingUnsubscriptions_.end());
+                
+                pendingSubscriptions_.clear();
+                pendingUnsubscriptions_.clear();
+                
+                // Unlock early!
+                lock.unlock();
+
+                // Process batch subscriptions
+                if (!subs.empty()) {
+                    nlohmann::json subPayload = {
+                        {"action", "subscribe"},
+                        {"trades", subs},
+                        {"quotes", subs},
+                        {"orderbooks", subs}
+                    };
+                    LOG_INFO("[AlpacaRtDataFeed] Batch Subscribing to {} symbols", subs.size());
+                    infra_->sendWsMessage(subPayload.dump());
+                }
+
+                // Process batch unsubscriptions
+                if (!unsubs.empty()) {
+                    nlohmann::json unsubPayload = {
+                        {"action", "unsubscribe"},
+                        {"trades", unsubs},
+                        {"quotes", unsubs},
+                        {"orderbooks", unsubs}
+                    };
+                    LOG_INFO("[AlpacaRtDataFeed] Batch Unsubscribing from {} symbols", unsubs.size());
+                    infra_->sendWsMessage(unsubPayload.dump());
+                }
+                
+                flushed = true;
+            }
+        }
+    }
 }
 
 } // namespace bot

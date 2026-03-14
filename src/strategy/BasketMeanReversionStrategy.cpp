@@ -11,11 +11,9 @@ namespace bot {
 
 BasketMeanReversionStrategy::BasketMeanReversionStrategy(
     std::shared_ptr<IEventBus> eventBus,
-    std::shared_ptr<IDataFeed> dataFeed,
     std::shared_ptr<IExecutionEngine> executionEngine,
     const std::string& configFilePath)
     : event_bus_(std::move(eventBus)),
-      data_feed_(std::move(dataFeed)),
       exec_engine_(std::move(executionEngine)),
       config_path_(configFilePath) {}
 
@@ -26,7 +24,6 @@ void BasketMeanReversionStrategy::start() {
     // Subscribe to real-time events for our basket components
     const auto& symbols = basket_state_->getSymbols();
     for (const auto& sym : symbols) {
-        data_feed_->subscribeToSymbol(sym);
         event_bus_->subscribeToMarketEvents(
             sym, 
             [this](const MarketEvent& e) { this->onMarketEvent(e); }
@@ -99,7 +96,7 @@ void BasketMeanReversionStrategy::warmUp() {
     size_t min_bars = std::numeric_limits<size_t>::max();
 
     for (size_t i = 0; i < num_components; ++i) {
-        all_bars[i] = data_feed_->fetchHistoricalBars(symbols[i], start_time, end_time, "1Day");
+        all_bars[i] = event_bus_->fetchHistoricalBars(symbols[i], start_time, end_time, "1Day");
         if (all_bars[i].size() < min_bars) {
             min_bars = all_bars[i].size();
         }

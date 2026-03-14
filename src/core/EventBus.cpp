@@ -2,7 +2,13 @@
 #include <core/Logger.hpp>
 #include <chrono>
 
-EventBus::EventBus() {
+EventBus::EventBus(std::shared_ptr<IDataFeed> dataFeed) : dataFeed_(std::move(dataFeed)) {
+    // If a data feed is provided, wire its output directly to our lock-free queue
+    if (dataFeed_) {
+        dataFeed_->setMarketTickCallback([this](const MarketEvent& tick) {
+            this->publishMarketEvent(tick);
+        });
+    }
     start();
 }
 
@@ -26,10 +32,38 @@ void EventBus::stop() {
     LOG_INFO("[EventBus] Background dispatcher thread stopped.");
 }
 
-void EventBus::subscribeToMarketEvents(const std::string& symbol, MarketEventCallback callback) {
+uint64_t EventBus::subscribeToMarketEvents(const std::string& symbol, MarketEventCallback callback) {
     std::lock_guard<std::mutex> lock(subMtx);
-    marketEventSubscribers.push_back({symbol, callback});
-    LOG_INFO("[EventBus] Subscribed to tick: {}", symbol);
+    uint64_t subId = nextMarketSubId++;
+
+    // If this is the very first listener for this symbol, notify the DataFeed
+    if (marketEventSubscribers.find(symbol) == marketEventSubscribers.end() || 
+        marketEventSubscribers[symbol].empty()) {
+        if (dataFeed_) {
+            dataFeed_->subscribeToSymbol(symbol);
+        }
+    }
+
+    marketEventSubscribers[symbol][subId] = std::move(callback);
+    LOG_INFO("[EventBus] Subscribed to tick: {} (ID: {})", symbol, subId);
+    return subId;
+}
+
+void EventBus::unsubscribeFromMarketEvents(const std::string& symbol, uint64_t subId) {
+    std::lock_guard<std::mutex> lock(subMtx);
+    
+    auto it = marketEventSubscribers.find(symbol);
+    if (it != marketEventSubscribers.end()) {
+        it->second.erase(subId);
+        
+        // If no one is listening to this symbol anymore, tell the DataFeed to unsubscribe
+        if (it->second.empty()) {
+            if (dataFeed_) {
+                dataFeed_->unsubscribeFromSymbol(symbol);
+            }
+            marketEventSubscribers.erase(it);
+        }
+    }
 }
 
 void EventBus::publishMarketEvent(const MarketEvent& event) {
@@ -37,10 +71,17 @@ void EventBus::publishMarketEvent(const MarketEvent& event) {
     queue.enqueue(event);
 }
 
-void EventBus::subscribeToExecution(ExecutionCallback callback) {
+uint64_t EventBus::subscribeToExecution(ExecutionCallback callback) {
     std::lock_guard<std::mutex> lock(subMtx);
-    executionSubscribers.push_back(callback);
-    LOG_INFO("[EventBus] Subscribed to execution reports");
+    uint64_t subId = nextExecSubId++;
+    executionSubscribers[subId] = std::move(callback);
+    LOG_INFO("[EventBus] Subscribed to execution reports (ID: {})", subId);
+    return subId;
+}
+
+void EventBus::unsubscribeFromExecution(uint64_t subId) {
+    std::lock_guard<std::mutex> lock(subMtx);
+    executionSubscribers.erase(subId);
 }
 
 void EventBus::publishExecution(const ExecutionReport& report) {
@@ -48,30 +89,37 @@ void EventBus::publishExecution(const ExecutionReport& report) {
 }
 
 void EventBus::dispatchEvent(const Event& event) {
-    // 1. Snapshot the subscribers quickly under the lock to prevent deadlocks
-    std::vector<std::pair<std::string, MarketEventCallback>> localMarketSubs;
-    std::vector<ExecutionCallback> localExecSubs;
-    {
-        std::lock_guard<std::mutex> lock(subMtx);
-        localMarketSubs = marketEventSubscribers;
-        localExecSubs = executionSubscribers;
-    }
-
-    // 2. Safely execute the callbacks using the local copies
     std::visit([&](auto&& arg) {
         using T = std::decay_t<decltype(arg)>;
         
         if constexpr (std::is_same_v<T, MarketEvent>) {
+            // Safely extract the symbol from the variant
             std::string symbol = std::visit([](auto&& e) { return e.symbol; }, arg);
-            for (const auto& sub : localMarketSubs) {
-                if (sub.first == symbol) {
-                    sub.second(arg);
+            
+            // Snapshot ONLY the specific symbol's inner map to keep the lock ultra-fast
+            std::unordered_map<uint64_t, MarketEventCallback> localCallbacks;
+            {
+                std::lock_guard<std::mutex> lock(subMtx);
+                auto it = marketEventSubscribers.find(symbol);
+                if (it != marketEventSubscribers.end()) {
+                    localCallbacks = it->second;
                 }
+            }
+
+            // Execute the callbacks safely outside the lock
+            for (const auto& [id, callback] : localCallbacks) {
+                callback(arg);
             }
         } 
         else if constexpr (std::is_same_v<T, ExecutionReport>) {
-            for (const auto& sub : localExecSubs) {
-                sub(arg);
+            std::unordered_map<uint64_t, ExecutionCallback> localExecSubs;
+            {
+                std::lock_guard<std::mutex> lock(subMtx);
+                localExecSubs = executionSubscribers;
+            }
+
+            for (const auto& [id, callback] : localExecSubs) {
+                callback(arg);
             }
         }
     }, event);
@@ -94,4 +142,19 @@ void EventBus::processEvents() {
     while (queue.try_dequeue(event)) {
         dispatchEvent(event);
     }
+}
+
+std::vector<HistoricalBar> EventBus::fetchHistoricalBars(
+    const std::string& symbol, 
+    const std::string& start, 
+    const std::string& end, 
+    const std::string& timeframe) {
+    
+    // Safety check: Ensure the data feed is actually wired up
+    if (dataFeed_) {
+        return dataFeed_->fetchHistoricalBars(symbol, start, end, timeframe);
+    }
+    
+    LOG_ERROR("[EventBus] Cannot fetch historical bars for {}: No DataFeed attached!", symbol);
+    return {}; // Return an empty vector if there is no feed
 }

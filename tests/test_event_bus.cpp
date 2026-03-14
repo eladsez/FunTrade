@@ -8,7 +8,7 @@ protected:
     std::unique_ptr<EventBus> eventBus;
 
     void SetUp() override {
-        eventBus = std::make_unique<EventBus>();
+        eventBus = std::make_unique<EventBus>(nullptr);
     }
 
     void TearDown() override {}

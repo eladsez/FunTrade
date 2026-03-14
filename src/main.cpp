@@ -13,6 +13,8 @@
 #include <execution/AlpacaExecutionEngine.hpp>
 #include <risk/PortfolioManager.hpp>
 #include <execution/OrderManager.hpp>
+#include <strategy/MarketEventPrinter.hpp>
+#include <iostream>
 
 using namespace bot;
 
@@ -32,18 +34,10 @@ void setupSignalHandlers() {
 int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
     
-    auto eventBus = std::make_shared<EventBus>();
-
-    // =========================================================================
-    // INFRASTRUCTURE INJECTION
-    // =========================================================================
-
+    auto dataFeed = std::make_shared<AlpacaRtDataFeed>(apiKey, apiSecret);
+    auto eventBus = std::make_shared<EventBus>(dataFeed);
     auto executionEngine = std::make_shared<AlpacaExecutionEngine>(eventBus, apiKey, apiSecret);
-    auto dataFeed = std::make_shared<AlpacaRtDataFeed>(eventBus, apiKey, apiSecret);
 
-    // =========================================================================
-    // DOMAIN WIRING
-    // =========================================================================
 
     auto portfolioValue = executionEngine->getPortfolioValue();
     double initPv = 100000.0;
@@ -52,10 +46,17 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
         LOG_INFO("[LIVE] Current Portfolio Value: ${}", initPv);
     }
 
-    std::string symbol = "NVDA";
-    LOG_INFO("[LIVE] Subscribing to {} market data stream...", symbol);
-    
-    dataFeed->subscribeToSymbol(symbol);
+    auto eth_printer = std::make_shared<MarketEventPrinter>(eventBus, "ETH/USD");
+    auto btc_printer = std::make_shared<MarketEventPrinter>(eventBus, "BTC/USD");
+
+    eth_printer->start();
+    btc_printer->start();
+
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+
+    eth_printer->stop();
+    std::this_thread::sleep_for(std::chrono::seconds(60));
+    eth_printer->start();    
 
     LOG_INFO("[LIVE] Bot is running. Press Ctrl+C to stop.");
     
@@ -63,6 +64,9 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     while (!g_shutdown_requested.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+
+    btc_printer->stop();
+    eth_printer->stop();
 
     LOG_INFO("[LIVE] Shutdown complete.");
     return 0;

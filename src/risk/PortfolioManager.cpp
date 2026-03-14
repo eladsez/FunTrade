@@ -146,7 +146,6 @@ void PortfolioManager::syncWithExchange(IExecutionEngine& engine) {
         for (const auto& posJson : positionsJson) {
             try {
                 std::string symbol = posJson.value("symbol", "");
-                symbol.erase(std::remove(symbol.begin(), symbol.end(), '/'), symbol.end());
                 
                 Position pos;
                 pos.symbol = symbol;
