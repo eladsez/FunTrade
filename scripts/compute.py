@@ -160,10 +160,10 @@ def test_basket(df, combo, cost_per_trade=0.001):
     except Exception as e: 
         return None
 
-def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.002):
+def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.001):
     """
     Simulates OOS performance using Log Prices and counts the number of trades.
-    Disqualifies baskets that rely on a single lucky anomaly.
+    Uses a fully vectorized state machine to match the speed of the grid search.
     """
     tickers = train_res['tickers']
     weights = train_res['weights']
@@ -183,26 +183,30 @@ def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.002):
     if len(z_spread) < 20: 
         return {"is_robust": False}
 
-    # 3. Trading simulation
-    pos = pd.Series(0, index=z_spread.index)
-    current_pos = 0
+    # 3. Vectorized State Machine
+    z_vals = z_spread.values
     
-    for i in range(len(z_spread)):
-        z = z_spread.iloc[i]
-        if current_pos == 0:
-            if z > entry_z: current_pos = -1
-            elif z < -entry_z: current_pos = 1
-        elif current_pos == -1: 
-            if z <= exit_z: current_pos = 0
-        elif current_pos == 1:  
-            if z >= -exit_z: current_pos = 0
-            
-        pos.iloc[i] = current_pos
+    # --- Short Side Logic ---
+    short_pos = np.full(len(z_vals), np.nan)
+    short_pos[z_vals > entry_z] = -1.0         # Trigger Short entry
+    short_pos[z_vals <= exit_z] = 0.0          # Trigger Short exit
+    short_series = pd.Series(short_pos, index=z_spread.index).ffill().fillna(0.0)
 
-    # 4. Count Trades to prevent the "1 lucky trade" illusion
-    # A position change from 0 to 1, or 1 to 0, counts as 1 trade action.
-    # Two actions = roughly one round-trip trade.
-    trade_actions = pos.diff().abs().fillna(0)
+    # --- Long Side Logic ---
+    long_pos = np.full(len(z_vals), np.nan)
+    long_pos[z_vals < -entry_z] = 1.0          # Trigger Long entry
+    long_pos[z_vals >= -exit_z] = 0.0          # Trigger Long exit
+    long_series = pd.Series(long_pos, index=z_spread.index).ffill().fillna(0.0)
+
+    # --- Combine and Prevent Look-Ahead Bias ---
+    combined_pos = short_series + long_series
+    
+    # Shift position by 1: Trade tomorrow based on today's closing signal
+    actual_pos = combined_pos.shift(1).fillna(0.0)
+
+    # 4. Count Trades and Calculate Net PnL
+    # A change in position equals a trade action
+    trade_actions = actual_pos.diff().abs().fillna(0.0)
     total_trade_actions = trade_actions[trade_actions > 0].count()
     round_trip_trades = int(total_trade_actions / 2)
 
@@ -210,16 +214,17 @@ def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.002):
     if round_trip_trades < 4:
         return {"is_robust": False}
 
-    # 5. Calculate returns and transaction costs
-    # Since we are using log prices, spread_diff is approx the percentage return
-    log_return = oos_spread.loc[z_spread.index].diff().shift(-1)
-    raw_pnl = pos * log_return
+    # Calculate returns (using standard diff on the log spread)
+    log_returns = oos_spread.diff().loc[z_spread.index].fillna(0.0)
+    
+    # Multiply shifted position by today's return
+    raw_pnl = actual_pos * log_returns
     
     # Subtract flat percentage cost on every trade action
     transaction_costs = trade_actions * cost_per_trade
     net_pnl = raw_pnl - transaction_costs
     
-    # 6. OOS Performance Metrics
+    # 5. OOS Performance Metrics
     oos_sharpe = np.sqrt(252) * (net_pnl.mean() / net_pnl.std()) if net_pnl.std() > 0 else 0
     oos_p_val = adfuller(oos_spread)[1]
     
@@ -371,7 +376,7 @@ def run_over_universe(universe):
 
 
 def main():
-    universes = load_sector_universe("./s&p500.json")
+    universes = load_sector_universe("./sectors_symbols.json")
 
     for sector, symbols in universes.items():
         print(f"====== Running on {sector} sector ====== ")
