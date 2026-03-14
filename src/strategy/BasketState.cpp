@@ -1,4 +1,5 @@
 #include <strategy/BasketState.hpp>
+#include <cmath>
 
 namespace bot {
 
@@ -55,7 +56,7 @@ bool BasketState::arePricesSynchronized() const {
 double BasketState::calculateCurrentSpread() const {
     double spread = 0.0;
     for (size_t i = 0; i < num_components_; ++i) {
-        spread += current_prices_[i] * weights_[i];
+        spread += std::log(current_prices_[i]) * weights_[i];
     }
     return spread;
 }

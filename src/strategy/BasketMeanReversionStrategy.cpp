@@ -43,20 +43,21 @@ void BasketMeanReversionStrategy::loadConfig() {
     nlohmann::json config;
     file >> config;
 
-    int window_size = config["window_size"];
-    entry_z_score_ = config["entry_z_score"];
-    exit_z_score_ = config["exit_z_score"];
+    // Parse nested structure from the Python export
+    int window_size = config["trading_params"]["window_size"];
+    entry_z_score_ = config["trading_params"]["entry_z"];
+    exit_z_score_ = config["trading_params"]["exit_z"];
 
     std::vector<std::string> symbols;
     std::vector<double> weights;
 
-    auto components = config["components"];
-    for (auto it = components.begin(); it != components.end(); ++it) {
-        symbols.push_back(it.key());
-        weights.push_back(it.value());
+    // The python script exports arrays and dicts for tickers and weights
+    for (const auto& ticker : config["tickers"]) {
+        std::string sym = ticker.get<std::string>();
+        symbols.push_back(sym);
+        weights.push_back(config["weights"][sym].get<double>());
         
-        // Pre-allocate order IDs to avoid allocation during execution
-        client_order_ids_.push_back("BMR_" + it.key());
+        client_order_ids_.push_back(config["basket_id"].get<std::string>() + "_" + sym);
     }
 
     basket_state_ = std::make_unique<BasketState>(window_size, symbols, weights);
