@@ -77,6 +77,30 @@ def calculate_half_life(spread):
     lam = model.params.iloc[1]
     return -np.log(2) / lam if lam < 0 else np.inf
 
+def calculate_hurst(ts, max_lag=20):
+    """
+    Calculates the Hurst Exponent using variance of lagged differences.
+    Returns a value between 0 and 1.
+    < 0.5 means mean-reverting.
+    """
+    # Ensure it's a clean numpy array
+    ts = np.asarray(ts)
+    ts = ts[~np.isnan(ts)]
+    
+    # We need enough data to calculate lags
+    if len(ts) < max_lag * 2:
+        return 0.5 
+        
+    lags = range(2, max_lag)
+    
+    # Calculate the variance of the lagged differences
+    tau = [np.var(np.subtract(ts[lag:], ts[:-lag])) for lag in lags]
+    
+    # Linear fit: log(variance) vs log(lags)
+    # The slope is 2H, so H = slope / 2.0
+    poly = np.polyfit(np.log(lags), np.log(tau), 1)
+    return poly[0] / 2.0
+
 def find_best_params(spread, window_size, cost_per_trade=0.002):
     """ 
     Grid Search: Entry Z vs Exit Z using ROLLING statistics.
@@ -192,9 +216,13 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
         
         p_val = adfuller(spread)[1]
         hl = calculate_half_life(spread)
+        hurst_exp = calculate_hurst(spread)
 
-        # Gatekeeper
-        if p_val > 0.05 or not (2 <= hl <= 60): 
+        # STRICT GATEKEEPER:
+        # 1. ADF P-Value must be < 0.05 (Stationary)
+        # 2. Half-life must be between 2 and 60 days
+        # 3. Hurst must be < 0.45 (Strong Mean Reversion)
+        if p_val > 0.05 or not (2 <= hl <= 60) or hurst_exp >= 0.45: 
             return None
 
         window_size = int(max(round(hl * 2), 20))
@@ -210,6 +238,7 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
             "tickers": combo, 
             "weights": weights, 
             "beta": round(beta, 3),
+            "hurst": round(hurst_exp, 3),
             "p_value": p_val,
             "half_life": hl, 
             "entry_z": entry_z, 
@@ -220,7 +249,7 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
     except Exception as e: 
         return None
 
-def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.001):
+def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.002):
     """
     Simulates OOS performance using Log Prices and counts the number of trades.
     Uses a fully vectorized state machine to match the speed of the grid search.
