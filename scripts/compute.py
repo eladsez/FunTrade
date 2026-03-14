@@ -9,14 +9,24 @@ from datetime import datetime, timedelta
 import json
 import warnings
 import os
+from joblib import Parallel, delayed # For parallel processing
 
 warnings.filterwarnings("ignore")
 
 
 def fetch_data(tickers, start_date, end_date):
     print(f"[*] Downloading {len(tickers)} tickers...")
-    data = yf.download(tickers, start=start_date, end=end_date)['Close']
-    return data.dropna()
+    data = yf.download(tickers, start=start_date, end=end_date, threads=True)['Close']
+    
+    # Drop columns (tickers) that have more than 10% missing data
+    threshold = len(data) * 0.9
+    data = data.dropna(thresh=threshold, axis=1)
+    
+    # Now drop remaining rows with NaNs (holidays, etc.)
+    clean_data = data.dropna()
+    
+    print(f"[*] Proceeding with {len(clean_data.columns)} valid tickers.")
+    return clean_data
 
 def calculate_half_life(spread):
     spread_lag = spread.shift(1).dropna()
@@ -294,6 +304,12 @@ def run_over_universe(universe):
         return
 
     split_idx = int(len(df) * 0.8)
+
+    # Ensure the split actually leaves data in both sets
+    if split_idx < 20 or (len(df) - split_idx) < 20:
+        print(f"[!] Skipping sector: Insufficient data points for a 80/20 split.")
+        return
+
     df_train = df.iloc[:split_idx]
     df_test = df.iloc[split_idx:]
 
@@ -347,7 +363,7 @@ def main():
     universes = load_sector_universe("./s&p500.json")
 
     for sector, symbols in universes.items():
-        print(f"[*] Running on {sector} sector")
+        print(f"====== Running on {sector} sector ====== ")
         run_over_universe(symbols)
 
 if __name__ == "__main__":
