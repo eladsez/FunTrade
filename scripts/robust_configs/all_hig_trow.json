@@ -1,0 +1,35 @@
+{
+    "basket_id": "all_hig_trow",
+    "tickers": [
+        "ALL",
+        "HIG",
+        "TROW"
+    ],
+    "weights": {
+        "ALL": 1.0,
+        "HIG": -0.922,
+        "TROW": 0.0842
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.008441,
+        "oos_p": 0.025567,
+        "train_hl": 33.54,
+        "oos_sharpe": 2.36
+    },
+    "trading_params": {
+        "window_size": 67,
+        "entry_z": 1.5,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-14 17:27:45"
+}

@@ -189,10 +189,34 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
         # and proportional capital allocation.
         log_df = np.log(subset_df)
         
+        # Individual Stationarity Check (The I(1) Rule)
+        # Cointegration implies a linear combination of NON-stationary 
+        # time series is stationary. If an individual leg is already 
+        # stationary, the Johansen test results are invalid.
+        for ticker in combo:
+            ind_p_val = adfuller(log_df[ticker])[1]
+            # If p-value < 0.05, the individual stock is stationary. Reject basket.
+            if ind_p_val < 0.05:
+                return None
+        
         # Run Johansen on the log prices
         joh_res = coint_johansen(log_df.values, 0, 1)
         raw_weights = joh_res.evec[:, 0]
+
+        # Normalize weights so the first asset always has a weight of 1.0
         weights = {combo[i]: round(raw_weights[i]/raw_weights[0], 4) for i in range(len(combo))}
+
+        # Weight Explosion Sanity Check
+        # Prevent mathematically sound but practically untradeable allocations.
+        # Calculate the absolute total weight (representing total capital required)
+        total_abs_weight = sum(abs(w) for w in weights.values())
+        # Define the maximum allowed concentration (e.g., 60% of total capital)
+        max_concentration = 0.60
+        for ticker, w in weights.items():
+            concentration = abs(w) / total_abs_weight
+            if concentration > max_concentration:
+                # Reject if any single leg dominates the portfolio risk
+                return None
         
         # Spread is now a log-spread
         spread = sum(log_df[t] * weights[t] for t in combo)

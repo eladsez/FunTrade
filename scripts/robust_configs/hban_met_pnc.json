@@ -1,0 +1,35 @@
+{
+    "basket_id": "hban_met_pnc",
+    "tickers": [
+        "HBAN",
+        "MET",
+        "PNC"
+    ],
+    "weights": {
+        "HBAN": 1.0,
+        "MET": -0.3675,
+        "PNC": -0.6303
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000572,
+        "oos_p": 0.002211,
+        "train_hl": 18.17,
+        "oos_sharpe": 1.735
+    },
+    "trading_params": {
+        "window_size": 36,
+        "entry_z": 2.5,
+        "exit_z": 0.25
+    },
+    "exported_at": "2026-03-14 17:27:45"
+}

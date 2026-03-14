@@ -1,0 +1,35 @@
+{
+    "basket_id": "aig_eg_ma",
+    "tickers": [
+        "AIG",
+        "EG",
+        "MA"
+    ],
+    "weights": {
+        "AIG": 1.0,
+        "EG": 0.2967,
+        "MA": -1.1676
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 5.4e-05,
+        "oos_p": 0.046655,
+        "train_hl": 19.81,
+        "oos_sharpe": 2.692
+    },
+    "trading_params": {
+        "window_size": 40,
+        "entry_z": 2.75,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-14 17:27:45"
+}

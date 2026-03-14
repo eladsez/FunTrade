@@ -1,0 +1,35 @@
+{
+    "basket_id": "key_tfc_trow",
+    "tickers": [
+        "KEY",
+        "TFC",
+        "TROW"
+    ],
+    "weights": {
+        "KEY": 1.0,
+        "TFC": -1.2781,
+        "TROW": 0.1736
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.002982,
+        "oos_p": 0.037118,
+        "train_hl": 15.74,
+        "oos_sharpe": 1.375
+    },
+    "trading_params": {
+        "window_size": 31,
+        "entry_z": 2.5,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-14 17:27:45"
+}

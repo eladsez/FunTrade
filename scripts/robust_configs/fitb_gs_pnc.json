@@ -1,0 +1,35 @@
+{
+    "basket_id": "fitb_gs_pnc",
+    "tickers": [
+        "FITB",
+        "GS",
+        "PNC"
+    ],
+    "weights": {
+        "FITB": 1.0,
+        "GS": -0.0388,
+        "PNC": -1.1005
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000392,
+        "oos_p": 0.013139,
+        "train_hl": 19.56,
+        "oos_sharpe": 1.555
+    },
+    "trading_params": {
+        "window_size": 39,
+        "entry_z": 1.5,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-14 17:27:45"
+}
