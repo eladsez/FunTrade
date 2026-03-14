@@ -14,19 +14,60 @@ from joblib import Parallel, delayed # For parallel processing
 warnings.filterwarnings("ignore")
 
 
-def fetch_data(tickers, start_date, end_date):
-    print(f"[*] Downloading {len(tickers)} tickers...")
+def fetch_and_prepare_data(tickers, years=5, split_ratio=0.8):
+    # 1. Date Setup
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=years*365)).strftime('%Y-%m-%d')
+
+    print(f"[*] Downloading {len(tickers)} tickers and SPY benchmark...")
+
+    # 2. Download Stocks & Benchmark
     data = yf.download(tickers, start=start_date, end=end_date, threads=True)['Close']
+    spy = yf.download("SPY", start=start_date, end=end_date, threads=True)['Close']
     
+    # 3. Clean the Ticker Data
     # Drop columns (tickers) that have more than 10% missing data
     threshold = len(data) * 0.9
     data = data.dropna(thresh=threshold, axis=1)
     
-    # Now drop remaining rows with NaNs (holidays, etc.)
+    # Drop remaining rows with NaNs to create our master trading calendar
     clean_data = data.dropna()
-    
     print(f"[*] Proceeding with {len(clean_data.columns)} valid tickers.")
-    return clean_data
+    
+    # If the clean dataset is too small, abort early
+    if len(clean_data) < 50:
+        return None
+
+    # 4. Process Benchmark (SPY)
+    spy_returns = np.log(spy).diff()
+
+    # 5. Timezone Strip & Alignment
+    # Strip timezones from both to ensure the dates "talk" to each other
+    clean_data.index = clean_data.index.tz_localize(None)
+    spy_returns.index = spy_returns.index.tz_localize(None)
+
+    # Force SPY to match the clean stock calendar perfectly
+    spy_returns = spy_returns.reindex(clean_data.index, method='ffill').fillna(0)
+
+    # 6. Split Data
+    split_idx = int(len(clean_data) * split_ratio)
+    
+    df_train = clean_data.iloc[:split_idx]
+    df_test = clean_data.iloc[split_idx:]
+    bench_train = spy_returns.iloc[:split_idx]
+
+    # 7. Extract Dates for Config Export
+    t_start = df_train.index[0].strftime('%Y-%m-%d')
+    t_end = df_train.index[-1].strftime('%Y-%m-%d')
+    oos_start = df_test.index[0].strftime('%Y-%m-%d')
+    oos_end = df_test.index[-1].strftime('%Y-%m-%d')
+
+    return {
+        "train": df_train,
+        "test": df_test,
+        "benchmark_train": bench_train,
+        "dates": (t_start, t_end, oos_start, oos_end)
+    }
 
 def calculate_half_life(spread):
     spread_lag = spread.shift(1).dropna()
@@ -116,7 +157,7 @@ def find_best_params(spread, window_size, cost_per_trade=0.002):
     return round(float(best['entry']), 2), round(float(best['exit']), 2), round(float(best['sharpe']), 3)
 
 
-def test_basket(df, combo, cost_per_trade=0.001):
+def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
     subset_df = df[list(combo)]
     
     try:
@@ -131,6 +172,20 @@ def test_basket(df, combo, cost_per_trade=0.001):
         
         # Spread is now a log-spread
         spread = sum(log_df[t] * weights[t] for t in combo)
+        
+        # --- Market Neutrality (Beta) Check ---
+        spread_returns = spread.diff().dropna()
+        
+        # Calculate Beta: Covariance(Spread, Market) / Variance(Market)
+        cov = aligned_data.cov().iloc[0, 1]
+        var = aligned_data['Market'].var()
+        beta = cov / var
+        
+        # STRICT FILTER: Disqualify if absolute beta is greater than 0.15
+        if abs(beta) > 0.15:
+            return None
+        # -------------------------------------------
+        
         p_val = adfuller(spread)[1]
         hl = calculate_half_life(spread)
 
@@ -140,16 +195,17 @@ def test_basket(df, combo, cost_per_trade=0.001):
 
         window_size = int(max(round(hl * 2), 20))
 
-        # Grid search will now operate on the log-spread
+        # Grid search
         entry_z, exit_z, sharpe = find_best_params(spread, window_size, cost_per_trade)
         
-        # Filter out noise - require a solid baseline Sharpe
+        # Filter out noise
         if sharpe <= 0.1: 
             return None 
 
         return {
             "tickers": combo, 
             "weights": weights, 
+            "beta": round(beta, 3),
             "p_value": p_val,
             "half_life": hl, 
             "entry_z": entry_z, 
@@ -295,13 +351,13 @@ def load_sector_universe(file_path):
     
     return None
 
-def process_combo(combo, df_train, df_test):
+def process_combo(combo, df_train, df_test, benchmark_train):
     """
     Helper function to process a single basket.
     This runs entirely independently on a separate CPU core.
     """
     # 1. Train the basket
-    train_res = test_basket(df_train, combo)
+    train_res = test_basket(df_train, combo, benchmark_train)
     
     if train_res:
         # 2. Validate with Out-of-Sample data
@@ -325,61 +381,46 @@ def process_combo(combo, df_train, df_test):
     return None
 
 def run_over_universe(universe):
-    # Research Window: 5 Years
-    end_date = datetime.now().strftime('%Y-%m-%d')
-    start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y-%m-%d')
-
-    # 1. Fetch and Split
-    df = fetch_data(universe, start_date, end_date)
-
-    # Check if we have enough columns (tickers) left after dropna()
-    if df.empty or len(df.columns) < 2:
-        print(f"[!] Critical Error: Not enough valid ticker data for this sector.")
+    # 1. Fetch, Clean, and Split in one go
+    data = fetch_and_prepare_data(universe)
+    
+    # Safety check if the download failed or data was wiped out
+    if data is None:
+        print("[!] Critical Error: Not enough valid data to proceed.")
         return
 
-    split_idx = int(len(df) * 0.8)
-
-    # Ensure the split actually leaves data in both sets
-    if split_idx < 20 or (len(df) - split_idx) < 20:
-        print(f"[!] Skipping sector: Insufficient data points for a 80/20 split.")
-        return
-
-    df_train = df.iloc[:split_idx]
-    df_test = df.iloc[split_idx:]
-
-    # Capture Date Ranges for the Config
-    train_dates = (df_train.index[0].strftime('%Y-%m-%d'), df_train.index[-1].strftime('%Y-%m-%d'))
-    test_dates = (df_test.index[0].strftime('%Y-%m-%d'), df_test.index[-1].strftime('%Y-%m-%d'))
+    df_train = data['train']
+    df_test = data['test']
+    bench_train = data['benchmark_train']
+    t_start, t_end, oos_start, oos_end = data['dates']
     
-    print(f"[*] Train Period: {train_dates[0]} to {train_dates[1]}")
-    print(f"[*] Test Period:  {test_dates[0]} to {test_dates[1]}")
-    
-    combos = list(combinations(df.columns, 3))
+    print(f"[*] Train Period: {t_start} to {t_end}")
+    print(f"[*] Test Period:  {oos_start} to {oos_end}")
+
+    # 2. Parallel Processing
+    combos = list(combinations(df_train.columns, 3))
     print(f"[*] Firing up parallel processing for {len(combos)} baskets...")
 
-    # 2. Parallel Execution
-    # n_jobs=-1 uses all CPU cores. verbose=5 gives you a progress bar.
+    # Pass bench_train into the process_combo function
     raw_results = Parallel(n_jobs=-1, verbose=5)(
-        delayed(process_combo)(combo, df_train, df_test) for combo in combos
+        delayed(process_combo)(combo, df_train, df_test, bench_train) for combo in combos
     )
 
-    # 3. Filter out the failed combinations (None values)
+    # 3. Clean and Export
     results_list = [res for res in raw_results if res is not None]
 
-    # 4. Final Export
     if results_list:
-        export_robust_configs(results_list, train_dates, test_dates)
-        best_oos = min(results_list, key=lambda x: x['oos_p'])
-        print(f"\n🚀 BEST ROBUST BASKET: {best_oos['tickers']} (OOS P: {best_oos['oos_p']:.6f})")
+        export_robust_configs(results_list, (t_start, t_end), (oos_start, oos_end))
+        best = min(results_list, key=lambda x: x['oos_p'])
+        print(f"\n🚀 BEST BASKET: {best['tickers']} (OOS P: {best['oos_p']:.6f}) \n\n")
     else:
-        print("\n[!] No baskets survived the stability tests.")
-
+        print("\n[!] No survivors.")
 
 def main():
-    universes = load_sector_universe("./sectors_symbols.json")
+    universes = load_sector_universe("./s&p500.json")
 
     for sector, symbols in universes.items():
-        print(f"====== Running on {sector} sector ====== ")
+        print(f"============ Running on {sector} sector ============")
         run_over_universe(symbols)
 
 if __name__ == "__main__":
