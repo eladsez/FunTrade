@@ -312,17 +312,34 @@ def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.002):
     # Subtract flat percentage cost on every trade action
     transaction_costs = trade_actions * cost_per_trade
     net_pnl = raw_pnl - transaction_costs
+
+    # 5. Calculate Cumulative Returns and Maximum Drawdown (MDD)
+    # cumsum() builds the equity curve
+    cum_pnl = net_pnl.cumsum()
     
-    # 5. OOS Performance Metrics
+    # cummax() tracks the "high water mark" (the peak)
+    running_max = cum_pnl.cummax()
+    
+    # The drawdown is the current value minus the highest peak
+    drawdowns = cum_pnl - running_max
+    
+    # Grab the absolute worst drop (convert to a positive number for easy reading)
+    max_drawdown = abs(drawdowns.min())
+    
+    # 6. OOS Performance Metrics
     oos_sharpe = np.sqrt(252) * (net_pnl.mean() / net_pnl.std()) if net_pnl.std() > 0 else 0
     oos_p_val = adfuller(oos_spread)[1]
     
-    # Robustness criteria: Stationary, profitable, and actively trading
-    is_robust = (oos_p_val < 0.05) and (oos_sharpe > 0.5) 
+    # STRICT FILTER: 
+    # 1. Must still be stationary Out-Of-Sample
+    # 2. Must be profitable (Sharpe > 0.5)
+    # 3. MDD must be less than 20% (0.20)
+    is_robust = (oos_p_val < 0.05) and (oos_sharpe > 0.5) and (max_drawdown < 0.20)
 
     return {
         "oos_p": oos_p_val,
         "oos_sharpe": round(oos_sharpe, 3),
+        "oos_mdd": round(max_drawdown, 3),
         "trades": round_trip_trades,
         "is_robust": is_robust
     }
