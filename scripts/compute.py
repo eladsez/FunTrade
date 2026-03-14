@@ -176,6 +176,10 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
         # --- Market Neutrality (Beta) Check ---
         spread_returns = spread.diff().dropna()
         
+        # Align indices to ensure we only compare matching days
+        aligned_data = pd.concat([spread_returns, benchmark_returns], axis=1, join='inner').dropna()
+        aligned_data.columns = ['Spread', 'Market']
+        
         # Calculate Beta: Covariance(Spread, Market) / Variance(Market)
         cov = aligned_data.cov().iloc[0, 1]
         var = aligned_data['Market'].var()
