@@ -26,61 +26,72 @@ def calculate_half_life(spread):
     lam = model.params.iloc[1]
     return -np.log(2) / lam if lam < 0 else np.inf
 
-def find_best_params(spread, window_size, cost_per_trade):
+def find_best_params(spread, window_size, cost_per_trade=0.001):
     """ 
     Grid Search: Entry Z vs Exit Z using ROLLING statistics.
-    Now includes transaction costs to prevent selecting hyper-active, 
-    fee-burning parameter combinations.
+    Fully vectorized implementation to eliminate the Python 'for' loop bottleneck,
+    operating at near C-level speeds via Numpy and Pandas C-extensions.
     """
     entry_range = np.arange(1.5, 3.25, 0.25)
     exit_range = np.arange(-0.25, 0.75, 0.25)
     
-    # Calculate rolling mean and std to avoid look-ahead bias
+    # 1. Calculate rolling statistics once (outside the loop)
     rolling_mu = spread.rolling(window=window_size).mean()
     rolling_std = spread.rolling(window=window_size).std()
     
     z_spread = ((spread - rolling_mu) / rolling_std).dropna()
-    valid_spread_diff = spread.diff().loc[z_spread.index]
-    aligned_spread = spread.loc[z_spread.index] # Needed for cost calculation
-
+    log_returns = spread.diff().loc[z_spread.index]
+    
+    # Convert to pure numpy arrays for maximum performance inside the grid search
+    z_vals = z_spread.values
+    ret_vals = log_returns.values
+    
     results = []
 
     for entry_z, exit_z in product(entry_range, exit_range):
-        if exit_z >= entry_z: continue 
+        if exit_z >= entry_z: 
+            continue 
 
-        positions = []
-        current_pos = 0
+        # 2. Vectorized State Machine
+        # We process the Short side and Long side completely independently.
         
-        # State machine logic
-        for z in z_spread:
-            if current_pos == 0:
-                if z > entry_z: current_pos = -1
-                elif z < -entry_z: current_pos = 1
-            elif current_pos == -1: 
-                if z <= exit_z: current_pos = 0
-            elif current_pos == 1: 
-                if z >= -exit_z: current_pos = 0
-            positions.append(current_pos)
+        # --- Short Side Logic ---
+        # NaN means "hold previous state"
+        short_pos = np.full(len(z_vals), np.nan)
+        short_pos[z_vals > entry_z] = -1.0         # Trigger Short entry
+        short_pos[z_vals <= exit_z] = 0.0          # Trigger Short exit
+        # Forward fill to maintain position, fill initial NaNs with 0
+        short_series = pd.Series(short_pos).ffill().fillna(0.0)
 
-        pos_series = pd.Series(positions, index=z_spread.index)
+        # --- Long Side Logic ---
+        long_pos = np.full(len(z_vals), np.nan)
+        long_pos[z_vals < -entry_z] = 1.0          # Trigger Long entry
+        long_pos[z_vals >= -exit_z] = 0.0          # Trigger Long exit
+        long_series = pd.Series(long_pos).ffill().fillna(0.0)
+
+        # --- Combine Positions ---
+        # Since entry thresholds are distinct, they will never overlap.
+        combined_pos = short_series + long_series
         
-        # Calculate Gross PnL
-        raw_daily_pnl = pos_series.shift(1).fillna(0) * valid_spread_diff
+        # 3. Prevent Look-Ahead Bias
+        # Today's signal trades at tomorrow's return
+        actual_pos = combined_pos.shift(1).fillna(0.0)
         
-        # Calculate Transaction Costs
-        # cost_per_trade is applied every time the position changes
-        trades = pos_series.diff().abs().fillna(0)
-        # In log-space, the cost is just the flat percentage deducted directly
+        # 4. Vectorized PnL & Cost Calculation
+        trades = actual_pos.diff().abs().fillna(0.0)
+        
+        # Because we use log-prices, the difference is approximately the % return
+        raw_pnl = actual_pos * log_returns.reset_index(drop=True)
+        
+        # Subtract flat percentage cost on every position change
         daily_costs = trades * cost_per_trade
+        net_daily_pnl = raw_pnl - daily_costs
         
-        # Calculate Net PnL
-        net_daily_pnl = raw_daily_pnl - daily_costs
-        
-        # Calculate Sharpe Ratio on NET PnL
+        # 5. Metrics
         mean_pnl = net_daily_pnl.mean()
         std_pnl = net_daily_pnl.std()
         
-        sharpe = np.sqrt(252) * (mean_pnl / std_pnl) if std_pnl > 0 else 0
+        sharpe = np.sqrt(252) * (mean_pnl / std_pnl) if std_pnl > 0 else 0.0
         
         results.append({
             'entry': entry_z, 
@@ -88,7 +99,8 @@ def find_best_params(spread, window_size, cost_per_trade):
             'sharpe': sharpe
         })
 
-    if not results: return 2.0, 0.0, 0.0
+    if not results: 
+        return 2.0, 0.0, 0.0
     
     best = max(results, key=lambda x: x['sharpe'])
     return round(float(best['entry']), 2), round(float(best['exit']), 2), round(float(best['sharpe']), 3)
@@ -275,6 +287,12 @@ def run_over_universe(universe):
 
     # 2. Fetch and Split
     df = fetch_data(universe, start_date, end_date)
+
+    # Check if we have enough columns (tickers) left after dropna()
+    if df.empty or len(df.columns) < 2:
+        print(f"[!] Critical Error: Not enough valid ticker data for this sector.")
+        return
+
     split_idx = int(len(df) * 0.8)
     df_train = df.iloc[:split_idx]
     df_test = df.iloc[split_idx:]
@@ -326,7 +344,7 @@ def run_over_universe(universe):
 
 
 def main():
-    universes = load_sector_universe("./sectors_symbols.json")
+    universes = load_sector_universe("./s&p500.json")
 
     for sector, symbols in universes.items():
         print(f"[*] Running on {sector} sector")
