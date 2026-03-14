@@ -1,0 +1,35 @@
+{
+    "basket_id": "alle_mas_wm",
+    "tickers": [
+        "ALLE",
+        "MAS",
+        "WM"
+    ],
+    "weights": {
+        "ALLE": 1.0,
+        "MAS": -1.1902,
+        "WM": 0.7864
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000413,
+        "oos_p": 0.009432,
+        "train_hl": 21.46,
+        "oos_sharpe": 1.728
+    },
+    "trading_params": {
+        "window_size": 43,
+        "entry_z": 1.5,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-14 17:41:32"
+}

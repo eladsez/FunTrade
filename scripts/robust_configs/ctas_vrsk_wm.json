@@ -1,0 +1,35 @@
+{
+    "basket_id": "ctas_vrsk_wm",
+    "tickers": [
+        "CTAS",
+        "VRSK",
+        "WM"
+    ],
+    "weights": {
+        "CTAS": 1.0,
+        "VRSK": -0.3328,
+        "WM": -1.5114
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000344,
+        "oos_p": 0.024057,
+        "train_hl": 21.78,
+        "oos_sharpe": 1.97
+    },
+    "trading_params": {
+        "window_size": 44,
+        "entry_z": 2.0,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-14 17:41:32"
+}

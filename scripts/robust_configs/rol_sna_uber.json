@@ -1,0 +1,35 @@
+{
+    "basket_id": "rol_sna_uber",
+    "tickers": [
+        "ROL",
+        "SNA",
+        "UBER"
+    ],
+    "weights": {
+        "ROL": 1.0,
+        "SNA": -0.6452,
+        "UBER": -0.0805
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.005584,
+        "oos_p": 0.00951,
+        "train_hl": 27.99,
+        "oos_sharpe": 1.303
+    },
+    "trading_params": {
+        "window_size": 56,
+        "entry_z": 2.25,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-14 17:41:32"
+}

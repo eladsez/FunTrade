@@ -1,0 +1,35 @@
+{
+    "basket_id": "gww_tdg_uber",
+    "tickers": [
+        "GWW",
+        "TDG",
+        "UBER"
+    ],
+    "weights": {
+        "GWW": 1.0,
+        "TDG": -1.3686,
+        "UBER": 0.4934
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000673,
+        "oos_p": 0.028947,
+        "train_hl": 19.32,
+        "oos_sharpe": 1.16
+    },
+    "trading_params": {
+        "window_size": 39,
+        "entry_z": 2.5,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-14 17:41:32"
+}

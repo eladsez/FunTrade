@@ -1,0 +1,35 @@
+{
+    "basket_id": "evrg_lnt_pnw",
+    "tickers": [
+        "EVRG",
+        "LNT",
+        "PNW"
+    ],
+    "weights": {
+        "EVRG": 1.0,
+        "LNT": -1.3847,
+        "PNW": 0.2115
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.004617,
+        "oos_p": 0.001724,
+        "train_hl": 24.82,
+        "oos_sharpe": 1.892
+    },
+    "trading_params": {
+        "window_size": 50,
+        "entry_z": 1.5,
+        "exit_z": 0.0
+    },
+    "exported_at": "2026-03-14 17:50:03"
+}

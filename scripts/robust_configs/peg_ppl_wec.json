@@ -1,0 +1,35 @@
+{
+    "basket_id": "peg_ppl_wec",
+    "tickers": [
+        "PEG",
+        "PPL",
+        "WEC"
+    ],
+    "weights": {
+        "PEG": 1.0,
+        "PPL": -2.0228,
+        "WEC": 1.2886
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.020789,
+        "oos_p": 0.006175,
+        "train_hl": 29.55,
+        "oos_sharpe": 1.879
+    },
+    "trading_params": {
+        "window_size": 59,
+        "entry_z": 1.5,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-14 17:50:03"
+}

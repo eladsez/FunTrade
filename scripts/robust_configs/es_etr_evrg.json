@@ -1,0 +1,35 @@
+{
+    "basket_id": "es_etr_evrg",
+    "tickers": [
+        "ES",
+        "ETR",
+        "EVRG"
+    ],
+    "weights": {
+        "ES": 1.0,
+        "ETR": 1.0061,
+        "EVRG": -2.1952
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 8.1e-05,
+        "oos_p": 0.008583,
+        "train_hl": 16.12,
+        "oos_sharpe": 1.575
+    },
+    "trading_params": {
+        "window_size": 32,
+        "entry_z": 1.75,
+        "exit_z": 0.25
+    },
+    "exported_at": "2026-03-14 17:50:03"
+}

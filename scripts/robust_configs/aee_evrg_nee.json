@@ -1,0 +1,35 @@
+{
+    "basket_id": "aee_evrg_nee",
+    "tickers": [
+        "AEE",
+        "EVRG",
+        "NEE"
+    ],
+    "weights": {
+        "AEE": 1.0,
+        "EVRG": -1.3715,
+        "NEE": 0.4401
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000188,
+        "oos_p": 0.005835,
+        "train_hl": 17.34,
+        "oos_sharpe": 3.187
+    },
+    "trading_params": {
+        "window_size": 35,
+        "entry_z": 1.75,
+        "exit_z": 0.25
+    },
+    "exported_at": "2026-03-14 17:50:03"
+}

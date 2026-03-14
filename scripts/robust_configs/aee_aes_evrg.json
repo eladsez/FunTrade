@@ -1,0 +1,35 @@
+{
+    "basket_id": "aee_aes_evrg",
+    "tickers": [
+        "AEE",
+        "AES",
+        "EVRG"
+    ],
+    "weights": {
+        "AEE": 1.0,
+        "AES": 0.1035,
+        "EVRG": -0.9221
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.004382,
+        "oos_p": 0.005461,
+        "train_hl": 25.94,
+        "oos_sharpe": 2.378
+    },
+    "trading_params": {
+        "window_size": 52,
+        "entry_z": 2.0,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-14 17:50:03"
+}

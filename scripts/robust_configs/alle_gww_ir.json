@@ -1,0 +1,35 @@
+{
+    "basket_id": "alle_gww_ir",
+    "tickers": [
+        "ALLE",
+        "GWW",
+        "IR"
+    ],
+    "weights": {
+        "ALLE": 1.0,
+        "GWW": 0.9482,
+        "IR": -1.3869
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-15",
+            "end": "2025-03-12"
+        },
+        "testing": {
+            "start": "2025-03-13",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.001658,
+        "oos_p": 0.046449,
+        "train_hl": 24.48,
+        "oos_sharpe": 1.231
+    },
+    "trading_params": {
+        "window_size": 49,
+        "entry_z": 1.5,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-14 17:41:32"
+}

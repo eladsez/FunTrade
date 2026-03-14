@@ -1,0 +1,35 @@
+{
+    "basket_id": "msft_panw_zbra",
+    "tickers": [
+        "MSFT",
+        "PANW",
+        "ZBRA"
+    ],
+    "weights": {
+        "MSFT": 1.0,
+        "PANW": -0.641,
+        "ZBRA": -0.2363
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-04-15",
+            "end": "2025-03-19"
+        },
+        "testing": {
+            "start": "2025-03-20",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.003404,
+        "oos_p": 0.031976,
+        "train_hl": 23.63,
+        "oos_sharpe": 1.342
+    },
+    "trading_params": {
+        "window_size": 47,
+        "entry_z": 2.0,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-14 17:48:36"
+}
