@@ -36,7 +36,7 @@ def calculate_half_life(spread):
     lam = model.params.iloc[1]
     return -np.log(2) / lam if lam < 0 else np.inf
 
-def find_best_params(spread, window_size, cost_per_trade=0.001):
+def find_best_params(spread, window_size, cost_per_trade=0.002):
     """ 
     Grid Search: Entry Z vs Exit Z using ROLLING statistics.
     Fully vectorized implementation to eliminate the Python 'for' loop bottleneck,
@@ -160,7 +160,7 @@ def test_basket(df, combo, cost_per_trade=0.001):
     except Exception as e: 
         return None
 
-def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.001):
+def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.002):
     """
     Simulates OOS performance using Log Prices and counts the number of trades.
     Disqualifies baskets that rely on a single lucky anomaly.
@@ -290,12 +290,41 @@ def load_sector_universe(file_path):
     
     return None
 
+def process_combo(combo, df_train, df_test):
+    """
+    Helper function to process a single basket.
+    This runs entirely independently on a separate CPU core.
+    """
+    # 1. Train the basket
+    train_res = test_basket(df_train, combo)
+    
+    if train_res:
+        # 2. Validate with Out-of-Sample data
+        oos_metrics = validate_oos_advanced(df_test, train_res)
+        
+        if oos_metrics['is_robust']:
+            # 3. CRITICAL: Map the keys correctly for the export function
+            return {
+                "tickers": train_res['tickers'],
+                "weights": train_res['weights'],
+                "train_p": train_res['p_value'],      
+                "train_hl": train_res['half_life'], 
+                "train_sharpe": train_res['sharpe'],
+                "oos_p": oos_metrics['oos_p'],
+                "oos_sharpe": oos_metrics['oos_sharpe'],
+                "entry_z": train_res['entry_z'],
+                "exit_z": train_res['exit_z']
+            }
+            
+    # Return None if it fails any stability tests
+    return None
+
 def run_over_universe(universe):
     # Research Window: 5 Years
     end_date = datetime.now().strftime('%Y-%m-%d')
     start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y-%m-%d')
 
-    # 2. Fetch and Split
+    # 1. Fetch and Split
     df = fetch_data(universe, start_date, end_date)
 
     # Check if we have enough columns (tickers) left after dropna()
@@ -321,38 +350,20 @@ def run_over_universe(universe):
     print(f"[*] Test Period:  {test_dates[0]} to {test_dates[1]}")
     
     combos = list(combinations(df.columns, 3))
-    print(f"[*] Brute-forcing {len(combos)} baskets...")
+    print(f"[*] Firing up parallel processing for {len(combos)} baskets...")
 
-    results_list = []
-    for i, combo in enumerate(combos):
-        if i % 50 == 0: print(f"    Searching... {i}/{len(combos)}")
-        
-        # 1. Train the basket
-        train_res = test_basket(df_train, combo)
-        
-        if train_res:
-            # 2. Validate with Out-of-Sample data
-            oos_metrics = validate_oos_advanced(df_test, train_res)
-            
-            if oos_metrics['is_robust']:
-                # 3. CRITICAL: Map the keys correctly for the export function
-                export_data = {
-                    "tickers": train_res['tickers'],
-                    "weights": train_res['weights'],
-                    "train_p": train_res['p_value'],      
-                    "train_hl": train_res['half_life'], 
-                    "train_sharpe": train_res['sharpe'],
-                    "oos_p": oos_metrics['oos_p'],
-                    "oos_sharpe": oos_metrics['oos_sharpe'],
-                    "entry_z": train_res['entry_z'],
-                    "exit_z": train_res['exit_z']
-                }
-                results_list.append(export_data)
+    # 2. Parallel Execution
+    # n_jobs=-1 uses all CPU cores. verbose=5 gives you a progress bar.
+    raw_results = Parallel(n_jobs=-1, verbose=5)(
+        delayed(process_combo)(combo, df_train, df_test) for combo in combos
+    )
+
+    # 3. Filter out the failed combinations (None values)
+    results_list = [res for res in raw_results if res is not None]
 
     # 4. Final Export
     if results_list:
         export_robust_configs(results_list, train_dates, test_dates)
-        # Optional: Print the top survivor
         best_oos = min(results_list, key=lambda x: x['oos_p'])
         print(f"\n🚀 BEST ROBUST BASKET: {best_oos['tickers']} (OOS P: {best_oos['oos_p']:.6f})")
     else:

@@ -1,7 +1,0 @@
-{
-    "symbol": "SPY",
-    "trade_size": 1.0,
-    "max_risk_percent": 1.0,
-    "api_key": "YOUR_DEMO_API_KEY",
-    "api_secret": "YOUR_DEMO_SECRET"
-}
