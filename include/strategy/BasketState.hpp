@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cstdint>
+#include <optional>
 
 namespace bot {
 
@@ -23,7 +24,7 @@ public:
     // Used during initial warm-up to feed historical spreads
     void feedHistoricalSpread(double spread);
 
-    double getZScore() const;
+    std::optional<double> getZScore() const;
 
     void setWarmedUp(bool state) { is_warmed_up_ = state; }
     bool isWarmedUp() const { return is_warmed_up_; }

@@ -129,8 +129,8 @@ void BasketState::feedHistoricalSpread(double spread) {
     history_idx_ = (history_idx_ + 1) % window_size_;
 }
 
-double BasketState::getZScore() const {
-    if (!is_warmed_up_ || !arePricesSynchronized()) return 0.0;
+std::optional<double> BasketState::getZScore() const {
+    if (!is_warmed_up_ || !arePricesSynchronized()) return std::nullopt;;
 
     double current_spread = calculateCurrentSpread();
     double mean = running_sum_ / window_size_;

@@ -131,7 +131,15 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 
     if (!basket_state_->isWarmedUp()) return;
 
-    double z_score = basket_state_->getZScore();
+    // Get the optional Z-Score
+    std::optional<double> opt_z_score = basket_state_->getZScore();
+    
+    // If prices are stale or variance is too low, skip this evaluation cycle entirely
+    if (!opt_z_score.has_value()) {
+        return; 
+    }
+
+    double z_score = opt_z_score.value();
 
     if (current_position_ == PositionState::FLAT) {
         if (z_score > entry_z_score_) {
