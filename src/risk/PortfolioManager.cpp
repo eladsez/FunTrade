@@ -74,13 +74,14 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
         return;
     }
 
-    std::string symbol = report.symbol;
-
     // Ensure we are getting live price updates for this newly traded symbol
     // ensureMarketSubscription(symbol);
 
-    Position& pos = positions_[symbol];
-    pos.symbol = symbol;
+    std::string base_id = OrderIdUtils::extractBaseClientId(report.client_order_id);
+    std::string virtual_key = base_id.empty() ? report.symbol : base_id;
+
+    Position& pos = positions_[virtual_key];
+    pos.symbol = report.symbol;
     pos.current_price = report.last_price; // Update price on fill
 
     double fill_qty = report.last_quantity;
@@ -192,17 +193,20 @@ double PortfolioManager::getTotalUnrealizedPnL() const {
     return total_unrealized;
 }
 
-double PortfolioManager::getNetPosition(const std::string& symbol) const {
+double PortfolioManager::getNetPosition(const std::string& virtual_key) const {
     std::lock_guard<std::mutex> lock(mtx_);
-    auto it = positions_.find(symbol);
+    auto it = positions_.find(virtual_key);
     return (it != positions_.end()) ? it->second.quantity : 0.0;
 }
 
-Position PortfolioManager::getPosition(const std::string& symbol) const {
+std::optional<Position> PortfolioManager::getPosition(const std::string& virtual_key) const {
     std::lock_guard<std::mutex> lock(mtx_);
-    auto it = positions_.find(symbol);
-    if (it != positions_.end()) return it->second;
-    return {symbol, 0.0, 0.0, 0.0, 0.0};
-}
+    auto it = positions_.find(virtual_key);
+    
+    if (it != positions_.end()) {
+        return it->second;
+    } 
 
+    return std::nullopt; // Safely indicate the position does not exist
+}
 } // namespace bot

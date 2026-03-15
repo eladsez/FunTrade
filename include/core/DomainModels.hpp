@@ -137,3 +137,27 @@ struct HistoricalBar {
     uint64_t trade_count = 0;
     double vwap = 0.0;
 };
+
+namespace OrderIdUtils {
+
+    // Safely extracts the original base prefix from a generated execution ID
+    // E.g., "given_client_id_1710543210000_1" -> "given_client_id"
+    inline std::string extractBaseClientId(const std::string& fullId) {
+        if (fullId.empty()) return "";
+        
+        auto last_underscore = fullId.find_last_of('_');
+        if (last_underscore == std::string::npos || last_underscore == 0) return fullId;
+        
+        auto second_last_underscore = fullId.find_last_of('_', last_underscore - 1);
+        if (second_last_underscore == std::string::npos) return fullId;
+        
+        return fullId.substr(0, second_last_underscore);
+    }
+
+    // Checks if a full broker ID belongs to a specific base ID
+    inline bool isMatchingId(const std::string& baseId, const std::string& fullId) {
+        // The safest way is to extract and compare exactly
+        return extractBaseClientId(fullId) == baseId;
+    }
+
+} // namespace OrderIdUtils

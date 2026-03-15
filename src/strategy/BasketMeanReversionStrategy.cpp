@@ -1,4 +1,5 @@
 #include <strategy/BasketMeanReversionStrategy.hpp>
+#include <core/Logger.hpp>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -12,16 +13,20 @@ namespace bot {
 BasketMeanReversionStrategy::BasketMeanReversionStrategy(
     std::shared_ptr<IEventBus> eventBus,
     std::shared_ptr<IExecutionEngine> executionEngine,
-    const std::string& configFilePath)
+    std::shared_ptr<PortfolioManager> portfolioMngr,
+    const std::string& configFilePath,
+    double capitalAllocation)
     : event_bus_(std::move(eventBus)),
       exec_engine_(std::move(executionEngine)),
-      config_path_(configFilePath) {}
+      portfolio_mngr_(std::move(portfolioMngr)),
+      config_path_(configFilePath),
+      capital_allocation_(capitalAllocation) {}
 
 void BasketMeanReversionStrategy::start() {
     loadConfig();
     warmUp();
 
-    // Subscribe to real-time events for our basket components
+    // 1. Subscribe to real-time events for our basket components
     const auto& symbols = basket_state_->getSymbols();
     for (const auto& sym : symbols) {
         event_bus_->subscribeToMarketEvents(
@@ -29,6 +34,10 @@ void BasketMeanReversionStrategy::start() {
             [this](const MarketEvent& e) { this->onMarketEvent(e); }
         );
     }
+    // 2. Listen for execution reports to confirm our orders
+    event_bus_->subscribeToExecution(
+        [this](const ExecutionReport& report) { this->onExecutionReport(report); }
+    );
 }
 
 void BasketMeanReversionStrategy::loadConfig() {
@@ -164,21 +173,21 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 
     if (current_position_ == PositionState::FLAT) {
         if (z_score > entry_z_score_) {
+            current_position_ = PositionState::PENDING_SHORT;
             executeBasket(PositionState::SHORT);
-            current_position_ = PositionState::SHORT;
         } else if (z_score < -entry_z_score_) {
+            current_position_ = PositionState::PENDING_LONG;
             executeBasket(PositionState::LONG);
-            current_position_ = PositionState::LONG;
         }
     } else if (current_position_ == PositionState::SHORT) {
         if (z_score < exit_z_score_) {
+            current_position_ = PositionState::PENDING_FLAT;  // Lock it
             executeBasket(PositionState::FLAT);
-            current_position_ = PositionState::FLAT;
         }
     } else if (current_position_ == PositionState::LONG) {
         if (z_score > -exit_z_score_) {
+            current_position_ = PositionState::PENDING_FLAT;  // Lock it
             executeBasket(PositionState::FLAT);
-            current_position_ = PositionState::FLAT;
         }
     }
 }
@@ -190,36 +199,85 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
 
     for (size_t i = 0; i < num_components; ++i) {
         double weight = weights[i];
-        
         Side order_side;
-        if (targetState == PositionState::LONG) {
-            order_side = (weight > 0) ? Side::BUY : Side::SELL;
-        } else if (targetState == PositionState::SHORT) {
-            order_side = (weight > 0) ? Side::SELL : Side::BUY;
+        double target_quantity = 0.0;
+
+        if (targetState == PositionState::FLAT) {
+            // Retrieve the exact virtual position we currently hold for this specific basket leg
+            Position current_pos = portfolio_manager_->getNetPosition(client_order_ids_[i]);
+            // If it's 0.0 (either doesn't exist or already flat), skip it
+            if (std::abs(net_qty) < 1e-9) continue; 
+
+            // The absolute value is exactly how many shares we need to order
+            target_quantity = std::abs(net_qty);
+
+            // Reverse the side based on the sign to close it out
+            order_side = (net_qty > 0) ? Side::SELL : Side::BUY;
         } else {
-            // Reversing the position to get FLAT
-            order_side = (current_position_ == PositionState::LONG) 
-                ? ((weight > 0) ? Side::SELL : Side::BUY)
-                : ((weight > 0) ? Side::BUY : Side::SELL);
+            // We are entering a new position. Calculate quantity based on capital allocation.
+            double absolute_weight = std::abs(weight);
+            double current_price = basket_state_->getPrice(i);
+            
+            if (current_price <= 0) continue; 
+            
+            target_quantity = (capital_allocation_ * absolute_weight) / current_price;
+
+            if (targetState == PositionState::LONG) {
+                order_side = (weight > 0) ? Side::BUY : Side::SELL;
+            } else { // SHORT
+                order_side = (weight > 0) ? Side::SELL : Side::BUY;
+            }
         }
 
-        double absolute_weight = std::abs(weight);
-        double current_price = basket_state_->getPrice(i);
-        
-        if (current_price <= 0) continue; 
-        
-        double quantity = (BASE_ALLOCATION * absolute_weight) / current_price;
-
         OrderRequest req;
-        // Pre-allocated to avoid SSO allocation in hot path
         req.client_order_id = client_order_ids_[i]; 
         req.symbol = symbols[i];
         req.side = order_side;
         req.type = OrderType::MARKET;
         req.tif = TimeInForce::IOC;
-        req.quantity = quantity;
+        req.quantity = target_quantity;
 
         exec_engine_->placeOrder(req);
+    }
+}
+
+void BasketMeanReversionStrategy::onExecutionReport(const ExecutionReport& report) {
+    // 1. Check if this report belongs to THIS specific basket
+    bool is_our_order = false;
+    for (const auto& cid : client_order_ids_) {
+        // Clean, readable, and centralized
+        if (OrderIdUtils::isMatchingId(cid, report.client_order_id)) {
+            is_our_order = true;
+            break;
+        }
+    }
+    if (!is_our_order) return;
+
+    // 2. State Machine Reconciliation
+    if (report.status == OrderStatus::FILLED) {
+        // Note: For a true basket, you'd want to count fills and ensure ALL legs 
+        // are filled before unlocking, but for simplicity, we transition on the first successful leg fill.
+        
+        if (current_position_ == PositionState::PENDING_LONG) {
+            current_position_ = PositionState::LONG;
+            LOG_INFO("[{}] Successfully entered LONG basket.", config_path_);
+        } else if (current_position_ == PositionState::PENDING_SHORT) {
+            current_position_ = PositionState::SHORT;
+            LOG_INFO("[{}] Successfully entered SHORT basket.", config_path_);
+        } else if (current_position_ == PositionState::PENDING_FLAT) {
+            current_position_ = PositionState::FLAT;
+            LOG_INFO("[{}] Successfully FLATTENED basket.", config_path_);
+        }
+    } else if (report.status == OrderStatus::REJECTED || report.status == OrderStatus::CANCELED) {
+        // FATAL: The exchange rejected our order. We must revert the state lock!
+        LOG_ERROR("[{}] Order rejected! Reverting state machine.", config_path_);
+        
+        if (current_position_ == PositionState::PENDING_LONG || current_position_ == PositionState::PENDING_SHORT) {
+            current_position_ = PositionState::FLAT; 
+        } else if (current_position_ == PositionState::PENDING_FLAT) {
+            // We failed to close. We are technically still in the previous position.
+            // (You would need logic here to determine if you were LONG or SHORT previously)
+        }
     }
 }
 

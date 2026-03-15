@@ -5,6 +5,7 @@
 #include <set>
 #include <string>
 #include <mutex>
+#include <optional>
 
 namespace bot {
 
@@ -34,8 +35,8 @@ public:
 
     double getTotalRealizedPnL() const;
     double getTotalUnrealizedPnL() const;
-    double getNetPosition(const std::string& symbol) const;
-    Position getPosition(const std::string& symbol) const;
+    double getNetPosition(const std::string& virtual_key) const;
+    std::optional<Position> getPosition(const std::string& virtual_key) const;
 
 private:
     void syncWithExchange(IExecutionEngine& engine);
