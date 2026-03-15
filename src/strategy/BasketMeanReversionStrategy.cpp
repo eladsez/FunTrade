@@ -204,7 +204,7 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
 
         if (targetState == PositionState::FLAT) {
             // Retrieve the exact virtual position we currently hold for this specific basket leg
-            Position current_pos = portfolio_manager_->getNetPosition(client_order_ids_[i]);
+            double net_qty = portfolio_mngr_->getNetPosition(client_order_ids_[i]);
             // If it's 0.0 (either doesn't exist or already flat), skip it
             if (std::abs(net_qty) < 1e-9) continue; 
 

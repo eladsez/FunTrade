@@ -5,6 +5,7 @@
 #include <execution/IExecutionEngine.hpp>
 #include <strategy/IStrategy.hpp>
 #include <strategy/BasketState.hpp>
+#include <risk/PortfolioManager.hpp>
 
 #include <string>
 #include <vector>
