@@ -23,9 +23,6 @@ public:
 
     void start() override;
     void stop() override;
-    
-    // Explicitly call this from a timer or daily event generator
-    void onBarClose(); 
 
 private:
     void loadConfig();

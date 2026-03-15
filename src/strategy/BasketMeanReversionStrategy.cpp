@@ -105,7 +105,7 @@ void BasketMeanReversionStrategy::warmUp() {
     for (size_t t = 0; t < min_bars; ++t) {
         double historical_spread = 0.0;
         for (size_t i = 0; i < num_components; ++i) {
-            historical_spread += all_bars[i][t].close * weights[i];
+            historical_spread += std::log(all_bars[i][t].close) * weights[i];
             basket_state_->updatePrice(symbols[i], all_bars[i][t].close, all_bars[i][t].timestamp_ms);
         }
         basket_state_->feedHistoricalSpread(historical_spread);
@@ -120,6 +120,9 @@ void BasketMeanReversionStrategy::onMarketEvent(const MarketEvent& event) {
     } else if (const auto* quote = std::get_if<QuoteTick>(&event)) {
         double mid_price = (quote->bid_price + quote->ask_price) * 0.5;
         processTick(quote->symbol, mid_price, quote->timestamp_ms);
+    }
+    else if (const auto* bar = std::get_if<BarUpdate>(&event)) {
+        basket_state_->updateDailyClose(bar->symbol, bar->close);
     }
 }
 
@@ -148,14 +151,6 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
             executeBasket(PositionState::FLAT);
             current_position_ = PositionState::FLAT;
         }
-    }
-}
-
-void BasketMeanReversionStrategy::onBarClose() {
-    // Triggers the mathematical advancement of the rolling window.
-    // Must be called externally by a clock or bar aggregator at the end of the timeframe.
-    if (basket_state_) {
-        basket_state_->advanceWindow();
     }
 }
 

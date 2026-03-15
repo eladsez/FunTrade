@@ -108,6 +108,8 @@ void AlpacaRtDataFeed::onWebSocketMessage(const std::string& payload) {
                 parseQuoteUpdate(msg);
             } else if (msgType == "o") {
                 parseOrderBookUpdate(msg);
+            } else if (msgType == "d") {
+                parseBarUpdate(msg); 
             } else if (msgType == "error") {
                 LOG_ERROR("[AlpacaRtDataFeed] Stream error: {}", msg.dump());
             }
@@ -265,6 +267,27 @@ void AlpacaRtDataFeed::parseOrderBookUpdate(const nlohmann::json& data) {
     }
 }
 
+void AlpacaRtDataFeed::parseBarUpdate(const nlohmann::json& data) {
+    try {
+        BarUpdate update;
+        update.symbol = data.at("S").get<std::string>();
+        update.open = data.value("o", 0.0);
+        update.high = data.value("h", 0.0);
+        update.low = data.value("l", 0.0);
+        update.close = data.value("c", 0.0);
+        update.volume = data.value("v", 0.0);
+        
+        std::string tsString = data.value("t", "");
+        update.timestamp_ms = parseAlpacaTimestamp(tsString);
+
+        if (tickCallback_) {
+            tickCallback_(update);
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("[AlpacaRtDataFeed] Error parsing bar: {}", e.what());
+    }
+}
+
 Side AlpacaRtDataFeed::stringToSide(const std::string& side) {
         if (side == "B") return Side::BUY;
         if (side == "S") return Side::SELL;
@@ -385,7 +408,8 @@ void AlpacaRtDataFeed::batcherLoop() {
                         {"action", "subscribe"},
                         {"trades", subs},
                         {"quotes", subs},
-                        {"orderbooks", subs}
+                        {"orderbooks", subs},
+                        {"dailyBars", subs}
                     };
                     LOG_INFO("[AlpacaRtDataFeed] Batch Subscribing to {} symbols", subs.size());
                     infra_->sendWsMessage(subPayload.dump());
@@ -397,7 +421,8 @@ void AlpacaRtDataFeed::batcherLoop() {
                         {"action", "unsubscribe"},
                         {"trades", unsubs},
                         {"quotes", unsubs},
-                        {"orderbooks", unsubs}
+                        {"orderbooks", unsubs},
+                        {"dailyBars", unsubs}
                     };
                     LOG_INFO("[AlpacaRtDataFeed] Batch Unsubscribing from {} symbols", unsubs.size());
                     infra_->sendWsMessage(unsubPayload.dump());

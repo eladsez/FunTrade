@@ -17,8 +17,8 @@ public:
     // Fast O(N) linear search for small arrays (fits in CPU cache)
     void updatePrice(const std::string& symbol, double price, uint64_t timestamp);
 
-    // Call this only when a new bar closes (e.g., end of day/hour), NOT on every tick
-    void advanceWindow();
+    // only when a new bar closes (e.g., end of day/hour), NOT on every tick
+    void updateDailyClose(const std::string& symbol, double close_price);
 
     // Used during initial warm-up to feed historical spreads
     void feedHistoricalSpread(double spread);
@@ -38,11 +38,17 @@ private:
     bool arePricesSynchronized() const;
     bool hasAllPrices() const;
     double calculateCurrentSpread() const;
+    double calculateClosingSpread() const; // NEW: Uses closing_prices_
+    bool checkAndResetBarrier();
+    void advanceWindow();
 
     int window_size_;
     std::vector<std::string> symbols_;
     std::vector<double> weights_;
     size_t num_components_;
+
+    std::vector<double> closing_prices_;
+    std::vector<bool> bar_closed_flags_; 
 
     std::vector<double> spread_history_;
     std::vector<double> current_prices_;

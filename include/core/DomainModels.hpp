@@ -60,8 +60,18 @@ struct OrderBookUpdate {
     bool is_snapshot = false; // Optional: Useful if Alpaca sends a full reset
 };
 
+struct BarUpdate {
+    std::string symbol;
+    double open = 0.0;
+    double high = 0.0;
+    double low = 0.0;
+    double close = 0.0;
+    double volume = 0.0;
+    uint64_t timestamp_ms = 0;
+};
+
 // The unified MarketEvent variant
-using MarketEvent = std::variant<TradeTick, QuoteTick, OrderBookUpdate>;
+using MarketEvent = std::variant<TradeTick, QuoteTick, OrderBookUpdate, BarUpdate>;
 
 enum class OrderType {
     MARKET,
