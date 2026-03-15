@@ -11,6 +11,7 @@
 #include <memory>
 #include <cmath>
 #include <cstdint>
+#include <map>
 
 namespace bot {
 
@@ -30,6 +31,9 @@ private:
     void onMarketEvent(const MarketEvent& event);
     inline void processTick(const std::string& symbol, double price, uint64_t timestamp = 0);
     void executeBasket(PositionState targetState);
+    std::map<uint64_t, std::vector<double>> alignHistoricalBars(
+        const std::vector<std::vector<HistoricalBar>>& all_bars, 
+        size_t num_components) const;
 
     std::shared_ptr<IEventBus> event_bus_;
     std::shared_ptr<IExecutionEngine> exec_engine_;

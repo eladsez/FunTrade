@@ -77,11 +77,26 @@ static std::string formatTimePoint(std::chrono::system_clock::time_point tp) {
     return oss.str();
 }
 
-void BasketMeanReversionStrategy::warmUp() {
-    // 1. Calculate dynamic timestamps based on current clock
-    auto now = std::chrono::system_clock::now();
+std::map<uint64_t, std::vector<double>> BasketMeanReversionStrategy::alignHistoricalBars(
+    const std::vector<std::vector<HistoricalBar>>& all_bars, 
+    size_t num_components) const {
     
-    // Request roughly 1.5x the window size in calendar days to account for weekends and market holidays.
+    std::map<uint64_t, std::vector<double>> aligned_closes;
+
+    for (size_t i = 0; i < num_components; ++i) {
+        for (const auto& bar : all_bars[i]) {
+            // operator[] auto-creates an empty vector if the timestamp is new
+            if (aligned_closes[bar.timestamp_ms].empty()) {
+                aligned_closes[bar.timestamp_ms].resize(num_components, 0.0);
+            }
+            aligned_closes[bar.timestamp_ms][i] = bar.close;
+        }
+    }
+    return aligned_closes;
+}
+
+void BasketMeanReversionStrategy::warmUp() {
+    auto now = std::chrono::system_clock::now();
     int calendar_days_back = basket_state_->getWindowSize() * 2; 
     auto start = now - std::chrono::hours(24 * calendar_days_back);
 
@@ -92,22 +107,28 @@ void BasketMeanReversionStrategy::warmUp() {
     const auto& symbols = basket_state_->getSymbols();
     const auto& weights = basket_state_->getWeights();
 
+    // Step 1: Fetch all raw historical bars
     std::vector<std::vector<HistoricalBar>> all_bars(num_components);
-    size_t min_bars = std::numeric_limits<size_t>::max();
-
     for (size_t i = 0; i < num_components; ++i) {
         all_bars[i] = event_bus_->fetchHistoricalBars(symbols[i], start_time, end_time, "1Day");
-        if (all_bars[i].size() < min_bars) {
-            min_bars = all_bars[i].size();
-        }
     }
 
-    for (size_t t = 0; t < min_bars; ++t) {
+    // Step 2: Align bars chronologically
+    auto aligned_closes = alignHistoricalBars(all_bars, num_components);
+
+    // Step 3: Calculate spreads and prime the state machine
+    for (const auto& [timestamp, prices] : aligned_closes) {
+        
+        // Use standard algorithm to cleanly check if all components have valid prices
+        bool is_valid_day = std::all_of(prices.begin(), prices.end(), [](double p) { return p > 0.0; });
+        if (!is_valid_day) continue; 
+
         double historical_spread = 0.0;
         for (size_t i = 0; i < num_components; ++i) {
-            historical_spread += std::log(all_bars[i][t].close) * weights[i];
-            basket_state_->updatePrice(symbols[i], all_bars[i][t].close, all_bars[i][t].timestamp_ms);
+            historical_spread += std::log(prices[i]) * weights[i];
+            basket_state_->updatePrice(symbols[i], prices[i], timestamp);
         }
+
         basket_state_->feedHistoricalSpread(historical_spread);
     }
 
