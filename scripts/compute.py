@@ -22,8 +22,8 @@ def fetch_and_prepare_data(tickers, years=5, split_ratio=0.8):
     print(f"[*] Downloading {len(tickers)} tickers and SPY benchmark...")
 
     # 2. Download Stocks & Benchmark
-    data = yf.download(tickers, start=start_date, end=end_date, threads=True)['Close']
-    spy = yf.download("SPY", start=start_date, end=end_date, threads=True)['Close']
+    data = yf.download(tickers, start=start_date, end=end_date, threads=True, auto_adjust=True)['Close']
+    spy = yf.download("SPY", start=start_date, end=end_date, threads=True, auto_adjust=True)['Close']
     
     # 3. Clean the Ticker Data
     # Drop columns (tickers) that have more than 10% missing data
@@ -101,161 +101,175 @@ def calculate_hurst(ts, max_lag=20):
     poly = np.polyfit(np.log(lags), np.log(tau), 1)
     return poly[0] / 2.0
 
-def check_tradeability_dynamic(weights, prices, max_capital=5000.0, max_error=0.025):
+def calculate_execution_shares(current_prices, weights, direction, max_capital=5000.0, max_error=0.025):
     """
-    Dynamically calculates the Minimum Tradeable Capital required to guarantee 
-    all short legs are integers. Scales up to the max_capital limit if possible.
+    Unified execution logic for order routing.
+    Calculates exact share counts: strict integer shorts, compensatory fractional longs.
     """
     total_abs_weight = sum(abs(w) for w in weights.values())
-    ideal_weight_ratios = {t: abs(w) / total_abs_weight for t, w in weights.items()}
+    ratios = {t: abs(w) / total_abs_weight for t, w in weights.items()}
     
-    # Test both directions (Long Spread & Short Spread)
-    for direction in [1, -1]:
-        short_legs = []
-        for t, w in weights.items():
-            if w * direction < 0:
-                short_legs.append(t)
-                
-        if not short_legs:
-            continue # No short legs to constrain
-            
-        # 1. Find the Minimum Base Capital
-        # Calculate the total basket capital required to buy exactly 1 share 
-        # of each short leg. 
-        capital_requirements = []
-        for t in short_legs:
-            # Capital = Price / Ideal Ratio
-            req_cap = prices[t] / ideal_weight_ratios[t]
-            capital_requirements.append(req_cap)
-            
-        # The base_capital is dictated by the most restrictive short leg.
-        # At this capital level, the most restrictive short leg gets exactly 1 share,
-        # and all other short legs get >= 1 share.
-        base_capital = max(capital_requirements)
+    short_legs = [t for t, w in weights.items() if (w * direction) < 0]
+    long_legs = [t for t, w in weights.items() if (w * direction) > 0]
+    
+    if not short_legs or not long_legs:
+        return None
         
-        # 2. Hard Ceiling Check
-        # If the absolute minimum capital needed to trade this basket cleanly
-        # exceeds your total available budget, it's untradeable.
-        if base_capital > max_capital:
-            return False
-            
-        # 3. Dynamic Scaling
-        # How many full "base_capital" blocks can we fit inside the max_capital?
-        # E.g., if base_capital is $2,000 and max_capital is $5,000, multiplier = 2.
-        # We deploy $4,000, ensuring short legs become exact multiples of integers.
-        multiplier = int(max_capital // base_capital)
-        deployed_capital = base_capital * multiplier
+    # 1. Anchor on the most restrictive short leg
+    capital_reqs = [current_prices[t] / ratios[t] for t in short_legs]
+    base_capital = max(capital_reqs)
+    
+    if base_capital > max_capital:
+        return None 
         
-        # 4. Enforce Reality and Check Tracking Error
-        actual_capital = {}
-        for t in weights.keys():
-            ideal_leg_capital = deployed_capital * ideal_weight_ratios[t]
+    # 2. Dynamic Scaling
+    multiplier = int(max_capital // base_capital)
+    if multiplier == 0:
+        return None
+        
+    target_cap = base_capital * multiplier
+    
+    shares = {}
+    actual_short_cap = 0.0
+    short_weight_sum = sum(ratios[t] for t in short_legs)
+    
+    # 3. Lock in Short Shares (Strict Integers)
+    for t in short_legs:
+        ideal_cap = target_cap * ratios[t]
+        shares[t] = round(ideal_cap / current_prices[t]) 
+        
+        if shares[t] == 0:
+            return None
             
-            if t in short_legs:
-                # Shorts must be integers. Because we scaled by the base_capital multiplier,
-                # this division will result in a near-perfect integer.
-                actual_shares = round(ideal_leg_capital / prices[t])
-                
-                # Zero-share fallback catch (mathematically unlikely now, but safe)
-                if actual_shares == 0:
-                    return False
-                    
-                actual_capital[t] = actual_shares * prices[t]
-            else:
-                # Longs utilize broker fractional shares
-                actual_capital[t] = ideal_leg_capital
-                
-        total_proposed_cap = sum(actual_capital.values())
-        if total_proposed_cap == 0:
-            return False
+        actual_short_cap += (shares[t] * current_prices[t])
+        
+    # 4. Compensatory Long Rebalancing
+    long_weight_sum = sum(ratios[t] for t in long_legs)
+    target_long_cap = actual_short_cap * (long_weight_sum / short_weight_sum)
+    
+    for t in long_legs:
+        ideal_long_leg_cap = target_long_cap * (ratios[t] / long_weight_sum)
+        shares[t] = ideal_long_leg_cap / current_prices[t]
+        
+    # 5. Final Tracking Error Gatekeeper
+    total_actual_cap = actual_short_cap + target_long_cap
+    for t in weights.keys():
+        actual_ratio = (shares[t] * current_prices[t]) / total_actual_cap
+        if abs(actual_ratio - ratios[t]) / ratios[t] > max_error:
+            return None
             
-        # 5. The Final Tracking Error Gatekeeper
-        for t in weights.keys():
-            actual_ratio = actual_capital[t] / total_proposed_cap
-            ideal_ratio = ideal_weight_ratios[t]
-            
-            error = abs(actual_ratio - ideal_ratio) / ideal_ratio
-            if error > max_error:
-                return False 
+    return shares
 
-        # --- Store the successful capital allocation for this direction ---
-        if 'direction_caps' not in locals():
-            direction_caps = {}
-            
-        direction_caps[direction] = {
-            "min_capital": round(base_capital, 2),
-            "target_capital": round(deployed_capital, 2)
-        }
-                
-    # If it survives both directions under the max_capital ceiling, it is tradeable
-    return direction_caps
 
-def find_best_params(spread, window_size, cost_per_trade=0.002):
-    """ 
-    Grid Search: Entry Z vs Exit Z using ROLLING statistics.
-    Fully vectorized implementation to eliminate the Python 'for' loop bottleneck,
-    operating at near C-level speeds via Numpy and Pandas C-extensions.
+def check_tradeability_dynamic(weights, max_prices, max_capital=5000.0, max_error=0.025):
     """
+    Stress-tests the basket against the worst-case (highest) prices.
+    If it survives the most expensive day, it is tradeable.
+    """
+    for direction in [1, -1]:
+        shares = calculate_execution_shares(max_prices, weights, direction, max_capital, max_error)
+        if shares is None:
+            return False
+    return True
+
+def simulate_event_loop(z_spread, prices, weights, entry_z, exit_z, cost_per_trade=0.002, max_capital=5000.0):
+    """
+    Chronological state machine simulating actual execution logic.
+    Returns the final Sharpe ratio and total number of trades.
+    """
+    current_position = 0 # 1 for Long Spread, -1 for Short Spread, 0 for Flat
+    current_shares = {}
+    
+    daily_pnl = []
+    trade_count = 0
+    
+    # Align prices to the Z-score timeline
+    aligned_prices = prices.loc[z_spread.index]
+    
+    for i in range(1, len(z_spread)):
+        today_z = z_spread.iloc[i-1] # Yesterday's close determines today's action
+        today_prices = aligned_prices.iloc[i].to_dict()
+        yesterday_prices = aligned_prices.iloc[i-1].to_dict()
+        
+        day_pnl = 0.0
+        
+        # 1. Mark-to-Market (Calculate PnL if holding a position)
+        if current_position != 0:
+            for t, shares in current_shares.items():
+                price_diff = today_prices[t] - yesterday_prices[t]
+                # If we are Short the spread, weights with negative signs were bought long, etc.
+                # The execution logic handles the sign abstraction, we just calculate absolute holdings value change.
+                # Wait, calculate_execution_shares returns absolute share counts. We must apply the direction.
+                leg_direction = np.sign(weights[t]) * current_position
+                day_pnl += shares * price_diff * leg_direction
+
+        # 2. Check Exits
+        if current_position == 1 and today_z >= -exit_z:
+            current_position = 0
+            current_shares = {}
+            day_pnl -= (max_capital * cost_per_trade) # Abstracted friction cost
+            trade_count += 1
+            
+        elif current_position == -1 and today_z <= exit_z:
+            current_position = 0
+            current_shares = {}
+            day_pnl -= (max_capital * cost_per_trade)
+            trade_count += 1
+            
+        # 3. Check Entries
+        elif current_position == 0:
+            if today_z < -entry_z:
+                new_shares = calculate_execution_shares(today_prices, weights, direction=1, max_capital=max_capital)
+                if new_shares: # Only enter if the tracking error allows it today
+                    current_position = 1
+                    current_shares = new_shares
+                    day_pnl -= (max_capital * cost_per_trade)
+                    trade_count += 1
+                    
+            elif today_z > entry_z:
+                new_shares = calculate_execution_shares(today_prices, weights, direction=-1, max_capital=max_capital)
+                if new_shares:
+                    current_position = -1
+                    current_shares = new_shares
+                    day_pnl -= (max_capital * cost_per_trade)
+                    trade_count += 1
+                    
+        daily_pnl.append(day_pnl)
+        
+    pnl_series = pd.Series(daily_pnl)
+    # Convert dollar PnL to percentage returns against max_capital for standard metrics
+    pct_returns = pnl_series / max_capital 
+    
+    mean_pnl = pct_returns.mean()
+    std_pnl = pct_returns.std()
+    sharpe = np.sqrt(252) * (mean_pnl / std_pnl) if std_pnl > 0 else 0.0
+    
+    return sharpe, trade_count, pct_returns
+
+
+def find_best_params(spread, window_size, prices, weights, cost_per_trade=0.002, max_capital=5000.0):
     entry_range = np.arange(1.5, 3.25, 0.25)
     exit_range = np.arange(-0.25, 0.75, 0.25)
     
-    # 1. Calculate rolling statistics once (outside the loop)
     rolling_mu = spread.rolling(window=window_size).mean()
     rolling_std = spread.rolling(window=window_size).std()
-    
     z_spread = ((spread - rolling_mu) / rolling_std).dropna()
-    log_returns = spread.diff().loc[z_spread.index]
-    
-    # Convert to pure numpy arrays for maximum performance inside the grid search
-    z_vals = z_spread.values
-    ret_vals = log_returns.values
     
     results = []
 
     for entry_z, exit_z in product(entry_range, exit_range):
         if exit_z >= entry_z: 
             continue 
-
-        # 2. Vectorized State Machine
-        # We process the Short side and Long side completely independently.
-        
-        # --- Short Side Logic ---
-        # NaN means "hold previous state"
-        short_pos = np.full(len(z_vals), np.nan)
-        short_pos[z_vals > entry_z] = -1.0         # Trigger Short entry
-        short_pos[z_vals <= exit_z] = 0.0          # Trigger Short exit
-        # Forward fill to maintain position, fill initial NaNs with 0
-        short_series = pd.Series(short_pos).ffill().fillna(0.0)
-
-        # --- Long Side Logic ---
-        long_pos = np.full(len(z_vals), np.nan)
-        long_pos[z_vals < -entry_z] = 1.0          # Trigger Long entry
-        long_pos[z_vals >= -exit_z] = 0.0          # Trigger Long exit
-        long_series = pd.Series(long_pos).ffill().fillna(0.0)
-
-        # --- Combine Positions ---
-        # Since entry thresholds are distinct, they will never overlap.
-        combined_pos = short_series + long_series
-        
-        # 3. Prevent Look-Ahead Bias
-        # Today's signal trades at tomorrow's return
-        actual_pos = combined_pos.shift(1).fillna(0.0)
-        
-        # 4. Vectorized PnL & Cost Calculation
-        trades = actual_pos.diff().abs().fillna(0.0)
-        
-        # Because we use log-prices, the difference is approximately the % return
-        raw_pnl = actual_pos * log_returns.reset_index(drop=True)
-        
-        # Subtract flat percentage cost on every position change
-        daily_costs = trades * cost_per_trade
-        net_daily_pnl = raw_pnl - daily_costs
-        
-        # 5. Metrics
-        mean_pnl = net_daily_pnl.mean()
-        std_pnl = net_daily_pnl.std()
-        
-        sharpe = np.sqrt(252) * (mean_pnl / std_pnl) if std_pnl > 0 else 0.0
+            
+        sharpe, _, _ = simulate_event_loop(
+            z_spread=z_spread, 
+            prices=prices, 
+            weights=weights, 
+            entry_z=entry_z, 
+            exit_z=exit_z, 
+            cost_per_trade=cost_per_trade,
+            max_capital=max_capital
+        )
         
         results.append({
             'entry': entry_z, 
@@ -292,8 +306,10 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
         joh_res = coint_johansen(log_df.values, 0, 1)
         raw_weights = joh_res.evec[:, 0]
 
-        # Normalize weights so the first asset always has a weight of 1.0
-        weights = {combo[i]: round(raw_weights[i]/raw_weights[0], 4) for i in range(len(combo))}
+        # Normalize weights against the largest absolute weight to prevent explosion
+        max_idx = np.argmax(np.abs(raw_weights))
+        anchor_weight = raw_weights[max_idx]
+        weights = {combo[i]: round(raw_weights[i] / anchor_weight, 4) for i in range(len(combo))}
 
         # Weight Explosion Sanity Check
         # Prevent mathematically sound but practically untradeable allocations.
@@ -346,14 +362,20 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
         # the 2.5% tracking error limit on the allocated capital, reject the basket.
         # --- Catch the dynamically calculated capitals ---
         max_prices = subset_df.max().to_dict()
-        trade_caps = check_tradeability_dynamic(weights, max_prices, max_capital=5000.0, max_error=0.025)
-        if not trade_caps:
+        tradeable = check_tradeability_dynamic(weights, max_prices, max_capital=5000.0, max_error=0.025)
+        if not tradeable:
             return None
 
         window_size = int(max(round(hl * 2), 20))
 
         # Grid search
-        entry_z, exit_z, sharpe = find_best_params(spread, window_size, cost_per_trade)
+        entry_z, exit_z, sharpe = find_best_params(
+            spread=spread, 
+            window_size=window_size, 
+            prices=subset_df, 
+            weights=weights, 
+            cost_per_trade=cost_per_trade
+        )
         
         # Filter out noise
         if sharpe <= 0.1: 
@@ -364,7 +386,6 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
             "weights": weights, 
             "beta": round(beta, 3),
             "hurst": round(hurst_exp, 3),
-            "trade_caps": trade_caps,
             "p_value": p_val,
             "half_life": hl, 
             "entry_z": entry_z, 
@@ -373,23 +394,18 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
         }
 
     except Exception as e: 
+        print(f"Crash on {combo}: {e}")
         return None
 
-def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.002):
-    """
-    Simulates OOS performance using Log Prices and counts the number of trades.
-    Uses a fully vectorized state machine to match the speed of the grid search.
-    """
+def validate_oos_advanced(oos_data, train_res, cost_per_trade=0.002, max_capital=5000.0):
     tickers = train_res['tickers']
     weights = train_res['weights']
     entry_z = train_res['entry_z']
     exit_z = train_res['exit_z']
     
-    # 1. Reconstruct the log-spread on OOS data
-    log_df_oos = np.log(df_oos[list(tickers)])
+    log_df_oos = np.log(oos_data[list(tickers)])
     oos_spread = sum(log_df_oos[t] * weights[t] for t in tickers)
     
-    # 2. Calculate rolling Z-Score
     window_size = int(max(round(train_res['half_life'] * 2), 20))
     rolling_mu = oos_spread.rolling(window=window_size).mean()
     rolling_std = oos_spread.rolling(window=window_size).std()
@@ -398,128 +414,29 @@ def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.002):
     if len(z_spread) < 20: 
         return {"is_robust": False}
 
-    # 3. Vectorized State Machine
-    z_vals = z_spread.values
+    # Execute the C++ logic simulation
+    oos_sharpe, total_trades, pct_returns = simulate_event_loop(
+        z_spread=z_spread,
+        prices=oos_data[list(tickers)],
+        weights=weights,
+        entry_z=entry_z,
+        exit_z=exit_z,
+        cost_per_trade=cost_per_trade,
+        max_capital=max_capital
+    )
     
-    # --- Short Side Logic ---
-    short_pos = np.full(len(z_vals), np.nan)
-    short_pos[z_vals > entry_z] = -1.0         # Trigger Short entry
-    short_pos[z_vals <= exit_z] = 0.0          # Trigger Short exit
-    short_series = pd.Series(short_pos, index=z_spread.index).ffill().fillna(0.0)
-
-    # --- Long Side Logic ---
-    long_pos = np.full(len(z_vals), np.nan)
-    long_pos[z_vals < -entry_z] = 1.0          # Trigger Long entry
-    long_pos[z_vals >= -exit_z] = 0.0          # Trigger Long exit
-    long_series = pd.Series(long_pos, index=z_spread.index).ffill().fillna(0.0)
-
-    # --- Combine and Prevent Look-Ahead Bias ---
-    combined_pos = short_series + long_series
-    
-    # Shift position by 1: Trade tomorrow based on today's closing signal
-    actual_pos = combined_pos.shift(1).fillna(0.0)
-
-    # 4. Count Trades and Calculate Net PnL
-    # A change in position equals a trade action
-    trade_actions = actual_pos.diff().abs().fillna(0.0)
-    total_trade_actions = trade_actions[trade_actions > 0].count()
-    round_trip_trades = int(total_trade_actions / 2)
-
-    # STRICT FILTER: If the basket made fewer than 4 round-trips in a year, it's noise.
+    round_trip_trades = total_trades // 2
     if round_trip_trades < 4:
         return {"is_robust": False}
-
-    # =====================================================================
-    # 5. REALITY SIMULATION - Single-Anchor Scaling
-    # =====================================================================
-    cap_long = train_res['trade_caps'][1]['target_capital']
-    cap_short = train_res['trade_caps'][-1]['target_capital']
-    
-    total_abs_weight = sum(abs(w) for w in weights.values())
-    ideal_weight_ratios = {t: abs(w) / total_abs_weight for t, w in weights.items()}
-    
-    dollar_diffs = df_oos[list(tickers)].diff().fillna(0.0)
-    
-    shares_long = pd.DataFrame(index=df_oos.index)
-    shares_short = pd.DataFrame(index=df_oos.index)
-    
-    # These will store the max tracking error across all legs for each day
-    daily_error_long = pd.Series(0.0, index=df_oos.index)
-    daily_error_short = pd.Series(0.0, index=df_oos.index)
-    
-    for direction, cap, shares_df, error_series in [(1, cap_long, shares_long, daily_error_long), 
-                                                    (-1, cap_short, shares_short, daily_error_short)]:
-        actual_cap_df = pd.DataFrame(index=df_oos.index)
         
-        for t, w in weights.items():
-            ideal_cap = cap * ideal_weight_ratios[t]
-            raw_shares = ideal_cap / df_oos[t]
-            
-            # C++ Logic: Round shorts to nearest integer, keep longs fractional
-            is_short = (w * direction < 0)
-            shares_df[t] = raw_shares.round() if is_short else raw_shares
-            
-            # Calculate the actual capital deployed to this leg today
-            actual_cap_df[t] = shares_df[t] * df_oos[t]
-            
-        # Calculate total actual capital deployed today
-        total_actual_cap = actual_cap_df.sum(axis=1)
-        
-        # Calculate the tracking error for each leg and find the maximum error of the day
-        for t in weights.keys():
-            actual_ratio = actual_cap_df[t] / total_actual_cap
-            ideal_ratio = ideal_weight_ratios[t]
-            leg_error = (actual_ratio - ideal_ratio).abs() / ideal_ratio
-            
-            # Keep the highest error observed across any leg for this day
-            error_series[:] = np.maximum(error_series, leg_error)
-
-    # --- C++ ABORT MASK ---
-    # If the daily error exceeds 2.5%, the C++ bot aborts. The position becomes 0.
-    max_error_limit = 0.025
-    valid_long_days = (daily_error_long <= max_error_limit).astype(float)
-    valid_short_days = (daily_error_short <= max_error_limit).astype(float)
-
-    # C. Calculate daily Dollar PnL
-    pnl_long_spread = sum(shares_long[t].shift(1) * dollar_diffs[t] * np.sign(w) for t, w in weights.items())
-    pnl_short_spread = sum(shares_short[t].shift(1) * dollar_diffs[t] * -np.sign(w) for t, w in weights.items())
-    
-    # D. Convert Dollar PnL to Percentage Returns
-    ret_long_spread = pnl_long_spread / cap_long
-    ret_short_spread = pnl_short_spread / cap_short
-    
-    # E. Map returns to signals AND apply the C++ Abort Mask
-    active_long = (actual_pos == 1.0).astype(float) * valid_long_days
-    active_short = (actual_pos == -1.0).astype(float) * valid_short_days
-    
-    raw_pnl = (active_long * ret_long_spread) + (active_short * ret_short_spread)
-    
-    # Subtract transaction costs
-    transaction_costs = trade_actions * cost_per_trade
-    net_pnl = raw_pnl.fillna(0.0) - transaction_costs
-
-    # =====================================================================
-    # 6. Calculate Cumulative Returns and Maximum Drawdown (MDD)
-    # =====================================================================
-    cum_pnl = net_pnl.cumsum()
-
-    # cummax() tracks the "high water mark" (the peak)
-    running_max = cum_pnl.cummax()
-
-    # The drawdown is the current value minus the highest peak
-    drawdowns = cum_pnl - running_max
-    
-    # Grab the absolute worst drop (convert to a positive number for easy reading)
+    # Calculate Max Drawdown based on the discrete returns
+    cum_returns = pct_returns.cumsum()
+    running_max = cum_returns.cummax()
+    drawdowns = cum_returns - running_max
     max_drawdown = abs(drawdowns.min())
     
-    # 7. OOS Performance Metrics
-    oos_sharpe = np.sqrt(252) * (net_pnl.mean() / net_pnl.std()) if net_pnl.std() > 0 else 0
     oos_p_val = adfuller(oos_spread)[1]
     
-    # STRICT FILTER: 
-    # 1. Must still be stationary Out-Of-Sample
-    # 2. Must be profitable (Sharpe > 0.5)
-    # 3. MDD must be less than 20% (0.20)
     is_robust = (oos_p_val < 0.05) and (oos_sharpe > 0.5) and (max_drawdown < 0.20)
 
     return {
@@ -558,16 +475,6 @@ def export_robust_configs(robust_list, train_dates, test_dates):
                 "window_size": int(max(round(item['train_hl'] * 2.0), 20)),
                 "entry_z": item['entry_z'],
                 "exit_z": item['exit_z'],
-                "capital_reqs": {
-                    "long_spread": {
-                        "min_required": item['trade_caps'][1]['min_capital'],
-                        "target_allocated": item['trade_caps'][1]['target_capital']
-                    },
-                    "short_spread": {
-                        "min_required": item['trade_caps'][-1]['min_capital'],
-                        "target_allocated": item['trade_caps'][-1]['target_capital']
-                    }
-                }
             },
             "exported_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
@@ -606,8 +513,17 @@ def process_combo(combo, df_train, df_test, benchmark_train):
     train_res = test_basket(df_train, combo, benchmark_train)
     
     if train_res:
-        # 2. Validate with Out-of-Sample data
-        oos_metrics = validate_oos_advanced(df_test, train_res)
+        # Calculate the exact window size needed for the rolling indicators
+        window_size = int(max(round(train_res['half_life'] * 2), 20))
+        
+        # Grab the tail of the training data to 'prime' the OOS indicators
+        prime_data = df_train.iloc[-window_size:]
+        
+        # Stitch them together
+        oos_data = pd.concat([prime_data, df_test])
+        
+        # 2. Validate with Out-of-Sample data using the primed dataframe
+        oos_metrics = validate_oos_advanced(oos_data, train_res)
         
         if oos_metrics['is_robust']:
             # 3. CRITICAL: Map the keys correctly for the export function
@@ -621,7 +537,6 @@ def process_combo(combo, df_train, df_test, benchmark_train):
                 "oos_sharpe": oos_metrics['oos_sharpe'],
                 "entry_z": train_res['entry_z'],
                 "exit_z": train_res['exit_z'],
-                "trade_caps": train_res['trade_caps']
             }
             
     # Return None if it fails any stability tests
