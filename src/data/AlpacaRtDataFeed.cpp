@@ -311,6 +311,21 @@ QuoteCondition AlpacaRtDataFeed::stringToQuoteCondition(const std::string& cond)
     return QuoteCondition::OTHER;
 }
 
+std::string urlEncodeTimestamp(std::string ts) {
+    size_t pos = 0;
+    while ((pos = ts.find(":", pos)) != std::string::npos) {
+        ts.replace(pos, 1, "%3A");
+        pos += 3; // Move past the newly inserted "%3A"
+    }
+    // Optional: Also encode the '+' if you use explicit timezone offsets instead of 'Z'
+    pos = 0;
+    while ((pos = ts.find("+", pos)) != std::string::npos) {
+        ts.replace(pos, 1, "%2B");
+        pos += 3;
+    }
+    return ts;
+}
+
 std::vector<HistoricalBar> AlpacaRtDataFeed::fetchHistoricalBars(
     const std::string& symbol, 
     const std::string& start, 
@@ -319,11 +334,18 @@ std::vector<HistoricalBar> AlpacaRtDataFeed::fetchHistoricalBars(
     
     std::vector<HistoricalBar> bars;
 
+    std::string encoded_start = urlEncodeTimestamp(start);
+    std::string encoded_end = urlEncodeTimestamp(end);
+
+    std::string clean_start = start.substr(0, 10);
+    std::string clean_end = end.substr(0, 10);
+
     // Construct the endpoint for Alpaca Market Data V2 Stocks
     std::string target = "/v2/stocks/bars?symbols=" + symbol + 
                          "&timeframe=" + timeframe + 
-                         "&start=" + start + 
-                         "&end=" + end;
+                         "&start=" + clean_start + 
+                         "&end=" + clean_end + 
+                         "&feed=iex";
 
     try {
         // Alpaca's data API uses data.alpaca.markets

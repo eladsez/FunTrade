@@ -160,9 +160,15 @@ void OrderManager::syncWithExchange() {
             try {
                 OrderState state;
                 state.order_id = oJson.value("id", "");
-                state.client_order_id = oJson.value("client_order_id", "");
+                state.client_order_id = oJson["client_order_id"].is_null() ? "" : oJson.value("client_order_id", "");
                 state.symbol = oJson.value("symbol", "");
                 
+                std::string qtyStr = oJson["qty"].is_null() ? "0" : oJson.value("qty", "0");
+                state.quantity = std::stod(qtyStr);
+
+                std::string priceStr = oJson["limit_price"].is_null() ? "0" : oJson.value("limit_price", "0");
+                state.price = std::stod(priceStr);
+
                 std::string sideStr = oJson.value("side", "buy");
                 state.side = (sideStr == "buy") ? Side::BUY : Side::SELL;
                 
@@ -170,9 +176,6 @@ void OrderManager::syncWithExchange() {
                 if (typeStr == "limit") state.type = OrderType::LIMIT;
                 else if (typeStr == "trailing_stop") state.type = OrderType::TRAILING_STOP;
                 else state.type = OrderType::MARKET;
-                
-                state.quantity = std::stod(oJson.value("qty", "0"));
-                state.price = std::stod(oJson.value("limit_price", "0"));
                 
                 std::string statusStr = oJson.value("status", "new");
                 if (statusStr == "filled") state.status = OrderStatus::FILLED;

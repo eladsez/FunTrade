@@ -13,7 +13,7 @@
 #include <execution/AlpacaExecutionEngine.hpp>
 #include <risk/PortfolioManager.hpp>
 #include <execution/OrderManager.hpp>
-#include <strategy/MarketEventPrinter.hpp>
+#include <strategy/BasketMeanReversionStrategy.hpp>
 #include <iostream>
 
 using namespace bot;
@@ -34,10 +34,15 @@ void setupSignalHandlers() {
 int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
     
+    // 1. Initialize Core Infrastructure
     auto dataFeed = std::make_shared<AlpacaRtDataFeed>(apiKey, apiSecret);
     auto eventBus = std::make_shared<EventBus>(dataFeed);
     auto executionEngine = std::make_shared<AlpacaExecutionEngine>(eventBus, apiKey, apiSecret);
 
+    // 2. Initialize the Execution & Risk Managers
+    auto orderManager = std::make_shared<OrderManager>(eventBus, executionEngine);
+    // Note: PortfolioManager takes references, so we dereference the shared_ptrs
+    auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus, *executionEngine);
 
     auto portfolioValue = executionEngine->getPortfolioValue();
     double initPv = 100000.0;
@@ -46,17 +51,21 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
         LOG_INFO("[LIVE] Current Portfolio Value: ${}", initPv);
     }
 
-    auto eth_printer = std::make_shared<MarketEventPrinter>(eventBus, "ETH/USD");
-    auto btc_printer = std::make_shared<MarketEventPrinter>(eventBus, "BTC/USD");
+    // 3. Initialize the Strategy
+    std::string configPath = "scripts/robust_configs/amzn_cmg_expe.json";
+    double capitalAllocation = 5000.0; 
 
-    eth_printer->start();
-    btc_printer->start();
+    auto strategy = std::make_shared<BasketMeanReversionStrategy>(
+        eventBus,
+        orderManager,
+        portfolioManager,
+        configPath,
+        capitalAllocation
+    );
 
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-
-    eth_printer->stop();
-    std::this_thread::sleep_for(std::chrono::seconds(60));
-    eth_printer->start();    
+    // 4. Start the Strategy
+    LOG_INFO("[LIVE] Booting up Basket Mean Reversion Strategy...");
+    strategy->start();
 
     LOG_INFO("[LIVE] Bot is running. Press Ctrl+C to stop.");
     
@@ -65,8 +74,9 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    btc_printer->stop();
-    eth_printer->stop();
+    // 5. Graceful Shutdown
+    LOG_INFO("[LIVE] Shutdown signal received. Stopping strategy.");
+    strategy->stop();
 
     LOG_INFO("[LIVE] Shutdown complete.");
     return 0;

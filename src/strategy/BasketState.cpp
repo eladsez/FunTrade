@@ -21,7 +21,7 @@ BasketState::BasketState(int window_size, const std::vector<std::string>& symbol
 }
 
 // Fast O(N) linear search for small arrays (fits in CPU cache)
-inline void BasketState::updatePrice(const std::string& symbol, double price, uint64_t timestamp) {
+void BasketState::updatePrice(const std::string& symbol, double price, uint64_t timestamp) {
     if (price <= 0.0) return;
 
     for (size_t i = 0; i < num_components_; ++i) {

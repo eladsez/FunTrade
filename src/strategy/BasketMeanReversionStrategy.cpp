@@ -52,6 +52,7 @@ void BasketMeanReversionStrategy::loadConfig() {
     file >> config;
 
     // Parse nested structure from the Python export
+    basket_id_ = config["basket_id"];
     int window_size = config["trading_params"]["window_size"];
     entry_z_score_ = config["trading_params"]["entry_z"];
     exit_z_score_ = config["trading_params"]["exit_z"];
@@ -144,6 +145,8 @@ void BasketMeanReversionStrategy::warmUp() {
     }
 
     basket_state_->setWarmedUp(true);
+
+    LOG_INFO("[BasketMeanReversionStrategy] {} Warmed Up. Initial Z-Score: {}", basket_id_, basket_state_->getZScore().value());
 }
 
 void BasketMeanReversionStrategy::onMarketEvent(const MarketEvent& event) {

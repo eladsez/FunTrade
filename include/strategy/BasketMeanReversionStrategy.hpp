@@ -62,6 +62,8 @@ private:
 
     uint64_t report_subid_;
     std::unordered_map<std::string, uint64_t> market_subid_;
+
+    std::string basket_id_;
     
     double capital_allocation_;
 };
