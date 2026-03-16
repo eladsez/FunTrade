@@ -429,30 +429,90 @@ def validate_oos_advanced(df_oos, train_res, cost_per_trade=0.002):
     if round_trip_trades < 4:
         return {"is_robust": False}
 
-    # Calculate returns (using standard diff on the log spread)
-    log_returns = oos_spread.diff().loc[z_spread.index].fillna(0.0)
+    # =====================================================================
+    # 5. REALITY SIMULATION - Single-Anchor Scaling
+    # =====================================================================
+    cap_long = train_res['trade_caps'][1]['target_capital']
+    cap_short = train_res['trade_caps'][-1]['target_capital']
     
-    # Multiply shifted position by today's return
-    raw_pnl = actual_pos * log_returns
+    total_abs_weight = sum(abs(w) for w in weights.values())
+    ideal_weight_ratios = {t: abs(w) / total_abs_weight for t, w in weights.items()}
     
-    # Subtract flat percentage cost on every trade action
-    transaction_costs = trade_actions * cost_per_trade
-    net_pnl = raw_pnl - transaction_costs
+    dollar_diffs = df_oos[list(tickers)].diff().fillna(0.0)
+    
+    shares_long = pd.DataFrame(index=df_oos.index)
+    shares_short = pd.DataFrame(index=df_oos.index)
+    
+    # These will store the max tracking error across all legs for each day
+    daily_error_long = pd.Series(0.0, index=df_oos.index)
+    daily_error_short = pd.Series(0.0, index=df_oos.index)
+    
+    for direction, cap, shares_df, error_series in [(1, cap_long, shares_long, daily_error_long), 
+                                                    (-1, cap_short, shares_short, daily_error_short)]:
+        actual_cap_df = pd.DataFrame(index=df_oos.index)
+        
+        for t, w in weights.items():
+            ideal_cap = cap * ideal_weight_ratios[t]
+            raw_shares = ideal_cap / df_oos[t]
+            
+            # C++ Logic: Round shorts to nearest integer, keep longs fractional
+            is_short = (w * direction < 0)
+            shares_df[t] = raw_shares.round() if is_short else raw_shares
+            
+            # Calculate the actual capital deployed to this leg today
+            actual_cap_df[t] = shares_df[t] * df_oos[t]
+            
+        # Calculate total actual capital deployed today
+        total_actual_cap = actual_cap_df.sum(axis=1)
+        
+        # Calculate the tracking error for each leg and find the maximum error of the day
+        for t in weights.keys():
+            actual_ratio = actual_cap_df[t] / total_actual_cap
+            ideal_ratio = ideal_weight_ratios[t]
+            leg_error = (actual_ratio - ideal_ratio).abs() / ideal_ratio
+            
+            # Keep the highest error observed across any leg for this day
+            error_series[:] = np.maximum(error_series, leg_error)
 
-    # 5. Calculate Cumulative Returns and Maximum Drawdown (MDD)
-    # cumsum() builds the equity curve
-    cum_pnl = net_pnl.cumsum()
+    # --- C++ ABORT MASK ---
+    # If the daily error exceeds 2.5%, the C++ bot aborts. The position becomes 0.
+    max_error_limit = 0.025
+    valid_long_days = (daily_error_long <= max_error_limit).astype(float)
+    valid_short_days = (daily_error_short <= max_error_limit).astype(float)
+
+    # C. Calculate daily Dollar PnL
+    pnl_long_spread = sum(shares_long[t].shift(1) * dollar_diffs[t] * np.sign(w) for t, w in weights.items())
+    pnl_short_spread = sum(shares_short[t].shift(1) * dollar_diffs[t] * -np.sign(w) for t, w in weights.items())
     
+    # D. Convert Dollar PnL to Percentage Returns
+    ret_long_spread = pnl_long_spread / cap_long
+    ret_short_spread = pnl_short_spread / cap_short
+    
+    # E. Map returns to signals AND apply the C++ Abort Mask
+    active_long = (actual_pos == 1.0).astype(float) * valid_long_days
+    active_short = (actual_pos == -1.0).astype(float) * valid_short_days
+    
+    raw_pnl = (active_long * ret_long_spread) + (active_short * ret_short_spread)
+    
+    # Subtract transaction costs
+    transaction_costs = trade_actions * cost_per_trade
+    net_pnl = raw_pnl.fillna(0.0) - transaction_costs
+
+    # =====================================================================
+    # 6. Calculate Cumulative Returns and Maximum Drawdown (MDD)
+    # =====================================================================
+    cum_pnl = net_pnl.cumsum()
+
     # cummax() tracks the "high water mark" (the peak)
     running_max = cum_pnl.cummax()
-    
+
     # The drawdown is the current value minus the highest peak
     drawdowns = cum_pnl - running_max
     
     # Grab the absolute worst drop (convert to a positive number for easy reading)
     max_drawdown = abs(drawdowns.min())
     
-    # 6. OOS Performance Metrics
+    # 7. OOS Performance Metrics
     oos_sharpe = np.sqrt(252) * (net_pnl.mean() / net_pnl.std()) if net_pnl.std() > 0 else 0
     oos_p_val = adfuller(oos_spread)[1]
     
