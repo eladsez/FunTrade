@@ -7,6 +7,7 @@
 #include <strategy/BasketState.hpp>
 #include <risk/PortfolioManager.hpp>
 #include <strategy/ExecutionCycle.hpp>
+#include <strategy/BasketSizer.hpp>
 
 #include <string>
 #include <vector>

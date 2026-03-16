@@ -195,74 +195,52 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 }
 
 void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
-    // 1. Initialize a new execution cycle for state tracking
-    current_cycle_ = std::make_unique<ExecutionCycle>(targetState);
-
     size_t num_components = basket_state_->getNumComponents();
     const auto& symbols = basket_state_->getSymbols();
-    const auto& weights = basket_state_->getWeights();
+    std::vector<LegTarget> targets;
 
-    for (size_t i = 0; i < num_components; ++i) {
-        double weight = weights[i];
-        Side order_side = Side::BUY; // Default initialization
-        double target_quantity = 0.0;
-
-        // Calculate target quantity and side based on desired macro-state
-        if (targetState == PositionState::FLAT) {
-            // Retrieve the exact virtual position we currently hold for this specific basket leg
-            double net_qty = portfolio_mngr_->getNetPosition(client_order_ids_[i]);
-            
-            if (std::abs(net_qty) >= 1e-9) {
-                target_quantity = std::abs(net_qty);
-                order_side = (net_qty > 0) ? Side::SELL : Side::BUY;
-            }
-        } else {
-            // We are entering a new position. Calculate quantity based on capital allocation.
-            double absolute_weight = std::abs(weight);
-            double current_price = basket_state_->getPrice(i);
-            
-            if (current_price > 0.0) {
-                target_quantity = (capital_allocation_ * absolute_weight) / current_price;
-                
-                if (targetState == PositionState::LONG) {
-                    order_side = (weight > 0) ? Side::BUY : Side::SELL;
-                } else { // SHORT
-                    order_side = (weight > 0) ? Side::SELL : Side::BUY;
-                }
-            }
+    // 1. Ask the Sizer for the exact mathematical execution targets
+    if (targetState == PositionState::FLAT) {
+        targets = BasketSizer::calculateExit(client_order_ids_, *portfolio_mngr_);
+    } else {
+        std::vector<double> current_prices(num_components);
+        for (size_t i = 0; i < num_components; ++i) {
+            current_prices[i] = basket_state_->getPrice(i);
         }
 
-        // 2. Register the leg with the cycle tracker BEFORE submitting.
-        // If target_quantity is 0, addLeg immediately marks this leg as terminal.
-        current_cycle_->addLeg(client_order_ids_[i], symbols[i], target_quantity, order_side);
+        auto opt_targets = BasketSizer::calculateEntry(
+            targetState, capital_allocation_, basket_state_->getWeights(), current_prices);
+            
+        if (!opt_targets) {
+            LOG_WARN("[{}] BasketSizer rejected entry (capital or tracking error constraints).", config_path_);
+            return;
+        }
+        targets = std::move(*opt_targets);
+    }
 
-        // 3. Only route an actual order if there are shares to trade
-        if (target_quantity > 0.0) {
+    // 2. Build the cycle and dispatch to the OrderManager
+    current_cycle_ = std::make_unique<ExecutionCycle>(targetState);
+
+    for (size_t i = 0; i < num_components; ++i) {
+        current_cycle_->addLeg(client_order_ids_[i], symbols[i], targets[i].quantity, targets[i].side);
+
+        if (targets[i].quantity > 0.0) {
             OrderRequest req;
             req.client_order_id = client_order_ids_[i]; 
             req.symbol = symbols[i];
-            req.side = order_side;
+            req.side = targets[i].side;
             req.type = OrderType::MARKET;
-            // Note: req.tif is implicitly default or ignored here, as OrderManager forces it to DAY
-            req.quantity = target_quantity;
+            req.quantity = targets[i].quantity;
 
-            LOG_INFO("[{}] Submitting leg: {} {} {:.4f} shares (Cycle Target: {}).", 
-                     config_path_, 
-                     (order_side == Side::BUY ? "BUY" : "SELL"), 
-                     symbols[i], 
-                     target_quantity,
-                     static_cast<int>(targetState));
+            LOG_INFO("[{}] Routing: {} {} {:.4f} shares.", 
+                     config_path_, (req.side == Side::BUY ? "BUY" : "SELL"), symbols[i], req.quantity);
 
-            // Submit to the order manager with a strict 5-second simulated IOC timeout
-            order_mngr_->submitOrder(req, std::chrono::milliseconds(5000));
+            order_mngr_->submitOrder(req, std::chrono::milliseconds(10000));
         }
     }
 
-    // 4. Edge Case Safety Net: 
-    // If we commanded the basket to go FLAT, but we were ALREADY completely flat,
-    // every leg's target_qty was 0.0. The cycle is instantly complete without sending orders.
+    // 3. Safety net for instant resolution
     if (current_cycle_->isComplete()) {
-        LOG_INFO("[{}] Cycle instantly completed (0 shares required for all legs).", config_path_);
         evaluateCompletedCycle();
     }
 }
