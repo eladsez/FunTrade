@@ -77,6 +77,8 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
     // Ensure we are getting live price updates for this newly traded symbol
     // ensureMarketSubscription(symbol);
 
+    // the point of the virtualkey here is to be able to track per baket positions
+    // when there is more the one basket sharing the same symbol 
     std::string base_id = OrderIdUtils::extractBaseClientId(report.client_order_id);
     std::string virtual_key = base_id.empty() ? report.symbol : base_id;
 

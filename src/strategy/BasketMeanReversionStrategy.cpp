@@ -146,7 +146,12 @@ void BasketMeanReversionStrategy::warmUp() {
 
     basket_state_->setWarmedUp(true);
 
-    LOG_INFO("[BasketMeanReversionStrategy] {} Warmed Up. Initial Z-Score: {}", basket_id_, basket_state_->getZScore().value());
+    std::optional<double> initial_z_score = basket_state_->getZScore();
+    if (initial_z_score.has_value()) {
+         LOG_INFO("[BasketMeanReversionStrategy] {} Warmed Up. Initial Z-Score: {}", basket_id_, initial_z_score.value());
+    } else {
+        LOG_WARN("[BasketMeanReversionStrategy] {} REST history empty. Strategy will warm up organically from the live stream.", basket_id_);
+    }
 }
 
 void BasketMeanReversionStrategy::onMarketEvent(const MarketEvent& event) {
@@ -215,7 +220,7 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
             targetState, capital_allocation_, basket_state_->getWeights(), current_prices);
             
         if (!opt_targets) {
-            LOG_WARN("[{}] BasketSizer rejected entry (capital or tracking error constraints).", config_path_);
+            LOG_WARN("[{}] BasketSizer rejected entry (capital or tracking error constraints).", basket_id_);
             return;
         }
         targets = std::move(*opt_targets);
@@ -236,7 +241,7 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
             req.quantity = targets[i].quantity;
 
             LOG_INFO("[{}] Routing: {} {} {:.4f} shares.", 
-                     config_path_, (req.side == Side::BUY ? "BUY" : "SELL"), symbols[i], req.quantity);
+                     basket_id_, (req.side == Side::BUY ? "BUY" : "SELL"), symbols[i], req.quantity);
 
             order_mngr_->submitOrder(req, std::chrono::milliseconds(10000));
         }
@@ -267,7 +272,7 @@ void BasketMeanReversionStrategy::evaluateCompletedCycle() {
         // Advance the master state machine to the target.
         current_position_ = target;
         LOG_INFO("[{}] Execution cycle complete. Target state {} achieved (fully or partially).", 
-                 config_path_, static_cast<int>(target));
+                 basket_id_, static_cast<int>(target));
         
         // --- The Partial Flatten Trap ---
         // If we tried to close the basket, but the timeout hit while we still had 
@@ -281,7 +286,7 @@ void BasketMeanReversionStrategy::evaluateCompletedCycle() {
             
             // Use a small epsilon to avoid floating-point errors on zero
             if (total_exposure > 1e-6) {
-                LOG_WARN("[{}] FLAT cycle completed, but residual inventory remains. Reverting state to PENDING_FLAT to force cleanup.", config_path_);
+                LOG_WARN("[{}] FLAT cycle completed, but residual inventory remains. Reverting state to PENDING_FLAT to force cleanup.", basket_id_);
                 // Reverting to PENDING_FLAT ensures the next market tick will immediately
                 // fire another executeBasket(FLAT) to sweep up the remaining shares.
                 current_position_ = PositionState::PENDING_FLAT; 
@@ -290,10 +295,10 @@ void BasketMeanReversionStrategy::evaluateCompletedCycle() {
     } else {
         // Zero fills across the entire basket. This is a total timeout or rejection.
         if (target == PositionState::LONG || target == PositionState::SHORT) {
-            LOG_ERROR("[{}] Entry cycle completely failed with 0 fills. Reverting to FLAT.", config_path_);
+            LOG_ERROR("[{}] Entry cycle completely failed with 0 fills. Reverting to FLAT.", basket_id_);
             current_position_ = PositionState::FLAT; 
         } else if (target == PositionState::FLAT) {
-            LOG_ERROR("[{}] Exit cycle completely failed with 0 fills. Reverting to PENDING_FLAT to retry.", config_path_);
+            LOG_ERROR("[{}] Exit cycle completely failed with 0 fills. Reverting to PENDING_FLAT to retry.", basket_id_);
             // If we failed to exit, we still hold the full basket. We must try again.
             current_position_ = PositionState::PENDING_FLAT;
         }
