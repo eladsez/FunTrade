@@ -101,6 +101,95 @@ def calculate_hurst(ts, max_lag=20):
     poly = np.polyfit(np.log(lags), np.log(tau), 1)
     return poly[0] / 2.0
 
+def check_tradeability_dynamic(weights, prices, max_capital=5000.0, max_error=0.025):
+    """
+    Dynamically calculates the Minimum Tradeable Capital required to guarantee 
+    all short legs are integers. Scales up to the max_capital limit if possible.
+    """
+    total_abs_weight = sum(abs(w) for w in weights.values())
+    ideal_weight_ratios = {t: abs(w) / total_abs_weight for t, w in weights.items()}
+    
+    # Test both directions (Long Spread & Short Spread)
+    for direction in [1, -1]:
+        short_legs = []
+        for t, w in weights.items():
+            if w * direction < 0:
+                short_legs.append(t)
+                
+        if not short_legs:
+            continue # No short legs to constrain
+            
+        # 1. Find the Minimum Base Capital
+        # Calculate the total basket capital required to buy exactly 1 share 
+        # of each short leg. 
+        capital_requirements = []
+        for t in short_legs:
+            # Capital = Price / Ideal Ratio
+            req_cap = prices[t] / ideal_weight_ratios[t]
+            capital_requirements.append(req_cap)
+            
+        # The base_capital is dictated by the most restrictive short leg.
+        # At this capital level, the most restrictive short leg gets exactly 1 share,
+        # and all other short legs get >= 1 share.
+        base_capital = max(capital_requirements)
+        
+        # 2. Hard Ceiling Check
+        # If the absolute minimum capital needed to trade this basket cleanly
+        # exceeds your total available budget, it's untradeable.
+        if base_capital > max_capital:
+            return False
+            
+        # 3. Dynamic Scaling
+        # How many full "base_capital" blocks can we fit inside the max_capital?
+        # E.g., if base_capital is $2,000 and max_capital is $5,000, multiplier = 2.
+        # We deploy $4,000, ensuring short legs become exact multiples of integers.
+        multiplier = int(max_capital // base_capital)
+        deployed_capital = base_capital * multiplier
+        
+        # 4. Enforce Reality and Check Tracking Error
+        actual_capital = {}
+        for t in weights.keys():
+            ideal_leg_capital = deployed_capital * ideal_weight_ratios[t]
+            
+            if t in short_legs:
+                # Shorts must be integers. Because we scaled by the base_capital multiplier,
+                # this division will result in a near-perfect integer.
+                actual_shares = round(ideal_leg_capital / prices[t])
+                
+                # Zero-share fallback catch (mathematically unlikely now, but safe)
+                if actual_shares == 0:
+                    return False
+                    
+                actual_capital[t] = actual_shares * prices[t]
+            else:
+                # Longs utilize broker fractional shares
+                actual_capital[t] = ideal_leg_capital
+                
+        total_proposed_cap = sum(actual_capital.values())
+        if total_proposed_cap == 0:
+            return False
+            
+        # 5. The Final Tracking Error Gatekeeper
+        for t in weights.keys():
+            actual_ratio = actual_capital[t] / total_proposed_cap
+            ideal_ratio = ideal_weight_ratios[t]
+            
+            error = abs(actual_ratio - ideal_ratio) / ideal_ratio
+            if error > max_error:
+                return False 
+
+        # --- Store the successful capital allocation for this direction ---
+        if 'direction_caps' not in locals():
+            direction_caps = {}
+            
+        direction_caps[direction] = {
+            "min_capital": round(base_capital, 2),
+            "target_capital": round(deployed_capital, 2)
+        }
+                
+    # If it survives both directions under the max_capital ceiling, it is tradeable
+    return direction_caps
+
 def find_best_params(spread, window_size, cost_per_trade=0.002):
     """ 
     Grid Search: Entry Z vs Exit Z using ROLLING statistics.
@@ -249,6 +338,18 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
         if p_val > 0.05 or not (2 <= hl <= 60) or hurst_exp >= 0.45: 
             return None
 
+        # --- TRADEABILITY STRESS TEST ---
+        # Extract the absolute maximum price for each leg during the training period.
+        # We test against max prices because higher prices force smaller share counts, 
+        # which violently amplifies integer rounding errors on the short side.
+        # If the generated weights cannot be mapped to integers without breaking 
+        # the 2.5% tracking error limit on the allocated capital, reject the basket.
+        # --- Catch the dynamically calculated capitals ---
+        max_prices = subset_df.max().to_dict()
+        trade_caps = check_tradeability_dynamic(weights, max_prices, max_capital=5000.0, max_error=0.025)
+        if not trade_caps:
+            return None
+
         window_size = int(max(round(hl * 2), 20))
 
         # Grid search
@@ -263,6 +364,7 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
             "weights": weights, 
             "beta": round(beta, 3),
             "hurst": round(hurst_exp, 3),
+            "trade_caps": trade_caps,
             "p_value": p_val,
             "half_life": hl, 
             "entry_z": entry_z, 
@@ -395,7 +497,17 @@ def export_robust_configs(robust_list, train_dates, test_dates):
             "trading_params": {
                 "window_size": int(max(round(item['train_hl'] * 2.0), 20)),
                 "entry_z": item['entry_z'],
-                "exit_z": item['exit_z']
+                "exit_z": item['exit_z'],
+                "capital_reqs": {
+                    "long_spread": {
+                        "min_required": item['trade_caps'][1]['min_capital'],
+                        "target_allocated": item['trade_caps'][1]['target_capital']
+                    },
+                    "short_spread": {
+                        "min_required": item['trade_caps'][-1]['min_capital'],
+                        "target_allocated": item['trade_caps'][-1]['target_capital']
+                    }
+                }
             },
             "exported_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
@@ -448,7 +560,8 @@ def process_combo(combo, df_train, df_test, benchmark_train):
                 "oos_p": oos_metrics['oos_p'],
                 "oos_sharpe": oos_metrics['oos_sharpe'],
                 "entry_z": train_res['entry_z'],
-                "exit_z": train_res['exit_z']
+                "exit_z": train_res['exit_z'],
+                "trade_caps": train_res['trade_caps']
             }
             
     # Return None if it fails any stability tests
