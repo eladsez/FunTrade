@@ -12,12 +12,12 @@ namespace bot {
 
 BasketMeanReversionStrategy::BasketMeanReversionStrategy(
     std::shared_ptr<IEventBus> eventBus,
-    std::shared_ptr<IExecutionEngine> executionEngine,
+    std::shared_ptr<OrderManager> orderMngr,
     std::shared_ptr<PortfolioManager> portfolioMngr,
     const std::string& configFilePath,
     double capitalAllocation)
     : event_bus_(std::move(eventBus)),
-      exec_engine_(std::move(executionEngine)),
+      order_mngr_(std::move(orderMngr)),
       portfolio_mngr_(std::move(portfolioMngr)),
       config_path_(configFilePath),
       capital_allocation_(capitalAllocation) {}
@@ -195,92 +195,131 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 }
 
 void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
+    // 1. Initialize a new execution cycle for state tracking
+    current_cycle_ = std::make_unique<ExecutionCycle>(targetState);
+
     size_t num_components = basket_state_->getNumComponents();
     const auto& symbols = basket_state_->getSymbols();
     const auto& weights = basket_state_->getWeights();
 
     for (size_t i = 0; i < num_components; ++i) {
         double weight = weights[i];
-        Side order_side;
+        Side order_side = Side::BUY; // Default initialization
         double target_quantity = 0.0;
 
+        // Calculate target quantity and side based on desired macro-state
         if (targetState == PositionState::FLAT) {
             // Retrieve the exact virtual position we currently hold for this specific basket leg
             double net_qty = portfolio_mngr_->getNetPosition(client_order_ids_[i]);
-            // If it's 0.0 (either doesn't exist or already flat), skip it
-            if (std::abs(net_qty) < 1e-9) continue; 
-
-            // The absolute value is exactly how many shares we need to order
-            target_quantity = std::abs(net_qty);
-
-            // Reverse the side based on the sign to close it out
-            order_side = (net_qty > 0) ? Side::SELL : Side::BUY;
+            
+            if (std::abs(net_qty) >= 1e-9) {
+                target_quantity = std::abs(net_qty);
+                order_side = (net_qty > 0) ? Side::SELL : Side::BUY;
+            }
         } else {
             // We are entering a new position. Calculate quantity based on capital allocation.
             double absolute_weight = std::abs(weight);
             double current_price = basket_state_->getPrice(i);
             
-            if (current_price <= 0) continue; 
-            
-            target_quantity = (capital_allocation_ * absolute_weight) / current_price;
-
-            if (targetState == PositionState::LONG) {
-                order_side = (weight > 0) ? Side::BUY : Side::SELL;
-            } else { // SHORT
-                order_side = (weight > 0) ? Side::SELL : Side::BUY;
+            if (current_price > 0.0) {
+                target_quantity = (capital_allocation_ * absolute_weight) / current_price;
+                
+                if (targetState == PositionState::LONG) {
+                    order_side = (weight > 0) ? Side::BUY : Side::SELL;
+                } else { // SHORT
+                    order_side = (weight > 0) ? Side::SELL : Side::BUY;
+                }
             }
         }
 
-        OrderRequest req;
-        req.client_order_id = client_order_ids_[i]; 
-        req.symbol = symbols[i];
-        req.side = order_side;
-        req.type = OrderType::MARKET;
-        req.tif = TimeInForce::IOC;
-        req.quantity = target_quantity;
+        // 2. Register the leg with the cycle tracker BEFORE submitting.
+        // If target_quantity is 0, addLeg immediately marks this leg as terminal.
+        current_cycle_->addLeg(client_order_ids_[i], symbols[i], target_quantity, order_side);
 
-        exec_engine_->placeOrder(req);
+        // 3. Only route an actual order if there are shares to trade
+        if (target_quantity > 0.0) {
+            OrderRequest req;
+            req.client_order_id = client_order_ids_[i]; 
+            req.symbol = symbols[i];
+            req.side = order_side;
+            req.type = OrderType::MARKET;
+            // Note: req.tif is implicitly default or ignored here, as OrderManager forces it to DAY
+            req.quantity = target_quantity;
+
+            LOG_INFO("[{}] Submitting leg: {} {} {:.4f} shares (Cycle Target: {}).", 
+                     config_path_, 
+                     (order_side == Side::BUY ? "BUY" : "SELL"), 
+                     symbols[i], 
+                     target_quantity,
+                     static_cast<int>(targetState));
+
+            // Submit to the order manager with a strict 5-second simulated IOC timeout
+            order_mngr_->submitOrder(req, std::chrono::milliseconds(5000));
+        }
+    }
+
+    // 4. Edge Case Safety Net: 
+    // If we commanded the basket to go FLAT, but we were ALREADY completely flat,
+    // every leg's target_qty was 0.0. The cycle is instantly complete without sending orders.
+    if (current_cycle_->isComplete()) {
+        LOG_INFO("[{}] Cycle instantly completed (0 shares required for all legs).", config_path_);
+        evaluateCompletedCycle();
     }
 }
 
 void BasketMeanReversionStrategy::onExecutionReport(const ExecutionReport& report) {
-    // 1. Check if this report belongs to THIS specific basket
-    bool is_our_order = false;
-    for (const auto& cid : client_order_ids_) {
-        // Clean, readable, and centralized
-        if (OrderIdUtils::isMatchingId(cid, report.client_order_id)) {
-            is_our_order = true;
-            break;
-        }
-    }
-    if (!is_our_order) return;
+    if (!current_cycle_) return; // No active cycle
 
-    // 2. State Machine Reconciliation
-    if (report.status == OrderStatus::FILLED) {
-        // Note: For a true basket, you'd want to count fills and ensure ALL legs 
-        // are filled before unlocking, but for simplicity, we transition on the first successful leg fill.
+    // Let the cycle process the report. If it returns true, the cycle is finished.
+    if (current_cycle_->processExecutionReport(report)) {
+        evaluateCompletedCycle();
+    }
+}
+
+void BasketMeanReversionStrategy::evaluateCompletedCycle() {
+    if (!current_cycle_) return;
+
+    PositionState target = current_cycle_->getTargetState();
+
+    if (current_cycle_->hasAnyFills()) {
+        // We successfully acquired or disposed of *some* inventory. 
+        // Advance the master state machine to the target.
+        current_position_ = target;
+        LOG_INFO("[{}] Execution cycle complete. Target state {} achieved (fully or partially).", 
+                 config_path_, static_cast<int>(target));
         
-        if (current_position_ == PositionState::PENDING_LONG) {
-            current_position_ = PositionState::LONG;
-            LOG_INFO("[{}] Successfully entered LONG basket.", config_path_);
-        } else if (current_position_ == PositionState::PENDING_SHORT) {
-            current_position_ = PositionState::SHORT;
-            LOG_INFO("[{}] Successfully entered SHORT basket.", config_path_);
-        } else if (current_position_ == PositionState::PENDING_FLAT) {
-            current_position_ = PositionState::FLAT;
-            LOG_INFO("[{}] Successfully FLATTENED basket.", config_path_);
+        // --- The Partial Flatten Trap ---
+        // If we tried to close the basket, but the timeout hit while we still had 
+        // partial fills pending, we technically still hold residual inventory.
+        if (target == PositionState::FLAT) {
+            double total_exposure = 0.0;
+            for (const auto& cid : client_order_ids_) {
+                // Rely on the PortfolioManager's exact tracking
+                total_exposure += std::abs(portfolio_mngr_->getNetPosition(cid));
+            }
+            
+            // Use a small epsilon to avoid floating-point errors on zero
+            if (total_exposure > 1e-6) {
+                LOG_WARN("[{}] FLAT cycle completed, but residual inventory remains. Reverting state to PENDING_FLAT to force cleanup.", config_path_);
+                // Reverting to PENDING_FLAT ensures the next market tick will immediately
+                // fire another executeBasket(FLAT) to sweep up the remaining shares.
+                current_position_ = PositionState::PENDING_FLAT; 
+            }
         }
-    } else if (report.status == OrderStatus::REJECTED || report.status == OrderStatus::CANCELED) {
-        // FATAL: The exchange rejected our order. We must revert the state lock!
-        LOG_ERROR("[{}] Order rejected! Reverting state machine.", config_path_);
-        
-        if (current_position_ == PositionState::PENDING_LONG || current_position_ == PositionState::PENDING_SHORT) {
+    } else {
+        // Zero fills across the entire basket. This is a total timeout or rejection.
+        if (target == PositionState::LONG || target == PositionState::SHORT) {
+            LOG_ERROR("[{}] Entry cycle completely failed with 0 fills. Reverting to FLAT.", config_path_);
             current_position_ = PositionState::FLAT; 
-        } else if (current_position_ == PositionState::PENDING_FLAT) {
-            // We failed to close. We are technically still in the previous position.
-            // (You would need logic here to determine if you were LONG or SHORT previously)
+        } else if (target == PositionState::FLAT) {
+            LOG_ERROR("[{}] Exit cycle completely failed with 0 fills. Reverting to PENDING_FLAT to retry.", config_path_);
+            // If we failed to exit, we still hold the full basket. We must try again.
+            current_position_ = PositionState::PENDING_FLAT;
         }
     }
+
+    // The cycle has been fully evaluated and recorded. Wipe it.
+    current_cycle_.reset();
 }
 
 void BasketMeanReversionStrategy::stop() {

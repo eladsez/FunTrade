@@ -2,10 +2,11 @@
 
 #include <core/IEventBus.hpp>
 #include <data/IDataFeed.hpp>
-#include <execution/IExecutionEngine.hpp>
+#include <execution/OrderManager.hpp>
 #include <strategy/IStrategy.hpp>
 #include <strategy/BasketState.hpp>
 #include <risk/PortfolioManager.hpp>
+#include <strategy/ExecutionCycle.hpp>
 
 #include <string>
 #include <vector>
@@ -21,7 +22,7 @@ class BasketMeanReversionStrategy : public IStrategy {
 public:
     BasketMeanReversionStrategy(
         std::shared_ptr<IEventBus> eventBus,
-        std::shared_ptr<IExecutionEngine> executionEngine,
+        std::shared_ptr<OrderManager> orderMngr,
         std::shared_ptr<PortfolioManager> portfolioMngr,
         const std::string& configFilePath,
         double capitalAllocation);
@@ -39,10 +40,12 @@ private:
     std::map<uint64_t, std::vector<double>> alignHistoricalBars(
         const std::vector<std::vector<HistoricalBar>>& all_bars, 
         size_t num_components) const;
+    void evaluateCompletedCycle();
 
     std::shared_ptr<IEventBus> event_bus_;
-    std::shared_ptr<IExecutionEngine> exec_engine_;
+    std::shared_ptr<OrderManager> order_mngr_;
     std::shared_ptr<PortfolioManager> portfolio_mngr_;
+    std::unique_ptr<ExecutionCycle> current_cycle_;
     
     std::string config_path_;
     std::unique_ptr<BasketState> basket_state_;
