@@ -1,0 +1,35 @@
+{
+    "basket_id": "amp_usb_v",
+    "tickers": [
+        "AMP",
+        "USB",
+        "V"
+    ],
+    "weights": {
+        "AMP": -0.7131,
+        "USB": 0.0821,
+        "V": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.001069,
+        "oos_p": 0.000161,
+        "train_hl": 27.17,
+        "oos_sharpe": 1.282
+    },
+    "trading_params": {
+        "window_size": 54,
+        "entry_z": 2.0,
+        "exit_z": 0.0
+    },
+    "exported_at": "2026-03-16 16:48:37"
+}

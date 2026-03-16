@@ -1,0 +1,35 @@
+{
+    "basket_id": "dte_duk_nrg",
+    "tickers": [
+        "DTE",
+        "DUK",
+        "NRG"
+    ],
+    "weights": {
+        "DTE": -0.7937,
+        "DUK": 1.0,
+        "NRG": -0.1018
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-17",
+            "end": "2025-03-13"
+        },
+        "testing": {
+            "start": "2025-03-14",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000224,
+        "oos_p": 0.016842,
+        "train_hl": 20.08,
+        "oos_sharpe": 1.242
+    },
+    "trading_params": {
+        "window_size": 40,
+        "entry_z": 1.5,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-16 17:20:00"
+}

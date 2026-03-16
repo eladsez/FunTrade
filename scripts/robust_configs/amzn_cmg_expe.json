@@ -1,0 +1,35 @@
+{
+    "basket_id": "amzn_cmg_expe",
+    "tickers": [
+        "AMZN",
+        "CMG",
+        "EXPE"
+    ],
+    "weights": {
+        "AMZN": 1.0,
+        "CMG": -0.4909,
+        "EXPE": -0.8367
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-17",
+            "end": "2025-03-13"
+        },
+        "testing": {
+            "start": "2025-03-14",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.00355,
+        "oos_p": 0.004301,
+        "train_hl": 21.66,
+        "oos_sharpe": 1.484
+    },
+    "trading_params": {
+        "window_size": 43,
+        "entry_z": 2.25,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-16 16:32:13"
+}

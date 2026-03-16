@@ -1,0 +1,35 @@
+{
+    "basket_id": "ddog_fslr_hpe",
+    "tickers": [
+        "DDOG",
+        "FSLR",
+        "HPE"
+    ],
+    "weights": {
+        "DDOG": -0.3611,
+        "FSLR": -0.3453,
+        "HPE": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-04-15",
+            "end": "2025-03-19"
+        },
+        "testing": {
+            "start": "2025-03-20",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.004649,
+        "oos_p": 0.025484,
+        "train_hl": 31.06,
+        "oos_sharpe": 2.405
+    },
+    "trading_params": {
+        "window_size": 62,
+        "entry_z": 2.25,
+        "exit_z": 0.25
+    },
+    "exported_at": "2026-03-16 17:17:24"
+}

@@ -1,0 +1,35 @@
+{
+    "basket_id": "hban_schw_wfc",
+    "tickers": [
+        "HBAN",
+        "SCHW",
+        "WFC"
+    ],
+    "weights": {
+        "HBAN": 1.0,
+        "SCHW": -0.7752,
+        "WFC": -0.2937
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.003223,
+        "oos_p": 0.046862,
+        "train_hl": 24.42,
+        "oos_sharpe": 0.531
+    },
+    "trading_params": {
+        "window_size": 49,
+        "entry_z": 1.75,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-16 16:48:37"
+}

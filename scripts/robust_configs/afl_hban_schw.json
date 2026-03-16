@@ -1,0 +1,35 @@
+{
+    "basket_id": "afl_hban_schw",
+    "tickers": [
+        "AFL",
+        "HBAN",
+        "SCHW"
+    ],
+    "weights": {
+        "AFL": -0.2463,
+        "HBAN": 1.0,
+        "SCHW": -0.9831
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000758,
+        "oos_p": 0.034433,
+        "train_hl": 20.53,
+        "oos_sharpe": 1.431
+    },
+    "trading_params": {
+        "window_size": 41,
+        "entry_z": 2.0,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-16 16:48:37"
+}

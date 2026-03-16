@@ -1,0 +1,35 @@
+{
+    "basket_id": "mlm_shw_sw",
+    "tickers": [
+        "MLM",
+        "SHW",
+        "SW"
+    ],
+    "weights": {
+        "MLM": -0.3862,
+        "SHW": 1.0,
+        "SW": -0.7034
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-17",
+            "end": "2025-03-13"
+        },
+        "testing": {
+            "start": "2025-03-14",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.005016,
+        "oos_p": 0.037998,
+        "train_hl": 15.04,
+        "oos_sharpe": 2.342
+    },
+    "trading_params": {
+        "window_size": 30,
+        "entry_z": 1.75,
+        "exit_z": 0.0
+    },
+    "exported_at": "2026-03-16 17:17:53"
+}

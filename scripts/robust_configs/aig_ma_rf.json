@@ -1,0 +1,35 @@
+{
+    "basket_id": "aig_ma_rf",
+    "tickers": [
+        "AIG",
+        "MA",
+        "RF"
+    ],
+    "weights": {
+        "AIG": 1.0,
+        "MA": -0.9917,
+        "RF": 0.1552
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000219,
+        "oos_p": 0.046772,
+        "train_hl": 21.34,
+        "oos_sharpe": 1.908
+    },
+    "trading_params": {
+        "window_size": 43,
+        "entry_z": 2.5,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-16 16:48:37"
+}

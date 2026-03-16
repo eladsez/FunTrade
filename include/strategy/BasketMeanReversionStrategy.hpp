@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <unordered_map>
 
 namespace bot {
 
@@ -54,6 +55,9 @@ private:
     
     // Pre-allocated strings to avoid SSO allocations on the hot path
     std::vector<std::string> client_order_ids_;
+
+    uint64_t report_subid_;
+    std::unordered_map<std::string, uint64_t> market_subid_;
     
     double capital_allocation_;
 };

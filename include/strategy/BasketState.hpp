@@ -61,7 +61,7 @@ private:
     std::vector<double> spread_history_;
     std::vector<double> current_prices_;
     std::vector<uint64_t> last_timestamps_; 
-    uint64_t max_allowed_staleness_ms_ = 5000;
+    uint64_t max_allowed_staleness_ms_ = 30000;
     size_t history_idx_;
 
     double running_sum_;

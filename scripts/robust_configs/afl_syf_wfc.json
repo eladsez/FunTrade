@@ -1,0 +1,35 @@
+{
+    "basket_id": "afl_syf_wfc",
+    "tickers": [
+        "AFL",
+        "SYF",
+        "WFC"
+    ],
+    "weights": {
+        "AFL": -0.2942,
+        "SYF": -0.618,
+        "WFC": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.012663,
+        "oos_p": 0.00149,
+        "train_hl": 29.43,
+        "oos_sharpe": 1.341
+    },
+    "trading_params": {
+        "window_size": 59,
+        "entry_z": 1.5,
+        "exit_z": 0.0
+    },
+    "exported_at": "2026-03-16 16:48:37"
+}

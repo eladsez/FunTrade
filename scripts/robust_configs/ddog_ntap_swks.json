@@ -1,0 +1,35 @@
+{
+    "basket_id": "ddog_ntap_swks",
+    "tickers": [
+        "DDOG",
+        "NTAP",
+        "SWKS"
+    ],
+    "weights": {
+        "DDOG": 1.0,
+        "NTAP": -0.769,
+        "SWKS": -0.7274
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-04-15",
+            "end": "2025-03-19"
+        },
+        "testing": {
+            "start": "2025-03-20",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.016827,
+        "oos_p": 0.020335,
+        "train_hl": 35.69,
+        "oos_sharpe": 1.192
+    },
+    "trading_params": {
+        "window_size": 71,
+        "entry_z": 1.5,
+        "exit_z": 0.25
+    },
+    "exported_at": "2026-03-16 17:17:24"
+}

@@ -1,0 +1,35 @@
+{
+    "basket_id": "mco_mrsh_syf",
+    "tickers": [
+        "MCO",
+        "MRSH",
+        "SYF"
+    ],
+    "weights": {
+        "MCO": 1.0,
+        "MRSH": -0.5473,
+        "SYF": -0.5014
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.003446,
+        "oos_p": 9e-06,
+        "train_hl": 23.91,
+        "oos_sharpe": 2.625
+    },
+    "trading_params": {
+        "window_size": 48,
+        "entry_z": 2.0,
+        "exit_z": 0.0
+    },
+    "exported_at": "2026-03-16 16:48:37"
+}

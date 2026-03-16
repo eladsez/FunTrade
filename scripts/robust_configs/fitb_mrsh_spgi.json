@@ -1,0 +1,35 @@
+{
+    "basket_id": "fitb_mrsh_spgi",
+    "tickers": [
+        "FITB",
+        "MRSH",
+        "SPGI"
+    ],
+    "weights": {
+        "FITB": -0.4427,
+        "MRSH": -0.6191,
+        "SPGI": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.016363,
+        "oos_p": 0.043909,
+        "train_hl": 36.56,
+        "oos_sharpe": 0.506
+    },
+    "trading_params": {
+        "window_size": 73,
+        "entry_z": 1.5,
+        "exit_z": 0.25
+    },
+    "exported_at": "2026-03-16 16:48:37"
+}

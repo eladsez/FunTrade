@@ -29,13 +29,15 @@ void BasketMeanReversionStrategy::start() {
     // 1. Subscribe to real-time events for our basket components
     const auto& symbols = basket_state_->getSymbols();
     for (const auto& sym : symbols) {
-        event_bus_->subscribeToMarketEvents(
+        uint64_t subid = event_bus_->subscribeToMarketEvents(
             sym, 
             [this](const MarketEvent& e) { this->onMarketEvent(e); }
         );
+        market_subid_.emplace(sym, subid);
     }
+
     // 2. Listen for execution reports to confirm our orders
-    event_bus_->subscribeToExecution(
+    report_subid_ = event_bus_->subscribeToExecution(
         [this](const ExecutionReport& report) { this->onExecutionReport(report); }
     );
 }
@@ -285,7 +287,13 @@ void BasketMeanReversionStrategy::stop() {
     if (current_position_ != PositionState::FLAT) {
         executeBasket(PositionState::FLAT);
     }
-    exec_engine_->cancelAllOrders();
+
+    const auto& symbols = basket_state_->getSymbols();
+    for (const auto& sym : symbols) {
+        event_bus_->unsubscribeFromMarketEvents(sym, market_subid_[sym]);
+    }
+    event_bus_->unsubscribeFromExecution(report_subid_);
+    
 }
 
 } // namespace bot

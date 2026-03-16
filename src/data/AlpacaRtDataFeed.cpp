@@ -34,7 +34,7 @@ AlpacaRtDataFeed::~AlpacaRtDataFeed() {
 
 bool AlpacaRtDataFeed::connectToInfra() {
     // Blocks until network connection AND Alpaca authentication are successful
-    bool success = infra_->connectWs("stream.data.alpaca.markets", "/v1beta3/crypto/us", WsType::DATA);
+    bool success = infra_->connectWs("stream.data.alpaca.markets", "/v2/iex", WsType::DATA);
     if (!success) {
         LOG_ERROR("[AlpacaRtDataFeed] Failed to connect and authenticate.");
     }

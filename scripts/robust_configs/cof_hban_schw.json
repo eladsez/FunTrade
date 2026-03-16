@@ -1,0 +1,35 @@
+{
+    "basket_id": "cof_hban_schw",
+    "tickers": [
+        "COF",
+        "HBAN",
+        "SCHW"
+    ],
+    "weights": {
+        "COF": -0.2574,
+        "HBAN": 1.0,
+        "SCHW": -0.8092
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-08"
+        },
+        "testing": {
+            "start": "2025-04-09",
+            "end": "2026-03-13"
+        }
+    },
+    "metrics": {
+        "train_p": 0.006978,
+        "oos_p": 0.013494,
+        "train_hl": 28.27,
+        "oos_sharpe": 1.013
+    },
+    "trading_params": {
+        "window_size": 57,
+        "entry_z": 2.25,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-16 16:48:37"
+}
