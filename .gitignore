@@ -13,3 +13,4 @@ CMakeFiles/
 .env
 logs/
 .venv/
+data/*.csv
