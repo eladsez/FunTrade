@@ -37,25 +37,26 @@ void StrategyOrchestrator::loadStrategies() {
     LOG_INFO("[Orchestrator] Total Available Cash: ${}. Allocating {:.2f}% -> ${} per strategy.", 
              availableCash, percent_allocation_per_strategy_ * 100.0, capital_per_strategy);
 
-    int index = 0;
+    std::vector<std::string> configs = {"amzn_cmg_ebay.json"};
+    std::for_each(configs.begin(), configs.end(), [&](std::string& s) { s.insert(0, config_directory_ + "/"); });
+    
     // Iterate over the directory and find all JSON files
-    for (const auto& entry : fs::directory_iterator(config_directory_)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".json") {
-            std::string configPath = entry.path().string();
+    // for (const auto& entry : fs::directory_iterator(config_directory_)) {
+        // if (entry.is_regular_file() && entry.path().extension() == ".json") {
+            // std::string configPath = entry.path().string();
+    for (std::string &configPath : configs){
             LOG_INFO("[Orchestrator] Initializing strategy for config: {}", configPath);
-            
+    
             auto strategy = std::make_shared<BasketMeanReversionStrategy>(
                 event_bus_,
                 order_mngr_,
                 portfolio_mngr_,
                 configPath,
-                // "config/basket_configs/aig_ma_rf.json",
                 capital_per_strategy // Pass the calculated absolute dollar amount
             );
             
             strategies_.push_back(std::move(strategy));
-            if (index++ == 2) break;
-        }
+        // }
     }
     
     LOG_INFO("[Orchestrator] Successfully loaded {} strategies.", strategies_.size());

@@ -8,7 +8,7 @@ BasketState::BasketState(int window_size, const std::vector<std::string>& symbol
     : window_size_(window_size), symbols_(symbols), weights_(weights),
         num_components_(symbols.size()), history_idx_(0),
         running_sum_(0.0), running_sum_sq_(0.0), is_warmed_up_(false),
-        ema_periods_(5), // Define the period length here
+        ema_periods_(10), // Define the period length here
         ema_multiplier_(2.0 / (ema_periods_ + 1.0)), // Calculate dynamically
         is_ema_initialized_(false),
         current_smoothed_spread_(0.0)
