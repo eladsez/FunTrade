@@ -87,7 +87,7 @@ void OrderManager::onExecution(const ExecutionReport& report) {
     
     exchangeToClientId_[report.order_id] = clientOrderId;
     
-    LOG_INFO("[OrderManager] Updated Order: ClientID={}, Status={}", clientOrderId, (int)report.status);
+    LOG_DEBUG("[OrderManager] Updated Order: ClientID={}, Status={}", clientOrderId, (int)report.status);
     
     // If the order reached a terminal state, stop tracking it for timeouts
     if (report.status == OrderStatus::FILLED || 

@@ -7,7 +7,12 @@ namespace bot {
 BasketState::BasketState(int window_size, const std::vector<std::string>& symbols, const std::vector<double>& weights)
     : window_size_(window_size), symbols_(symbols), weights_(weights),
         num_components_(symbols.size()), history_idx_(0),
-        running_sum_(0.0), running_sum_sq_(0.0), is_warmed_up_(false) {
+        running_sum_(0.0), running_sum_sq_(0.0), is_warmed_up_(false),
+        ema_periods_(5), // Define the period length here
+        ema_multiplier_(2.0 / (ema_periods_ + 1.0)), // Calculate dynamically
+        is_ema_initialized_(false),
+        current_smoothed_spread_(0.0)
+         {
         
     if (symbols_.size() != weights_.size()) {
         throw std::invalid_argument("Symbols and weights size mismatch");
@@ -21,6 +26,7 @@ BasketState::BasketState(int window_size, const std::vector<std::string>& symbol
 }
 
 // Fast O(N) linear search for small arrays (fits in CPU cache)
+// Trigger the EMA update exactly ONCE per tick arrival
 void BasketState::updatePrice(const std::string& symbol, double price, uint64_t timestamp) {
     if (price <= 0.0) return;
 
@@ -28,6 +34,13 @@ void BasketState::updatePrice(const std::string& symbol, double price, uint64_t 
         if (symbols_[i] == symbol) {
             current_prices_[i] = price;
             last_timestamps_[i] = timestamp;
+            
+            // --- Update EMA here, immediately after recording the tick ---
+            if (arePricesSynchronized()) {
+                double raw_spread = calculateRawSpread();
+                updateSpreadEma(raw_spread);
+            }
+            
             return;
         }
     }
@@ -95,6 +108,36 @@ void BasketState::advanceWindow() {
     history_idx_ = (history_idx_ + 1) % window_size_;
 }
 
+// Used during initial warm-up to feed historical spreads
+void BasketState::feedHistoricalSpread(double spread) {
+    double old_spread = spread_history_[history_idx_];
+    spread_history_[history_idx_] = spread;
+
+    running_sum_ += spread - old_spread;
+    running_sum_sq_ += (spread * spread) - (old_spread * old_spread);
+
+    history_idx_ = (history_idx_ + 1) % window_size_;
+}
+
+// 1. Rename this or use it as your raw spread calculator
+double BasketState::calculateRawSpread() const {
+    double spread = 0.0;
+    for (size_t i = 0; i < num_components_; ++i) {
+        spread += std::log(current_prices_[i]) * weights_[i];
+    }
+    return spread;
+}
+
+// 2. The EMA Math
+void BasketState::updateSpreadEma(double raw_spread) {
+    if (!is_ema_initialized_) {
+        current_smoothed_spread_ = raw_spread;
+        is_ema_initialized_ = true;
+    } else {
+        current_smoothed_spread_ = ((raw_spread - current_smoothed_spread_) * ema_multiplier_) + current_smoothed_spread_;
+    }
+}
+
 bool BasketState::arePricesSynchronized() const {
     if (!hasAllPrices()) return false;
 
@@ -110,37 +153,22 @@ bool BasketState::arePricesSynchronized() const {
     return (max_ts - min_ts) <= max_allowed_staleness_ms_;
 }
 
-double BasketState::calculateCurrentSpread() const {
-    double spread = 0.0;
-    for (size_t i = 0; i < num_components_; ++i) {
-        spread += std::log(current_prices_[i]) * weights_[i];
-    }
-    return spread;
-}
-
-// Used during initial warm-up to feed historical spreads
-void BasketState::feedHistoricalSpread(double spread) {
-    double old_spread = spread_history_[history_idx_];
-    spread_history_[history_idx_] = spread;
-
-    running_sum_ += spread - old_spread;
-    running_sum_sq_ += (spread * spread) - (old_spread * old_spread);
-
-    history_idx_ = (history_idx_ + 1) % window_size_;
-}
-
+// Calculate Z-Score using the Smoothed Spread
 std::optional<double> BasketState::getZScore() const {
-    if (!is_warmed_up_ || !arePricesSynchronized()) return std::nullopt;;
+    // Check synchronization, but it no longer mutates the EMA
+    if (!is_warmed_up_ || !arePricesSynchronized() || !is_ema_initialized_) {
+        return std::nullopt;
+    }
 
-    double current_spread = calculateCurrentSpread();
     double mean = running_sum_ / window_size_;
     
-    // Guard against floating point imprecision
     double variance = std::max(0.0, (running_sum_sq_ - (running_sum_ * running_sum_) / window_size_) / (window_size_ - 1));
     double stddev = std::sqrt(variance);
 
     if (stddev < 1e-6) return 0.0;
-    return (current_spread - mean) / stddev;
+    
+    // Use the safely smoothed spread
+    return (current_smoothed_spread_ - mean) / stddev;
 }
 
 } // namespace bot

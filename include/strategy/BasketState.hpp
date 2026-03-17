@@ -45,10 +45,11 @@ public:
 private:
     bool arePricesSynchronized() const;
     bool hasAllPrices() const;
-    double calculateCurrentSpread() const;
-    double calculateClosingSpread() const; // NEW: Uses closing_prices_
+    double calculateClosingSpread() const;
     bool checkAndResetBarrier();
     void advanceWindow();
+    double calculateRawSpread() const; 
+    void updateSpreadEma(double raw_spread);
 
     int window_size_;
     std::vector<std::string> symbols_;
@@ -67,6 +68,12 @@ private:
     double running_sum_;
     double running_sum_sq_;
     bool is_warmed_up_;
+
+    // --- Embedded EMA State ---
+    int ema_periods_;
+    double ema_multiplier_;
+    bool is_ema_initialized_;
+    double current_smoothed_spread_;
 };
 
 } // namespace bot

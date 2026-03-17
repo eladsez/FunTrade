@@ -213,19 +213,23 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 
     if (current_position_ == PositionState::FLAT) {
         if (z_score > entry_z_score_) {
+            LOG_INFO("[{}] Z-Score ({:.4f}) breached SHORT threshold ({:.4f}).", basket_id_, z_score, entry_z_score_);
             current_position_ = PositionState::PENDING_SHORT;
             executeBasket(PositionState::SHORT);
         } else if (z_score < -entry_z_score_) {
+            LOG_INFO("[{}] Z-Score ({:.4f}) breached LONG threshold ({:.4f}).", basket_id_, z_score, -entry_z_score_);
             current_position_ = PositionState::PENDING_LONG;
             executeBasket(PositionState::LONG);
         }
     } else if (current_position_ == PositionState::SHORT) {
         if (z_score < exit_z_score_) {
+            LOG_INFO("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting SHORT.", basket_id_, z_score, exit_z_score_);
             current_position_ = PositionState::PENDING_FLAT;  // Lock it
             executeBasket(PositionState::FLAT);
         }
     } else if (current_position_ == PositionState::LONG) {
         if (z_score > -exit_z_score_) {
+            LOG_INFO("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting LONG.", basket_id_, z_score, -exit_z_score_);
             current_position_ = PositionState::PENDING_FLAT;  // Lock it
             executeBasket(PositionState::FLAT);
         }

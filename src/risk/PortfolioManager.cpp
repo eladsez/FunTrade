@@ -134,7 +134,7 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
         }
     }
 
-    LOG_INFO("[PortfolioManager] Updated {} position: Qty={}, AvgPrice={}, RealizedPnL={}", 
+    LOG_DEBUG("[PortfolioManager] Updated {} position: Qty={}, AvgPrice={}, RealizedPnL={}", 
              pos.symbol, pos.quantity, pos.avg_price, pos.realized_pnl);
 }
 

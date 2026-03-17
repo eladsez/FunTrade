@@ -433,7 +433,7 @@ void AlpacaRtDataFeed::batcherLoop() {
                         {"orderbooks", subs},
                         {"dailyBars", subs}
                     };
-                    LOG_INFO("[AlpacaRtDataFeed] Batch Subscribing to {} symbols", subs.size());
+                    LOG_DEBUG("[AlpacaRtDataFeed] Batch Subscribing to {} symbols", subs.size());
                     infra_->sendWsMessage(subPayload.dump());
                 }
 
@@ -446,7 +446,7 @@ void AlpacaRtDataFeed::batcherLoop() {
                         {"orderbooks", unsubs},
                         {"dailyBars", unsubs}
                     };
-                    LOG_INFO("[AlpacaRtDataFeed] Batch Unsubscribing from {} symbols", unsubs.size());
+                    LOG_DEBUG("[AlpacaRtDataFeed] Batch Unsubscribing from {} symbols", unsubs.size());
                     infra_->sendWsMessage(unsubPayload.dump());
                 }
                 
