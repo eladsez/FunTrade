@@ -6,16 +6,16 @@
 
 namespace bot {
 
-PortfolioManager::PortfolioManager(IEventBus& eventBus, IExecutionEngine& engine) 
-    : eventBus_(eventBus) {
+PortfolioManager::PortfolioManager(std::shared_ptr<IEventBus> eventBus, std::shared_ptr<IExecutionEngine> engine) 
+    : eventBus_(std::move(eventBus)), engine_(std::move(engine)) {
     
     // 1. Subscribe to all executions immediately
-    eventBus_.subscribeToExecution([this](const ExecutionReport& report) {
+    eventBus_->subscribeToExecution([this](const ExecutionReport& report) {
         this->onExecution(report);
     });
     
     // 2. Automatically sync with the exchange on startup
-    syncWithExchange(engine);
+    syncWithExchange();
 }
 
 // void PortfolioManager::ensureMarketSubscription(const std::string& symbol) {
@@ -25,7 +25,7 @@ PortfolioManager::PortfolioManager(IEventBus& eventBus, IExecutionEngine& engine
         
 //         LOG_INFO("[PortfolioManager] Auto-subscribing to market ticks for {}", symbol);
         
-//         eventBus_.subscribeToMarketEvents(symbol, [this](const MarketEvent& event) {
+//         eventBus_->subscribeToMarketEvents(symbol, [this](const MarketEvent& event) {
 //             this->onMarketEvent(event);
 //         });
 //     }
@@ -138,9 +138,9 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
              pos.symbol, pos.quantity, pos.avg_price, pos.realized_pnl);
 }
 
-void PortfolioManager::syncWithExchange(IExecutionEngine& engine) {
+void PortfolioManager::syncWithExchange() {
     LOG_INFO("[PortfolioManager] Syncing positions with exchange...");
-    nlohmann::json positionsJson = engine.getOpenPositions();
+    nlohmann::json positionsJson = engine_->getOpenPositions();
     
     std::lock_guard<std::mutex> lock(mtx_);
     positions_.clear();
@@ -210,5 +210,15 @@ std::optional<Position> PortfolioManager::getPosition(const std::string& virtual
     } 
 
     return std::nullopt; // Safely indicate the position does not exist
+}
+
+std::optional<double> PortfolioManager::getPortfolioValue() const {
+    return engine_->getPortfolioValue();
+}
+
+std::optional<double> PortfolioManager::getAvailableCash() const {
+    // Note: Make sure getAvailableCash() is added to IExecutionEngine, 
+    // AlpacaExecutionEngine, and MockExecutionEngine as discussed previously!
+    return engine_->getAvailableCash();
 }
 } // namespace bot

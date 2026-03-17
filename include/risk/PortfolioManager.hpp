@@ -6,6 +6,7 @@
 #include <string>
 #include <mutex>
 #include <optional>
+#include <memory>
 
 namespace bot {
 
@@ -27,7 +28,7 @@ struct Position {
 class PortfolioManager {
 public:
     // Updated: Pass the engine into the constructor
-    PortfolioManager(IEventBus& eventBus, IExecutionEngine& engine);
+    PortfolioManager(std::shared_ptr<IEventBus> eventBus, std::shared_ptr<IExecutionEngine> engine);
     ~PortfolioManager() = default;
 
     void onMarketEvent(const MarketEvent& event);
@@ -38,13 +39,17 @@ public:
     double getNetPosition(const std::string& virtual_key) const;
     std::optional<Position> getPosition(const std::string& virtual_key) const;
 
+    std::optional<double> getPortfolioValue() const;
+    std::optional<double> getAvailableCash() const;
+
 private:
-    void syncWithExchange(IExecutionEngine& engine);
+    void syncWithExchange();
     
     // Helper to dynamically subscribe to ticks without duplicating
     void ensureMarketSubscription(const std::string& symbol);
 
-    IEventBus& eventBus_;
+    std::shared_ptr<IEventBus> eventBus_;
+    std::shared_ptr<IExecutionEngine> engine_;
     std::map<std::string, Position> positions_;
     std::set<std::string> subscribedSymbols_; // Tracks active tick subscriptions
     mutable std::mutex mtx_;

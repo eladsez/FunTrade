@@ -143,7 +143,7 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
 
     std::string payloadStr = orderPayload.dump();
 
-    LOG_INFO("[AlpacaExecutionEngine] Async Placing Order: {} | ClientID: {}", payloadStr, clientOrderId);
+    LOG_DEBUG("[AlpacaExecutionEngine] Async Placing Order: {} | ClientID: {}", payloadStr, clientOrderId);
 
     // Detach a thread to perform the HTTP request without blocking the Strategy
     std::thread([this, payloadStr, clientOrderId]() {
@@ -156,7 +156,7 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
         try {
             auto res = nlohmann::json::parse(response);
             if (res.contains("id")) {
-                LOG_INFO("[AlpacaExecutionEngine] Order Accepted: ExchangeID={}, ClientID={}", res["id"].get<std::string>(), clientOrderId);
+                LOG_DEBUG("[AlpacaExecutionEngine] Order Accepted: ExchangeID={}, ClientID={}", res["id"].get<std::string>(), clientOrderId);
             } else {
                 LOG_ERROR("[AlpacaExecutionEngine] Order Rejected: {}", res.dump());
             }
@@ -171,13 +171,13 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
 bool AlpacaExecutionEngine::cancelOrder(const std::string& orderId) {
     std::thread([this, orderId]() {
         std::string response = infra_->sendRestRequest("DELETE", baseHost_, "/v2/orders/" + orderId);
-        LOG_INFO("[AlpacaExecutionEngine] Cancel request sent for order: {}", orderId);
+        LOG_DEBUG("[AlpacaExecutionEngine] Cancel request sent for order: {}", orderId);
     }).detach();
     return true;
 }
 
 bool AlpacaExecutionEngine::cancelAllOrders() {
-    LOG_INFO("[AlpacaExecutionEngine] EMERGENCY: Canceling ALL open orders...");
+    LOG_WARN("[AlpacaExecutionEngine] EMERGENCY: Canceling ALL open orders...");
     
     std::thread([this]() {
         // Alpaca's endpoint to cancel all open orders is a DELETE to /v2/orders
@@ -186,7 +186,7 @@ bool AlpacaExecutionEngine::cancelAllOrders() {
         if (response.empty()) {
             LOG_ERROR("[AlpacaExecutionEngine] Failed to send Cancel All request.");
         } else {
-            LOG_INFO("[AlpacaExecutionEngine] Cancel All request sent. Exchange Response: {}", response);
+            LOG_DEBUG("[AlpacaExecutionEngine] Cancel All request sent. Exchange Response: {}", response);
         }
     }).detach();
     
@@ -203,6 +203,23 @@ std::optional<double> AlpacaExecutionEngine::getPortfolioValue() {
             return std::stod(responseJson["portfolio_value"].get<std::string>());
         }
     } catch (...) {}
+    return std::nullopt;
+}
+
+std::optional<double> AlpacaExecutionEngine::getAvailableCash() {
+    std::string responseStr = infra_->sendRestRequest("GET", baseHost_, "/v2/account");
+    if (responseStr.empty()) return std::nullopt;
+    
+    try {
+        auto responseJson = nlohmann::json::parse(responseStr);
+        // "buying_power" is the total dollar amount you can safely use to open new positions.
+        // You could also use "cash" if you strictly only want unsettled/settled cash ignoring margin.
+        if (responseJson.contains("buying_power")) {
+            return std::stod(responseJson["buying_power"].get<std::string>());
+        }
+    } catch (...) {
+        LOG_ERROR("[AlpacaExecutionEngine] Failed to parse account buying power.");
+    }
     return std::nullopt;
 }
 
@@ -234,7 +251,7 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
         
         if (stream == "trade_updates") {
             auto data = j["data"];
-            LOG_DEBUG("[AlpacaExecutionEngine] Raw Trade Update: {}", data.dump());
+            // LOG_DEBUG("[AlpacaExecutionEngine] Raw Trade Update: {}", data.dump());
             
             std::string event = data["event"].get<std::string>();
             auto order = data["order"];
@@ -271,7 +288,7 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
             
             report.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
-            LOG_INFO("[AlpacaExecutionEngine] Execution Report: Symbol={}, Event={}, Status={}, Qty={}, Price={}", 
+            LOG_DEBUG("[AlpacaExecutionEngine] Execution Report: Symbol={}, Event={}, Status={}, Qty={}, Price={}", 
                      report.symbol, event, static_cast<int>(report.status), report.last_quantity, report.last_price);
             
             eventBus_->publishExecution(report);

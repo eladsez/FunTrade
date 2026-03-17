@@ -54,6 +54,11 @@ public:
         return 100000.0;
     }
 
+    // Add this mock implementation
+    std::optional<double> getAvailableCash() override {
+        return 100000.0; // Assume starting with 100k buying power
+    }
+
     nlohmann::json getOpenPositions() override {
         // Return an empty array so PortfolioManager syncs cleanly on startup
         return nlohmann::json::array();

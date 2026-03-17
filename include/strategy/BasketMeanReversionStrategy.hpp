@@ -42,6 +42,8 @@ private:
         const std::vector<std::vector<HistoricalBar>>& all_bars, 
         size_t num_components) const;
     void evaluateCompletedCycle();
+    bool isValidMarketEvent(const MarketEvent& event) const;
+    inline void logZScoreThrottled(double z_score, uint64_t timestamp);
 
     std::shared_ptr<IEventBus> event_bus_;
     std::shared_ptr<OrderManager> order_mngr_;

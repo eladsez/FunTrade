@@ -154,7 +154,35 @@ void BasketMeanReversionStrategy::warmUp() {
     }
 }
 
+bool BasketMeanReversionStrategy::isValidMarketEvent(const MarketEvent& event) const {
+    if (const auto* trade = std::get_if<TradeTick>(&event)) {
+        // Trade Defense: Must have a real positive price
+        return trade->price > 0.0;
+        
+    } else if (const auto* quote = std::get_if<QuoteTick>(&event)) {
+        // Quote Defense 1: No zero prices or crossed markets
+        if (quote->bid_price <= 0.0 || quote->ask_price <= 0.0 || quote->bid_price >= quote->ask_price) {
+            return false;
+        }
+        // Quote Defense 2: Reject massive spreads (e.g., > 5%)
+        double spread_pct = (quote->ask_price - quote->bid_price) / quote->ask_price;
+        return spread_pct < 0.05;
+        
+    } else if (const auto* bar = std::get_if<BarUpdate>(&event)) {
+        // Bar Defense: EOD close must be valid
+        return bar->close > 0.0;
+    }
+
+    // Default reject for unknown event types
+    return false;
+}
+
 void BasketMeanReversionStrategy::onMarketEvent(const MarketEvent& event) {
+    // Firewall: Drop any corrupted or anomalous market data instantly
+    if (!isValidMarketEvent(event)) {
+        return; 
+    }
+
     if (const auto* trade = std::get_if<TradeTick>(&event)) {
         processTick(trade->symbol, trade->price, trade->timestamp_ms);
     } else if (const auto* quote = std::get_if<QuoteTick>(&event)) {
@@ -180,6 +208,8 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
     }
 
     double z_score = opt_z_score.value();
+
+    logZScoreThrottled(z_score, timestamp);
 
     if (current_position_ == PositionState::FLAT) {
         if (z_score > entry_z_score_) {
@@ -311,6 +341,24 @@ void BasketMeanReversionStrategy::evaluateCompletedCycle() {
 void BasketMeanReversionStrategy::stop() {
     if (current_position_ != PositionState::FLAT) {
         executeBasket(PositionState::FLAT);
+
+        // current_cycle_ will be reset to nullptr by evaluateCompletedCycle() 
+        // once all execution reports are received.
+        int timeout_ms = 10000; // Give Alpaca 10 seconds maximum to fill the orders
+        int elapsed = 0;
+        
+        while (current_cycle_ != nullptr && elapsed < timeout_ms) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            elapsed += 100;
+        }
+
+        if (current_cycle_ != nullptr) {
+            LOG_ERROR("[{}] Network timeout! Cycle did not resolve.", basket_id_);
+        } else if (current_position_ != PositionState::FLAT) {
+            LOG_WARN("[{}] Shutdown cycle completed, but failed to reach FLAT state. Orphaned inventory may remain in Alpaca.", basket_id_);
+        } else {
+            LOG_INFO("[{}] Successfully flattened all positions for shutdown.", basket_id_);
+        }
     }
 
     const auto& symbols = basket_state_->getSymbols();
@@ -319,6 +367,14 @@ void BasketMeanReversionStrategy::stop() {
     }
     event_bus_->unsubscribeFromExecution(report_subid_);
     
+}
+
+inline void BasketMeanReversionStrategy::logZScoreThrottled(double z_score, uint64_t timestamp) {
+    static uint64_t last_z_log_time_ms_ = 0;
+    if (timestamp - last_z_log_time_ms_ >= 5000) {
+        LOG_INFO("[{}] Current Z-Score: {:.4f}", basket_id_, z_score);
+        last_z_log_time_ms_ = timestamp;
+    }
 }
 
 } // namespace bot

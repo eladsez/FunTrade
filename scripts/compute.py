@@ -449,7 +449,7 @@ def validate_oos_advanced(oos_data, train_res, cost_per_trade=0.002, max_capital
 
 def export_robust_configs(robust_list, train_dates, test_dates):
     # Create directory if it doesn't exist
-    folder = "robust_configs"
+    folder = "basket_configs"
     if not os.path.exists(folder):
         os.makedirs(folder)
         

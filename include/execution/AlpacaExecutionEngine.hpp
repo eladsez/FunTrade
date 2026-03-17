@@ -25,6 +25,7 @@ public:
 
     // Extended Domain Specific API
     std::optional<double> getPortfolioValue() override;
+    std::optional<double> getAvailableCash() override;
     nlohmann::json getOpenPositions() override;
     nlohmann::json getOpenOrders() override;
 

@@ -349,7 +349,7 @@ std::vector<HistoricalBar> AlpacaRtDataFeed::fetchHistoricalBars(
 
     try {
         // Alpaca's data API uses data.alpaca.markets
-        LOG_INFO("[AlpacaRtDataFeed] Fetching historical {} bars for {}", timeframe, symbol);
+        LOG_DEBUG("[AlpacaRtDataFeed] Fetching historical {} bars for {}", timeframe, symbol);
         std::string response = infra_->sendRestRequest("GET", "data.alpaca.markets", target);
 
         if (response.empty()) {
@@ -384,7 +384,7 @@ std::vector<HistoricalBar> AlpacaRtDataFeed::fetchHistoricalBars(
                 
                 bars.push_back(bar);
             }
-            LOG_INFO("[AlpacaRtDataFeed] Successfully parsed {} historical bars for {}", bars.size(), symbol);
+            LOG_DEBUG("[AlpacaRtDataFeed] Successfully parsed {} historical bars for {}", bars.size(), symbol);
         } else {
             LOG_WARN("[AlpacaRtDataFeed] No bars found in response for {}", symbol);
         }

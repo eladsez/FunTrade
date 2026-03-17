@@ -18,6 +18,7 @@
 #include <execution/OrderManager.hpp>
 #include <risk/PortfolioManager.hpp>
 #include <strategy/BasketMeanReversionStrategy.hpp>
+#include <strategy/StrategyOrchestrator.hpp>
 
 using namespace bot;
 
@@ -36,7 +37,7 @@ void setupSignalHandlers() {
 // ============================================================================
 // LIVE TRADING MODE
 // ============================================================================
-int runLiveMode(const std::string& apiKey, const std::string& apiSecret, const std::string& configPath) {
+int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
     
     auto dataFeed = std::make_shared<AlpacaRtDataFeed>(apiKey, apiSecret);
@@ -44,7 +45,7 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, const s
     auto executionEngine = std::make_shared<AlpacaExecutionEngine>(eventBus, apiKey, apiSecret);
 
     auto orderManager = std::make_shared<OrderManager>(eventBus, executionEngine);
-    auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus, *executionEngine);
+    auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, executionEngine);
 
     auto portfolioValue = executionEngine->getPortfolioValue();
     double initPv = 100000.0;
@@ -53,22 +54,30 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret, const s
         LOG_INFO("[LIVE] Current Portfolio Value: ${}", initPv);
     }
 
-    double capitalAllocation = 5000.0; 
-    auto strategy = std::make_shared<BasketMeanReversionStrategy>(
-        eventBus, orderManager, portfolioManager, configPath, capitalAllocation
+    double percentPerStrategy = 0.05; // Representing 5% of available cash
+
+    // Initialize the Orchestrator
+    LOG_INFO("[LIVE] Booting up Strategy Orchestrator...");
+    StrategyOrchestrator orchestrator(
+        eventBus, 
+        orderManager, 
+        portfolioManager, 
+        "config/basket_configs", 
+        percentPerStrategy
     );
 
-    LOG_INFO("[LIVE] Booting up Basket Mean Reversion Strategy...");
-    strategy->start();
+    // Load and start all strategies
+    orchestrator.loadStrategies();
+    orchestrator.startAll();
 
-    LOG_INFO("[LIVE] Bot is running. Press Ctrl+C to stop.");
+    LOG_INFO("[LIVE] Bot is running with {} strategies. Press Ctrl+C to stop.", orchestrator.getStrategyCount());
     
     while (!g_shutdown_requested.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    LOG_INFO("[LIVE] Shutdown signal received. Stopping strategy");
-    strategy->stop();
+    LOG_INFO("[LIVE] Shutdown signal received. Stopping strategies...");
+    orchestrator.stopAll();
     LOG_INFO("[LIVE] Shutdown complete.");
     return 0;
 }
@@ -88,7 +97,7 @@ int runBacktestMode(const std::string& csvFilePath, const std::string& configPat
 
     // 2. Initialize Managers
     auto orderManager = std::make_shared<OrderManager>(eventBus, executionEngine);
-    auto portfolioManager = std::make_shared<PortfolioManager>(*eventBus, *executionEngine);
+    auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, executionEngine);
 
     // 3. Initialize Strategy
     double capitalAllocation = 5000.0; 
@@ -148,6 +157,6 @@ int main(int argc, char* argv[]) {
                       "To run a backtest instead, use: ./FunTrade --backtest\n");
             return 1;
         }
-        return runLiveMode(apiKey, apiSecret, configPath);
+        return runLiveMode(apiKey, apiSecret);
     }
 }
