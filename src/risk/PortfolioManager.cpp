@@ -13,23 +13,16 @@ PortfolioManager::PortfolioManager(std::shared_ptr<IEventBus> eventBus, std::sha
     eventBus_->subscribeToExecution([this](const ExecutionReport& report) {
         this->onExecution(report);
     });
+
+    // 2. Use the wildcard to listen to ALL market data automatically.
+    eventBus_->subscribeToMarketEvents("*", [this](const MarketEvent& event) {
+        this->onMarketEvent(event);
+    });
     
-    // 2. Automatically sync with the exchange on startup
+    // 3. Automatically sync with the exchange on startup
     syncWithExchange();
 }
 
-// void PortfolioManager::ensureMarketSubscription(const std::string& symbol) {
-//     // Check if we are already subscribed to this symbol's tick data
-//     if (subscribedSymbols_.find(symbol) == subscribedSymbols_.end()) {
-//         subscribedSymbols_.insert(symbol);
-        
-//         LOG_INFO("[PortfolioManager] Auto-subscribing to market ticks for {}", symbol);
-        
-//         eventBus_->subscribeToMarketEvents(symbol, [this](const MarketEvent& event) {
-//             this->onMarketEvent(event);
-//         });
-//     }
-// }
 
 void PortfolioManager::onMarketEvent(const MarketEvent& event) {
     std::visit([this](auto&& tick) {
@@ -39,29 +32,29 @@ void PortfolioManager::onMarketEvent(const MarketEvent& event) {
         double updatedPrice = 0.0;
 
         if constexpr (std::is_same_v<T, TradeTick>) {
-            // Use the exact last traded price
             updatedPrice = tick.price;
         } 
         else if constexpr (std::is_same_v<T, QuoteTick>) {
-            // Mark-to-Market using the mid-price of the spread
             if (tick.bid_price > 0 && tick.ask_price > 0) {
                 updatedPrice = (tick.bid_price + tick.ask_price) / 2.0;
             }
-        } 
-        else if constexpr (std::is_same_v<T, OrderBookUpdate>) {
-            // Ignore ORDERBOOK ticks for PnL to save CPU, Quotes are enough
-            return; 
         }
+        else if constexpr (std::is_same_v<T, BarUpdate>) {
+            // NEW: Make sure we capture EOD Bar updates too for backtesting!
+            updatedPrice = tick.close;
+        } 
 
         // Only update if we derived a valid price
         if (updatedPrice > 0.0) {
             std::lock_guard<std::mutex> lock(mtx_);
-            if (positions_.count(symbol)) {
-                LOG_DEBUG("[PortfolioManager] Update price for {}:{:.2f} -> {:.2f}", 
-                    symbol, 
-                    positions_[symbol].current_price, 
-                    updatedPrice);
-                positions_[symbol].current_price = updatedPrice;
+            
+            // Iterate through positions to find matching symbols.
+            // We cannot use positions_.count(symbol) because the map key is a virtual_key!
+            // MUST fix this shit somehow
+            for (auto& [v_key, pos] : positions_) {
+                if (pos.symbol == symbol) {
+                    pos.current_price = updatedPrice;
+                }
             }
         }
     }, event);
@@ -74,8 +67,7 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
         return;
     }
 
-    // Ensure we are getting live price updates for this newly traded symbol
-    // ensureMarketSubscription(symbol);
+    total_trades_++;
 
     // the point of the virtualkey here is to be able to track per baket positions
     // when there is more the one basket sharing the same symbol 
@@ -134,8 +126,8 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
         }
     }
 
-    LOG_DEBUG("[PortfolioManager] Updated {} position: Qty={}, AvgPrice={}, RealizedPnL={}", 
-             pos.symbol, pos.quantity, pos.avg_price, pos.realized_pnl);
+    LOG_DEBUG("[PortfolioManager] Updated {} position: Symbol={} Qty={}, AvgPrice={}, RealizedPnL={}", 
+             virtual_key, pos.symbol, pos.quantity, pos.avg_price, pos.realized_pnl);
 }
 
 void PortfolioManager::syncWithExchange() {
@@ -156,10 +148,8 @@ void PortfolioManager::syncWithExchange() {
                 pos.avg_price = std::stod(posJson.value("avg_entry_price", "0"));
                 pos.current_price = std::stod(posJson.value("current_price", "0"));
                 
+                // If syncing from an exchange, we just use the raw symbol as the virtual key
                 positions_[symbol] = pos;
-                
-                // // Ensure we get live price updates for symbols we ALREADY own from a previous run
-                // ensureMarketSubscription(symbol);
                 
                 LOG_INFO("[PortfolioManager] Synced {} | Qty: {} | AvgPrice: {}", symbol, pos.quantity, pos.avg_price);
             } catch (const std::exception& e) {
@@ -217,8 +207,12 @@ std::optional<double> PortfolioManager::getPortfolioValue() const {
 }
 
 std::optional<double> PortfolioManager::getAvailableCash() const {
-    // Note: Make sure getAvailableCash() is added to IExecutionEngine, 
-    // AlpacaExecutionEngine, and MockExecutionEngine as discussed previously!
     return engine_->getAvailableCash();
 }
+
+size_t PortfolioManager::getTotalTrades() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return total_trades_;
+}
+
 } // namespace bot

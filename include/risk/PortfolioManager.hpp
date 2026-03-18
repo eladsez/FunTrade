@@ -37,6 +37,7 @@ public:
     double getTotalRealizedPnL() const;
     double getTotalUnrealizedPnL() const;
     double getNetPosition(const std::string& virtual_key) const;
+    size_t getTotalTrades() const;
     std::optional<Position> getPosition(const std::string& virtual_key) const;
 
     std::optional<double> getPortfolioValue() const;
@@ -44,9 +45,6 @@ public:
 
 private:
     void syncWithExchange();
-    
-    // Helper to dynamically subscribe to ticks without duplicating
-    void ensureMarketSubscription(const std::string& symbol);
 
     std::shared_ptr<IEventBus> eventBus_;
     std::shared_ptr<IExecutionEngine> engine_;
@@ -54,6 +52,7 @@ private:
     std::set<std::string> subscribedSymbols_; // Tracks active tick subscriptions
     mutable std::mutex mtx_;
     double total_realized_pnl_ = 0.0;
+    size_t total_trades_{0};
 };
 
 } // namespace bot

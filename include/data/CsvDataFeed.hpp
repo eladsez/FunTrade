@@ -11,6 +11,7 @@
 #include <thread>
 #include <atomic>
 #include <functional>
+#include <chrono>
 
 namespace bot {
 
@@ -139,6 +140,11 @@ public:
 
             while (is_playing_ && std::getline(file, line)) {
                 if (line.empty()) continue;
+
+                
+                // for debug
+                // std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
 
                 std::stringstream ss(line);
                 std::string token;

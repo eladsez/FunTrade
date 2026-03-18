@@ -96,20 +96,26 @@ void EventBus::dispatchEvent(const Event& event) {
             // Safely extract the symbol from the variant
             std::string symbol = std::visit([](auto&& e) { return e.symbol; }, arg);
             
-            // Snapshot ONLY the specific symbol's inner map to keep the lock ultra-fast
             std::unordered_map<uint64_t, MarketEventCallback> localCallbacks;
+            std::unordered_map<uint64_t, MarketEventCallback> wildcardCallbacks;
             {
                 std::lock_guard<std::mutex> lock(subMtx);
+                // Get wildcard listeners (like the MockExecutionEngine)
+                auto it_wild = marketEventSubscribers.find("*");
+                if (it_wild != marketEventSubscribers.end()) {
+                    wildcardCallbacks = it_wild->second;
+                }
+                // Get specific symbol listeners
                 auto it = marketEventSubscribers.find(symbol);
                 if (it != marketEventSubscribers.end()) {
                     localCallbacks = it->second;
                 }
             }
-
-            // Execute the callbacks safely outside the lock
-            for (const auto& [id, callback] : localCallbacks) {
-                callback(arg);
-            }
+            // Execute specific callbacks
+            for (const auto& [id, callback] : localCallbacks) callback(arg);
+            // Execute wildcard callbacks
+            for (const auto& [id, callback] : wildcardCallbacks) callback(arg);
+            
         } 
         else if constexpr (std::is_same_v<T, ExecutionReport>) {
             std::unordered_map<uint64_t, ExecutionCallback> localExecSubs;

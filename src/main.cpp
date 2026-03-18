@@ -122,6 +122,18 @@ int runBacktestMode(const std::string& csvTickPath, const std::string& csvHistor
     LOG_INFO("[Backtest] End of data reached. Stopping strategy...");
     dataFeed->stopReplay();
     strategy->stop();
+
+    double realized = portfolioManager->getTotalRealizedPnL();
+    double unrealized = portfolioManager->getTotalUnrealizedPnL();
+    int total_trades = portfolioManager->getTotalTrades();
+    LOG_INFO("==================================================");
+    LOG_INFO("              BACKTEST RESULTS                    ");
+    LOG_INFO("==================================================");
+    LOG_INFO("Total Fills:    {}", total_trades);
+    LOG_INFO("Realized PnL:   ${:.2f}", realized);
+    LOG_INFO("Unrealized PnL: ${:.2f}", unrealized);
+    LOG_INFO("Total Net PnL:  ${:.2f}", (realized + unrealized));
+    LOG_INFO("==================================================");
     
     LOG_INFO("[Backtest] Backtest complete.");
     return 0;
