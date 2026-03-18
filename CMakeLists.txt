@@ -41,6 +41,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdlog)
 
+FetchContent_Declare(
+    cpr
+    GIT_REPOSITORY https://github.com/libcpr/cpr.git
+    GIT_TAG        1.10.5
+)
+FetchContent_MakeAvailable(cpr)
+
 # Locate source files excluding main.cpp for the library
 file(GLOB_RECURSE LIB_SRC_FILES 
     "src/core/*.cpp"
@@ -70,9 +77,12 @@ target_link_libraries(FunTradeLib PUBLIC
     OpenSSL::Crypto
 )
 
-# Create the main executable
+# Create the executables
 add_executable(${PROJECT_NAME} src/main.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE FunTradeLib)
+
+add_executable(tick_fetcher src/tools/AlpacaTickFetcher.cpp)
+target_link_libraries(tick_fetcher PRIVATE cpr::cpr nlohmann_json::nlohmann_json)
 
 # Enable testing and add the tests directory
 enable_testing()
