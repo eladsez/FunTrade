@@ -16,8 +16,8 @@ namespace bot {
 
 class CsvDataFeed : public IDataFeed {
 public:
-    explicit CsvDataFeed(const std::string& csvFilePath)
-        : file_path_(csvFilePath), is_playing_(false) {}
+    explicit CsvDataFeed(const std::string& tickCsvPath, const std::string& warmupCsvPath = "")
+        :is_playing_(false), file_path_(tickCsvPath), warmup_file_path_(warmupCsvPath) {}
 
     ~CsvDataFeed() override {
         disconnectFromInfra();
@@ -52,14 +52,64 @@ public:
 
     std::vector<HistoricalBar> fetchHistoricalBars(
         const std::string& symbol, 
-        const std::string& start, 
-        const std::string& end, 
-        const std::string& timeframe) override {
+        const std::string&/* start */, 
+        const std::string& /* end */, 
+        const std::string& /* timeframe */) override {
         
-        // In a pure tick-level backtest, historical bars for warm-up are either 
-        // skipped or mocked. You can expand this later to read a daily-bars CSV.
-        LOG_WARN("[CsvDataFeed] fetchHistoricalBars returning empty for tick-level CSV mock.");
-        return {};
+        std::vector<HistoricalBar> bars;
+
+        if (warmup_file_path_.empty()) {
+            LOG_WARN("[CsvDataFeed] No warmup file provided. Returning empty history.");
+            return bars;
+        }
+
+        std::ifstream file(warmup_file_path_);
+        if (!file.is_open()) {
+            LOG_ERROR("[CsvDataFeed] Failed to open warmup CSV: {}", warmup_file_path_);
+            return bars;
+        }
+
+        std::string line;
+        // Skip header
+        std::getline(file, line);
+
+        while (std::getline(file, line)) {
+            if (line.empty()) continue;
+
+            std::stringstream ss(line);
+            std::string token;
+
+            try {
+                // Expected format from Python: timestamp_ms,symbol,close,volume
+                std::getline(ss, token, ',');
+                uint64_t ts = std::stoull(token);
+
+                std::getline(ss, token, ',');
+                std::string row_symbol = token;
+
+                // Only parse and store bars for the requested symbol
+                if (row_symbol == symbol) {
+                    std::getline(ss, token, ',');
+                    double close = std::stod(token);
+
+                    std::getline(ss, token, ',');
+                    double volume = std::stod(token);
+
+                    HistoricalBar bar;
+                    bar.timestamp_ms = ts;
+                    bar.symbol = row_symbol;
+                    bar.close = close;
+                    bar.volume = volume;
+                    
+                    bars.push_back(bar);
+                }
+            } catch (const std::exception& e) {
+                LOG_ERROR("[CsvDataFeed] Error parsing warmup line: {} | {}", line, e.what());
+            }
+        }
+
+        LOG_INFO("[CsvDataFeed] Fetched {} historical bars for {}", bars.size(), symbol);
+        return bars;
     }
 
     void setMarketTickCallback(std::function<void(const MarketEvent&)> callback) override {
@@ -131,7 +181,7 @@ public:
                     }
                     last_ts = ts;
 
-                    // --- THE FIX: ROUTE TRADES VS BARS ---
+                    // --- ROUTE TRADES VS BARS ---
                     if (side_str == "bar") {
                         BarUpdate bar;
                         bar.timestamp_ms = ts;
@@ -173,13 +223,15 @@ public:
     bool isPlaying() const { return is_playing_.load(); }
 
 private:
-    std::string file_path_;
     std::set<std::string> subscriptions_;
     mutable std::mutex sub_mtx_;
     std::function<void(const MarketEvent&)> tick_callback_;
     
     std::atomic<bool> is_playing_;
     std::thread replay_thread_;
+
+    std::string file_path_;
+    std::string warmup_file_path_;
 };
 
 } // namespace bot

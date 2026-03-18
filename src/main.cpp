@@ -85,13 +85,13 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
 // ============================================================================
 // BACKTESTING MODE
 // ============================================================================
-int runBacktestMode(const std::string& csvFilePath, const std::string& configPath) {
+int runBacktestMode(const std::string& csvTickPath, const std::string& csvHistorPath, const std::string& configPath) {
     LOG_INFO("--- Starting HISTORICAL BACKTEST Mode ---");
-    LOG_INFO("[Backtest] Data File: {}", csvFilePath);
+    LOG_INFO("[Backtest] Data File: {}", csvTickPath);
     LOG_INFO("[Backtest] Config File: {}", configPath);
 
     // 1. Initialize Mocks
-    auto dataFeed = std::make_shared<CsvDataFeed>(csvFilePath);
+    auto dataFeed = std::make_shared<CsvDataFeed>(csvTickPath, csvHistorPath);
     auto eventBus = std::make_shared<EventBus>(dataFeed);
     auto executionEngine = std::make_shared<MockExecutionEngine>(eventBus);
 
@@ -138,20 +138,29 @@ int main(int argc, char* argv[]) {
     LOG_INFO("          Algorithmic Trading Bot                 ");
     LOG_INFO("==================================================");
 
-    std::string configPath = "scripts/robust_configs/amzn_cmg_expe.json";
+    std::string configPath = "config/basket_configs/amzn_cmg_expe.json";
+    std::string csvTickPath = "data/testing_ticks.csv";
+    std::string csvHistorPath = "";
+
+    const char* apiKey = std::getenv("APCA_API_KEY_ID");
+    const char* apiSecret = std::getenv("APCA_API_SECRET_KEY");
 
     // Simple CLI Argument Routing
     if (argc > 1 && std::string(argv[1]) == "--backtest") {
-        std::string csvPath = "data/testing_ticks.csv";
         if (argc > 2) {
-            csvPath = argv[2]; // Allow passing a custom CSV path
+            csvTickPath = argv[2];
         }
-        return runBacktestMode(csvPath, configPath);
+        if (argc > 3) {
+            csvHistorPath = argv[3];
+        }
+
+        if (argc > 4) {
+            configPath = argv[4];
+        }
+
+        return runBacktestMode(csvTickPath, csvHistorPath, configPath);
     } 
     else {
-        const char* apiKey = std::getenv("APCA_API_KEY_ID");
-        const char* apiSecret = std::getenv("APCA_API_SECRET_KEY");
-
         if (!apiKey || !apiSecret) {
             LOG_ERROR("\nERROR: Live mode requires Alpaca credentials.\n"
                       "To run a backtest instead, use: ./FunTrade --backtest\n");
