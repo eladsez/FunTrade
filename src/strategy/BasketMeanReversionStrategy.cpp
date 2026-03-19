@@ -209,7 +209,7 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 
     double z_score = opt_z_score.value();
 
-    // logZScoreThrottled(z_score, timestamp);
+    logZScoreThrottled(z_score, timestamp);
 
     if (current_position_ == PositionState::FLAT) {
         if (z_score > entry_z_score_) {

@@ -37,8 +37,8 @@ uint64_t EventBus::subscribeToMarketEvents(const std::string& symbol, MarketEven
     uint64_t subId = nextMarketSubId++;
 
     // If this is the very first listener for this symbol, notify the DataFeed
-    if (marketEventSubscribers.find(symbol) == marketEventSubscribers.end() || 
-        marketEventSubscribers[symbol].empty()) {
+    if (symbol != "*" && (marketEventSubscribers.find(symbol) == marketEventSubscribers.end() || 
+        marketEventSubscribers[symbol].empty())) {
         if (dataFeed_) {
             dataFeed_->subscribeToSymbol(symbol);
         }
