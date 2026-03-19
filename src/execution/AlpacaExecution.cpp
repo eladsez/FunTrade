@@ -258,7 +258,6 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
 
             ExecutionReport report;
             report.order_id = order["id"].get<std::string>();
-            report.client_order_id = order.value("client_order_id", "");
             report.symbol = order["symbol"].get<std::string>();
             
             std::string sideStr = order["side"].get<std::string>();
@@ -287,6 +286,9 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
             report.avg_price = safeStod(order, "filled_avg_price");
             
             report.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+            report.client_order_id = order.value("client_order_id", "");
+            report.client_order_id = OrderIdUtils::extractBaseClientId(report.client_order_id);
 
             LOG_DEBUG("[AlpacaExecutionEngine] Execution Report: Symbol={}, Event={}, Status={}, Qty={}, Price={}", 
                      report.symbol, event, static_cast<int>(report.status), report.last_quantity, report.last_price);

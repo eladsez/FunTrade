@@ -69,10 +69,10 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
 
     total_trades_++;
 
-    // the point of the virtualkey here is to be able to track per baket positions
-    // when there is more the one basket sharing the same symbol 
-    std::string base_id = OrderIdUtils::extractBaseClientId(report.client_order_id);
-    std::string virtual_key = base_id.empty() ? report.symbol : base_id;
+    // the point of the virtualkey here is to be able to track per strategy positions
+    // when there is more the one strategy sharing the same symbol 
+    // the straregy must handle the client_id order and know that the same report.client_order_id means the same position
+    std::string virtual_key = report.client_order_id.empty() ? report.symbol : report.client_order_id;
 
     Position& pos = positions_[virtual_key];
     pos.symbol = report.symbol;

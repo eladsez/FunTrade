@@ -65,25 +65,15 @@ private:
     std::shared_ptr<IEventBus> event_bus_;
     std::unordered_map<std::string, double> latest_prices_;
 
-    std::string generateClientOrderId(const std::string& prefix) {
-        static std::atomic<uint32_t> order_counter{0};
-        
-        std::string base_prefix = prefix.empty() ? "order" : prefix;
-        
-        uint64_t timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-        uint32_t current_count = ++order_counter;
-        
-        std::string generated_id = base_prefix + "_" + std::to_string(timestamp) + "_" + std::to_string(current_count);
-        return generated_id;
-    }
-
     std::string simulateFill(const OrderRequest& req) {
         if (!event_bus_) return "";
 
+        static std::atomic<uint32_t> order_counter{0};
+
         ExecutionReport report;
         // Mocking an exchange-assigned ID
-        report.order_id = generateClientOrderId(req.client_order_id);
-        report.client_order_id = generateClientOrderId(req.client_order_id);
+        report.order_id = order_counter++;
+        report.client_order_id = req.client_order_id;
         report.symbol = req.symbol;
         report.side = req.side;
         

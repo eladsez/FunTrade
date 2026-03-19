@@ -209,7 +209,7 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 
     double z_score = opt_z_score.value();
 
-    logZScoreThrottled(z_score, timestamp);
+    // logZScoreThrottled(z_score, timestamp);
 
     if (current_position_ == PositionState::FLAT) {
         if (z_score > entry_z_score_) {
@@ -263,9 +263,13 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
     // 2. Build the cycle and dispatch to the OrderManager
     current_cycle_ = std::make_unique<ExecutionCycle>(targetState);
 
+    // 3. Dispatch the orders to the OrderManager
     for (size_t i = 0; i < num_components; ++i) {
         current_cycle_->addLeg(client_order_ids_[i], symbols[i], targets[i].quantity, targets[i].side);
+    }
 
+    // add leg and submit must be serial
+    for (size_t i = 0; i < num_components; ++i) {
         if (targets[i].quantity > 0.0) {
             OrderRequest req;
             req.client_order_id = client_order_ids_[i]; 
@@ -281,8 +285,8 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
         }
     }
 
-    // 3. Safety net for instant resolution
-    if (current_cycle_->isComplete()) {
+    // 4. Safety net for instant resolution (e.g., if target quantities were all 0)
+    if (current_cycle_ && current_cycle_->isComplete()) {
         evaluateCompletedCycle();
     }
 }
@@ -312,14 +316,11 @@ void BasketMeanReversionStrategy::evaluateCompletedCycle() {
         // If we tried to close the basket, but the timeout hit while we still had 
         // partial fills pending, we technically still hold residual inventory.
         if (target == PositionState::FLAT) {
-            double total_exposure = 0.0;
-            for (const auto& cid : client_order_ids_) {
-                // Rely on the PortfolioManager's exact tracking
-                total_exposure += std::abs(portfolio_mngr_->getNetPosition(cid));
-            }
+            // Ask the cycle directly how many shares it failed to fill
+            double missed_shares = current_cycle_->getMissedShares();
             
             // Use a small epsilon to avoid floating-point errors on zero
-            if (total_exposure > 1e-6) {
+            if (missed_shares > 1e-6) {
                 LOG_WARN("[{}] FLAT cycle completed, but residual inventory remains. Reverting state to PENDING_FLAT to force cleanup.", basket_id_);
                 // Reverting to PENDING_FLAT ensures the next market tick will immediately
                 // fire another executeBasket(FLAT) to sweep up the remaining shares.

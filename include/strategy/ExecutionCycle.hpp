@@ -19,6 +19,9 @@ public:
     bool isComplete() const;
     bool hasAnyFills() const;
     PositionState getTargetState() const;
+    
+    // Calculates the total absolute difference between target and filled quantities across all legs
+    double getMissedShares() const;
 
 private:
     PositionState target_state_;

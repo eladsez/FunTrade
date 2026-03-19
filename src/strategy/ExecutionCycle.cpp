@@ -32,6 +32,8 @@ bool ExecutionCycle::processExecutionReport(const ExecutionReport& report) {
 }
 
 bool ExecutionCycle::isComplete() const {
+    // If we haven't even registered legs yet, it's not complete
+    if (legs_.empty()) return false;
     // Note: total expected legs includes the ones that started with 0 target qty
     // because addLeg instantly increments terminal_count_ for them.
     // However, legs_.size() only tracks active orders.
@@ -41,6 +43,18 @@ bool ExecutionCycle::isComplete() const {
         if (!leg.isTerminal()) return false;
     }
     return true;
+}
+
+double ExecutionCycle::getMissedShares() const {
+    double missed_shares = 0.0;
+    
+    for (const auto& [cid, leg] : legs_) {
+        double target = leg.getTargetQuantity();
+        double filled = leg.getFilledQuantity();
+        missed_shares += std::abs(target - filled);
+    }
+    
+    return missed_shares;
 }
 
 bool ExecutionCycle::hasAnyFills() const {
