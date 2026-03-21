@@ -47,13 +47,6 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     auto orderManager = std::make_shared<OrderManager>(eventBus, executionEngine);
     auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, executionEngine);
 
-    auto portfolioValue = executionEngine->getPortfolioValue();
-    double initPv = 100000.0;
-    if (portfolioValue) {
-        initPv = *portfolioValue;
-        LOG_INFO("[LIVE] Current Portfolio Value: ${}", initPv);
-    }
-
     double percentPerStrategy = 0.05; // Representing 5% of available cash
 
     // Initialize the Orchestrator

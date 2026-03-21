@@ -157,7 +157,8 @@ void BasketMeanReversionStrategy::warmUp() {
 bool BasketMeanReversionStrategy::isValidMarketEvent(const MarketEvent& event) const {
     if (const auto* trade = std::get_if<TradeTick>(&event)) {
         // Trade Defense: Must have a real positive price
-        return trade->price > 0.0;
+        // return trade->price > 0.0;
+        return false;
         
     } else if (const auto* quote = std::get_if<QuoteTick>(&event)) {
         // Quote Defense 1: No zero prices or crossed markets
