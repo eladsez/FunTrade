@@ -86,7 +86,7 @@ void IbkrDataFeed::onTickPrice(TickerId tickerId, TickType field, double price, 
                      std::chrono::system_clock::now().time_since_epoch()).count();
 
     // 1 = BID, 2 = ASK
-    if (field == 1 || field == 2) {
+    if (field == TickType::BID || field == TickType::ASK) {
         QuoteTick& quote = quoteCache_[tickerId];
         quote.symbol = symbol;
         quote.timestamp_ms = nowMs;
@@ -100,7 +100,7 @@ void IbkrDataFeed::onTickPrice(TickerId tickerId, TickType field, double price, 
         }
     }
     // 4 = LAST (Trade)
-    else if (field == 4) {
+    else if (field == TickType::LAST) {
         TradeTick& trade = tradeCache_[tickerId];
         trade.symbol = symbol;
         trade.timestamp_ms = nowMs;
@@ -125,13 +125,13 @@ void IbkrDataFeed::onTickSize(TickerId tickerId, TickType field, Decimal size) {
                      std::chrono::system_clock::now().time_since_epoch()).count();
 
     // 0 = BID_SIZE, 3 = ASK_SIZE
-    if (field == 0 || field == 3) {
+    if (field == TickType::BID_SIZE || field == TickType::ASK_SIZE) {
         QuoteTick& quote = quoteCache_[tickerId];
         quote.symbol = symbol;
         quote.timestamp_ms = nowMs;
 
-        if (field == 0) quote.bid_size = sizeDbl;
-        if (field == 3) quote.ask_size = sizeDbl;
+        if (field == TickType::BID_SIZE) quote.bid_size = sizeDbl;
+        if (field == TickType::ASK_SIZE) quote.ask_size = sizeDbl;
 
         if (quote.bid_price > 0 && quote.ask_price > 0) {
             if (eventBus_) eventBus_->publishMarketEvent(quote);
@@ -139,7 +139,7 @@ void IbkrDataFeed::onTickSize(TickerId tickerId, TickType field, Decimal size) {
         }
     }
     // 5 = LAST_SIZE (Trade Size)
-    else if (field == 5) {
+    else if (field == TickType::LAST_SIZE) {
         TradeTick& trade = tradeCache_[tickerId];
         trade.symbol = symbol;
         trade.timestamp_ms = nowMs;
