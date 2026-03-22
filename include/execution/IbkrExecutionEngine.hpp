@@ -34,8 +34,8 @@ public:
     // Synchronous Account/Portfolio Methods
     std::optional<double> getAvailableCash() override;
     std::optional<double> getPortfolioValue() override;
-    std::vector<Position> getOpenPositions() override { return std::vector<Position>(); }
-    std::vector<OrderState> getOpenOrders() override { return std::vector<OrderState>(); }
+    std::vector<Position> getOpenPositions() override;
+    std::vector<OrderState> getOpenOrders() override;
 
 private:
     // Callbacks from IbkrInfra
@@ -44,6 +44,9 @@ private:
                        double avgFillPrice, int permId, int parentId, double lastFillPrice, 
                        int clientId, const std::string& whyHeld, double mktCapPrice);
     void onExecDetails(int reqId, const Contract& contract, const Execution& execution);
+    void onUpdateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName);
+    void onPosition(const std::string& account, const Contract& contract, Decimal pos, double avgCost);
+    void onOpenOrder(OrderId orderId, const Contract& contract, const ::Order& order, const ::OrderState& ibkrOrderState);
 
     // Helpers
     Contract createContract(const std::string& symbol);
@@ -61,8 +64,19 @@ private:
     std::unordered_map<std::string, int> clientRefToOrderId_;
     std::unordered_map<int, std::string> orderIdToClientRef_;
 
+    // Account State
     std::atomic<double> cachedCash_{0.0};
+    std::atomic<bool> cashHasValue_{false};
+    
     std::atomic<double> cachedPortfolioValue_{0.0};
+    std::atomic<bool> portHasValue_{false};
+
+    // Portfolio State
+    std::mutex positionMutex_;
+    std::unordered_map<std::string, Position> openPositions_; // Map by symbol
+
+    std::mutex orderMutex_;
+    std::unordered_map<int, OrderState> openOrders_; // Map by integer orderId
 };
 
 } // namespace bot

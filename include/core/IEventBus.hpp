@@ -2,6 +2,8 @@
 #include <functional>
 #include <core/DomainModels.hpp>
 
+namespace bot {
+
 // Callback type for receiving market events.
 using MarketEventCallback = std::function<void(const MarketEvent&)>;
 
@@ -40,3 +42,5 @@ public:
         const std::string& end, 
         const std::string& timeframe) = 0;
 };
+
+}

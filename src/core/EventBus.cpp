@@ -2,6 +2,8 @@
 #include <core/Logger.hpp>
 #include <chrono>
 
+namespace bot {
+
 EventBus::EventBus(std::shared_ptr<IDataFeed> dataFeed) : dataFeed_(std::move(dataFeed)) {
     // If a data feed is provided, wire its output directly to our lock-free queue
     if (dataFeed_) {
@@ -163,4 +165,6 @@ std::vector<HistoricalBar> EventBus::fetchHistoricalBars(
     
     LOG_ERROR("[EventBus] Cannot fetch historical bars for {}: No DataFeed attached!", symbol);
     return {}; // Return an empty vector if there is no feed
+}
+
 }

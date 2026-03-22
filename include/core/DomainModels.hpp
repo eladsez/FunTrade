@@ -4,6 +4,8 @@
 #include <variant>
 #include <vector>
 
+namespace bot {
+
 enum class Side {
     BUY,
     SELL,
@@ -186,3 +188,5 @@ namespace OrderIdUtils {
     }
 
 } // namespace OrderIdUtils
+
+}

@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <memory>
 
+namespace bot {
+
 class EventBus : public IEventBus {
 public:
     explicit EventBus(std::shared_ptr<IDataFeed> dataFeed);
@@ -56,3 +58,5 @@ private:
     std::atomic<bool> isRunning{false};
     std::thread dispatcherThread;
 };
+
+}

@@ -49,6 +49,15 @@ public:
     void setOrderStatusCallback(OrderStatusCallback cb) { orderStatusCb_ = std::move(cb); }
     void setExecDetailsCallback(ExecDetailsCallback cb) { execDetailsCb_ = std::move(cb); }
 
+    // --- Account & Portfolio Callbacks ---
+    using UpdateAccountValueCallback = std::function<void(const std::string&, const std::string&, const std::string&, const std::string&)>;
+    using PositionCallback = std::function<void(const std::string&, const Contract&, Decimal, double)>;
+    using OpenOrderCallback = std::function<void(OrderId, const Contract&, const ::Order&, const ::OrderState&)>;
+
+    void setUpdateAccountValueCallback(UpdateAccountValueCallback cb) { updateAccountValueCb_ = std::move(cb); }
+    void setPositionCallback(PositionCallback cb) { positionCb_ = std::move(cb); }
+    void setOpenOrderCallback(OpenOrderCallback cb) { openOrderCb_ = std::move(cb); }
+
     // =========================================================================
     // EWrapper Overrides (Triggered by TWS API background thread)
     // =========================================================================
@@ -63,6 +72,10 @@ public:
 	                Decimal remaining, double avgFillPrice, long long permId, int parentId,
 	                double lastFillPrice, int clientId, const std::string& whyHeld, double mktCapPrice) override;
     void execDetails(int reqId, const Contract& contract, const Execution& execution) override;
+
+    void updateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName) override;
+    void position(const std::string& account, const Contract& contract, Decimal position, double avgCost) override;
+    void openOrder(OrderId orderId, const Contract& contract, const ::Order& order, const ::OrderState& orderState) override;
 
     void error(int id, time_t errorTime, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson) override;
     void connectionClosed() override;
@@ -91,6 +104,11 @@ private:
     NextValidIdCallback nextValidIdCb_;
     OrderStatusCallback orderStatusCb_;
     ExecDetailsCallback execDetailsCb_;
+
+    UpdateAccountValueCallback updateAccountValueCb_;
+    PositionCallback positionCb_;
+    OpenOrderCallback openOrderCb_;
+
 };
 
 } // namespace bot

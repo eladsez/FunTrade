@@ -1,6 +1,8 @@
 #pragma once
 #include <core/DomainModels.hpp>
 
+namespace bot {
+
 // Base interface for all trading algorithms.
 // Complies with the Open/Closed principle: add new strategies without modifying the core.
 class IStrategy {
@@ -16,3 +18,5 @@ public:
     // Halts the strategy and cleans up.
     virtual void stop() = 0;
 };
+
+}

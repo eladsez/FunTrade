@@ -4,6 +4,8 @@
 #include <core/DomainModels.hpp>
 #include <functional>
 
+namespace bot {
+
 // Interface for connecting to market data sources (e.g., Binance, Alpaca, or a local CSV file).
 class IDataFeed {
 public:
@@ -26,4 +28,6 @@ public:
         const std::string& timeframe) = 0;
 
     virtual void setMarketTickCallback(std::function<void(const MarketEvent&)> callback) = 0;
+};
+
 };

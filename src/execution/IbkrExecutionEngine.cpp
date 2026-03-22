@@ -7,6 +7,7 @@
 #include <Contract.h>
 #include <Execution.h>
 #include <Decimal.h> 
+#include <OrderState.h>
 
 #include <chrono>
 
@@ -36,8 +37,29 @@ bool IbkrExecutionEngine::connectToInfra() {
         }
     );
 
+    infra_->setUpdateAccountValueCallback(
+        [this](const std::string& k, const std::string& v, const std::string& c, const std::string& a) {
+            this->onUpdateAccountValue(k, v, c, a);
+        }
+    );
+
+    infra_->setPositionCallback(
+        [this](const std::string& a, const Contract& c, Decimal p, double ac) {
+            this->onPosition(a, c, p, ac);
+        }
+    );
+
+    infra_->setOpenOrderCallback(
+        [this](OrderId id, const Contract& c, const ::Order& o, const ::OrderState& os) {
+            this->onOpenOrder(id, c, o, os);
+        }
+    );
+
     if (infra_->getClient() && infra_->getClient()->isConnected()) {
         infra_->getClient()->reqIds(-1); 
+        infra_->getClient()->reqAccountUpdates(true, ""); 
+        infra_->getClient()->reqPositions();
+        infra_->getClient()->reqAllOpenOrders();
     }
 
     return true;
@@ -210,6 +232,83 @@ void IbkrExecutionEngine::onExecDetails(int reqId, const Contract& contract, con
     }
 }
 
+void IbkrExecutionEngine::onUpdateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName) {
+    (void)accountName;
+    
+    // We usually only care about the base currency (e.g., USD) to avoid double-counting
+    if (currency == "USD" || currency.empty()) {
+        try {
+            if (key == "AvailableFunds") { // Can also use "TotalCashValue"
+                cachedCash_.store(std::stod(val));
+                cashHasValue_.store(true);
+            } else if (key == "NetLiquidation") { // Total portfolio value
+                cachedPortfolioValue_.store(std::stod(val));
+                portHasValue_.store(true);
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("[IbkrExecutionEngine] Failed to parse account value for {}: {}", key, val);
+        }
+    }
+}
+
+void IbkrExecutionEngine::onPosition(const std::string& account, const Contract& contract, Decimal pos, double avgCost) {
+    (void)account;
+    std::lock_guard<std::mutex> lock(positionMutex_);
+    
+    double qty = (pos == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(pos);
+
+    // If position drops to 0, remove it from the open positions map
+    if (qty == 0.0) {
+        openPositions_.erase(contract.symbol);
+    } else {
+        Position p;
+        p.symbol = contract.symbol;
+        p.quantity = qty;       
+        p.avg_price = avgCost; 
+        
+        // Note: The 'position' callback does not provide current_price or realized_pnl.
+        // These will default to 0.0. Typically, your PortfolioManager updates the 
+        // current_price independently by listening to the EventBus market data ticks.
+        
+        openPositions_[contract.symbol] = p;
+    }
+}
+
+void IbkrExecutionEngine::onOpenOrder(OrderId orderId, const Contract& contract, const ::Order& order, const ::OrderState& ibkrOrderState) {
+    std::lock_guard<std::mutex> lock(orderMutex_);
+    
+    OrderState state; // This resolves safely to bot::OrderState
+    state.order_id = std::to_string(orderId);
+    state.client_order_id = order.orderRef; 
+    state.symbol = contract.symbol;
+    
+    state.side = (order.action == "BUY") ? Side::BUY : Side::SELL;
+    
+    // Map OrderType
+    if (order.orderType == "MKT") state.type = OrderType::MARKET;
+    else if (order.orderType == "LMT") state.type = OrderType::LIMIT;
+    else if (order.orderType == "STP") state.type = OrderType::STOP;
+    else if (order.orderType == "STP LMT") state.type = OrderType::STOP_LIMIT;
+    else if (order.orderType == "TRAIL") state.type = OrderType::TRAILING_STOP;
+    else state.type = OrderType::MARKET; 
+
+    state.quantity = (order.totalQuantity == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(order.totalQuantity);
+    
+    // Map Price
+    if (state.type == OrderType::LIMIT || state.type == OrderType::STOP_LIMIT) {
+        state.price = (order.lmtPrice == UNSET_DOUBLE) ? 0.0 : order.lmtPrice;
+    } else if (state.type == OrderType::STOP) {
+        state.price = (order.auxPrice == UNSET_DOUBLE) ? 0.0 : order.auxPrice;
+    } else {
+        state.price = 0.0; 
+    }
+
+    // Use ibkrOrderState to access the TWS string status
+    state.status = parseIbkrStatus(ibkrOrderState.status);
+
+    openOrders_[orderId] = state; 
+}
+
 // =========================================================================
 // Helpers & Synchronous Methods
 // =========================================================================
@@ -243,11 +342,35 @@ OrderStatus IbkrExecutionEngine::parseIbkrStatus(const std::string& status) {
 }
 
 std::optional<double> IbkrExecutionEngine::getAvailableCash() {
-    return cachedCash_.load();
+    if (cashHasValue_.load()) return cachedCash_.load();
+    return std::nullopt;
 }
 
 std::optional<double> IbkrExecutionEngine::getPortfolioValue() {
-    return cachedPortfolioValue_.load();
+    if (portHasValue_.load()) return cachedPortfolioValue_.load();
+    return std::nullopt;
+}
+
+std::vector<Position> IbkrExecutionEngine::getOpenPositions() {
+    std::lock_guard<std::mutex> lock(positionMutex_);
+    std::vector<Position> result;
+    result.reserve(openPositions_.size());
+    
+    for (const auto& [symbol, pos] : openPositions_) {
+        result.push_back(pos);
+    }
+    return result;
+}
+
+std::vector<OrderState> IbkrExecutionEngine::getOpenOrders() {
+    std::lock_guard<std::mutex> lock(orderMutex_);
+    std::vector<OrderState> result;
+    result.reserve(openOrders_.size());
+    
+    for (const auto& [id, state] : openOrders_) {
+        result.push_back(state);
+    }
+    return result;
 }
 
 } // namespace bot

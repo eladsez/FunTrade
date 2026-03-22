@@ -3,6 +3,9 @@
 #include <atomic>
 #include <chrono>
 
+using namespace bot;
+
+
 class EventBusTest : public ::testing::Test {
 protected:
     std::unique_ptr<EventBus> eventBus;

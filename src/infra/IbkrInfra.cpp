@@ -95,6 +95,18 @@ void IbkrInfra::execDetails(int reqId, const Contract& contract, const Execution
     if (execDetailsCb_) execDetailsCb_(reqId, contract, execution);
 }
 
+void IbkrInfra::updateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName) {
+    if (updateAccountValueCb_) updateAccountValueCb_(key, val, currency, accountName);
+}
+
+void IbkrInfra::position(const std::string& account, const Contract& contract, Decimal position, double avgCost) {
+    if (positionCb_) positionCb_(account, contract, position, avgCost);
+}
+
+void IbkrInfra::openOrder(OrderId orderId, const Contract& contract, const ::Order& order, const ::OrderState& orderState) {
+    if (openOrderCb_) openOrderCb_(orderId, contract, order, orderState);
+}
+
 // --- System & Error Handling ---
 
 // Add time_t errorTime and cast unused parameters
