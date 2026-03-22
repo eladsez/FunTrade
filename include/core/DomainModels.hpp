@@ -138,6 +138,31 @@ struct HistoricalBar {
     double vwap = 0.0;
 };
 
+
+struct Position {
+    std::string symbol;
+    double quantity = 0.0;
+    double avg_price = 0.0;
+    double current_price = 0.0;
+    double realized_pnl = 0.0;
+
+    double unrealized_pnl() const {
+        if (quantity == 0.0) return 0.0;
+        return quantity * (current_price - avg_price);
+    }
+};
+
+struct OrderState {
+    std::string order_id;
+    std::string client_order_id;
+    std::string symbol;
+    Side side;
+    OrderType type;
+    double quantity;
+    double price;
+    OrderStatus status;
+};
+
 namespace OrderIdUtils {
 
     // Safely extracts the original base prefix from a generated execution ID

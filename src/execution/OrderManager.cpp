@@ -149,64 +149,52 @@ void OrderManager::monitorLoop() {
 
 void OrderManager::syncWithExchange() {
     LOG_INFO("[OrderManager] Syncing open orders with exchange...");
-    nlohmann::json ordersJson = engine_->getOpenOrders();
+    std::vector<OrderState> currentOrders = engine_->getOpenOrders();
     
-    std::lock_guard<std::mutex> lock(mtx_);
-    ordersByClientId_.clear();
-    exchangeToClientId_.clear();
+    // 1. Build the new maps offline without any locks
+    std::unordered_map<std::string, OrderState> new_ordersByClientId;
+    std::unordered_map<std::string, std::string> new_exchangeToClientId;
     
-    if (ordersJson.is_array()) {
-        for (const auto& oJson : ordersJson) {
-            try {
-                OrderState state;
-                state.order_id = oJson.value("id", "");
-                state.client_order_id = oJson["client_order_id"].is_null() ? "" : oJson.value("client_order_id", "");
-                state.symbol = oJson.value("symbol", "");
-                
-                std::string qtyStr = oJson["qty"].is_null() ? "0" : oJson.value("qty", "0");
-                state.quantity = std::stod(qtyStr);
-
-                std::string priceStr = oJson["limit_price"].is_null() ? "0" : oJson.value("limit_price", "0");
-                state.price = std::stod(priceStr);
-
-                std::string sideStr = oJson.value("side", "buy");
-                state.side = (sideStr == "buy") ? Side::BUY : Side::SELL;
-                
-                std::string typeStr = oJson.value("type", "market");
-                if (typeStr == "limit") state.type = OrderType::LIMIT;
-                else if (typeStr == "trailing_stop") state.type = OrderType::TRAILING_STOP;
-                else state.type = OrderType::MARKET;
-                
-                std::string statusStr = oJson.value("status", "new");
-                if (statusStr == "filled") state.status = OrderStatus::FILLED;
-                else if (statusStr == "partially_filled") state.status = OrderStatus::PARTIALLY_FILLED;
-                else if (statusStr == "canceled") state.status = OrderStatus::CANCELED;
-                else state.status = OrderStatus::NEW;
-                
-                if (!state.client_order_id.empty()) {
-                    ordersByClientId_[state.client_order_id] = state;
-                    exchangeToClientId_[state.order_id] = state.client_order_id;
-                    LOG_INFO("[OrderManager] Synced Order: ClientID={}, ExchangeID={}, Status={}", 
-                             state.client_order_id, state.order_id, statusStr);
-                }
-            } catch (const std::exception& e) {
-                LOG_ERROR("[OrderManager] Error parsing synced order: {}", e.what());
-            }
+    // Pre-allocate buckets to prevent rehashing during insertion
+    new_ordersByClientId.reserve(currentOrders.size());
+    new_exchangeToClientId.reserve(currentOrders.size());
+    
+    for (auto& state : currentOrders) {
+        if (state.client_order_id.empty()) {
+            continue;
         }
+        
+        // Extract keys before moving the state object
+        std::string clientIdKey = state.client_order_id;
+        std::string exchangeIdKey = state.order_id;
+        
+        LOG_DEBUG("[OrderManager] Synced Order: ClientID={}, ExchangeID={}, Status={}", 
+                  state.client_order_id, state.order_id, static_cast<int>(state.status));
+
+        // Efficient insertions using std::move
+        // We copy clientIdKey for the second map, but move it for the first
+        new_exchangeToClientId.emplace(std::move(exchangeIdKey), clientIdKey);
+        new_ordersByClientId.emplace(std::move(clientIdKey), std::move(state));
     }
 
-    // --- LOG THE FINAL STATE AFTER SYNC ---
+    // --- LOG THE FINAL STATE BEFORE LOCKING ---
     LOG_INFO("[OrderManager] === Sync Complete. Current State Summary ===");
-    LOG_INFO("[OrderManager] Total tracked orders: {}", ordersByClientId_.size());
+    LOG_INFO("[OrderManager] Total tracked orders: {}", new_ordersByClientId.size());
     
-    for (const auto& [clientId, state] : ordersByClientId_) {
-        // Convert the enum Side back to string for logging
+    for (const auto& [clientId, state] : new_ordersByClientId) {
         std::string sideLog = (state.side == Side::BUY) ? "BUY" : "SELL";
-        
         LOG_INFO("  -> ClientID: {} | ExchID: {} | Symbol: {} | Side: {} | Qty: {:.4f} | Price: {:.2f}", 
                  clientId, state.order_id, state.symbol, sideLog, state.quantity, state.price);
     }
     LOG_INFO("[OrderManager] ============================================");
+
+    // 2. Lock the mutex strictly for the double pointer swap (O(1))
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        ordersByClientId_.swap(new_ordersByClientId);
+        exchangeToClientId_.swap(new_exchangeToClientId);
+    }
+    // The lock is released instantly. The old map data is destroyed here.
 }
 
 std::optional<OrderState> OrderManager::getOrder(const std::string& clientOrderId) const {

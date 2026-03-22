@@ -26,8 +26,8 @@ public:
     // Extended Domain Specific API
     std::optional<double> getPortfolioValue() override;
     std::optional<double> getAvailableCash() override;
-    nlohmann::json getOpenPositions() override;
-    nlohmann::json getOpenOrders() override;
+    std::vector<Position> getOpenPositions() override;
+    std::vector<OrderState> getOpenOrders() override;
 
 private:
     std::shared_ptr<IEventBus> eventBus_;

@@ -132,43 +132,39 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
 
 void PortfolioManager::syncWithExchange() {
     LOG_INFO("[PortfolioManager] Syncing positions with exchange...");
-    nlohmann::json positionsJson = engine_->getOpenPositions();
+    std::vector<Position> openPos = engine_->getOpenPositions();
     
-    std::lock_guard<std::mutex> lock(mtx_);
-    positions_.clear();
-    
-    if (positionsJson.is_array()) {
-        for (const auto& posJson : positionsJson) {
-            try {
-                std::string symbol = posJson.value("symbol", "");
-                
-                Position pos;
-                pos.symbol = symbol;
-                pos.quantity = std::stod(posJson.value("qty", "0"));
-                pos.avg_price = std::stod(posJson.value("avg_entry_price", "0"));
-                pos.current_price = std::stod(posJson.value("current_price", "0"));
-                
-                // If syncing from an exchange, we just use the raw symbol as the virtual key
-                positions_[symbol] = pos;
-                
-                LOG_INFO("[PortfolioManager] Synced {} | Qty: {} | AvgPrice: {}", symbol, pos.quantity, pos.avg_price);
-            } catch (const std::exception& e) {
-                LOG_ERROR("[PortfolioManager] Error parsing synced position: {}", e.what());
-            }
-        }
-    }
-    // --- LOG THE FINAL STATE AFTER SYNC ---
-    LOG_INFO("[PortfolioManager] === Sync Complete. Current Portfolio State ===");
-    LOG_INFO("[PortfolioManager] Total open positions: {}", positions_.size());
-    
-    for (const auto& [symbol, pos] : positions_) {
-        // Calculate a quick snapshot of unrealized PnL for the log
-        double unrealizedPnL = (pos.current_price - pos.avg_price) * pos.quantity;
+    // 1. Build the new map completely offline (no locks)
+    std::unordered_map<std::string, Position> new_positions;
+    new_positions.reserve(openPos.size());
+     
+    for (auto& pos : openPos) {
+        // We need a copy of the symbol for the key, but we can move the struct itself
+        std::string key = pos.symbol;
         
+        // Log locally before we move 'pos' and lose its data
+        LOG_DEBUG("[PortfolioManager] Synced {} | Qty: {} | AvgPrice: {}", 
+                  pos.symbol, pos.quantity, pos.avg_price);
+
+        // Move the struct into the map to avoid copying
+        new_positions.emplace(std::move(key), std::move(pos));
+    }
+
+    // --- LOG THE FINAL STATE BEFORE LOCKING ---
+    LOG_INFO("[PortfolioManager] === Sync Complete. Current Portfolio State ===");
+    LOG_INFO("[PortfolioManager] Total open positions: {}", new_positions.size());
+    
+    for (const auto& [symbol, pos] : new_positions) {
         LOG_INFO("  -> Symbol: {} | Qty: {:.4f} | Avg Price: {:.2f} | Cur Price: {:.2f} | uPnL: {:.2f}", 
-                 symbol, pos.quantity, pos.avg_price, pos.current_price, unrealizedPnL);
+                 symbol, pos.quantity, pos.avg_price, pos.current_price, pos.unrealized_pnl());
     }
     LOG_INFO("[PortfolioManager] ================================================");
+
+    // 2. Lock the mutex ONLY for the swap. This is an O(1) operation.
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        positions_.swap(new_positions); 
+    }
 }
 
 double PortfolioManager::getTotalRealizedPnL() const {

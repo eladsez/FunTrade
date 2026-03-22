@@ -34,8 +34,8 @@ public:
     // Synchronous Account/Portfolio Methods
     std::optional<double> getAvailableCash() override;
     std::optional<double> getPortfolioValue() override;
-    nlohmann::json getOpenPositions() override;
-    nlohmann::json getOpenOrders() override;
+    std::vector<Position> getOpenPositions() override { return std::vector<Position>(); }
+    std::vector<OrderState> getOpenOrders() override { return std::vector<OrderState>(); }
 
 private:
     // Callbacks from IbkrInfra

@@ -250,12 +250,4 @@ std::optional<double> IbkrExecutionEngine::getPortfolioValue() {
     return cachedPortfolioValue_.load();
 }
 
-nlohmann::json IbkrExecutionEngine::getOpenPositions() {
-    return nlohmann::json::array();
-}
-
-nlohmann::json IbkrExecutionEngine::getOpenOrders() {
-    return nlohmann::json::array();
-}
-
 } // namespace bot

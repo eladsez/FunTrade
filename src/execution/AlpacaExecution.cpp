@@ -223,25 +223,99 @@ std::optional<double> AlpacaExecutionEngine::getAvailableCash() {
     return std::nullopt;
 }
 
-nlohmann::json AlpacaExecutionEngine::getOpenPositions() {
+std::vector<Position> AlpacaExecutionEngine::getOpenPositions() {
+    std::vector<Position> ret;
+
     std::string responseStr = infra_->sendRestRequest("GET", baseHost_, "/v2/positions");
-    if (responseStr.empty()) return nlohmann::json::array();
-    
-    try {
-        return nlohmann::json::parse(responseStr);
-    } catch (...) {
-        return nlohmann::json::array();
+    if (responseStr.empty()) {
+        LOG_ERROR("[AlpacaExecutionEngine] Failed to Rest-GET positions");
+        return ret;
     }
+
+    try {
+        nlohmann::json positionsJson = nlohmann::json::parse(responseStr);
+    
+        if (!positionsJson.is_array()) {
+            return ret;
+        }
+
+        // Pre-allocate the vector to prevent reallocations
+        ret.reserve(positionsJson.size());
+
+        for (const auto& posJson : positionsJson) {         
+            // Construct the Position directly in the vector's memory
+            ret.emplace_back(Position{
+                posJson.value("symbol", ""),
+                std::stod(posJson.value("qty", "0")),
+                std::stod(posJson.value("avg_entry_price", "0")),
+                std::stod(posJson.value("current_price", "0")),
+                0.0 // realized_pnl default
+            });
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("[AlpacaExecutionEngine] Error parsing synced position: {}", e.what());
+    }
+    
+    // RVO will prevent this from being copied
+    return ret; 
 }
 
-nlohmann::json AlpacaExecutionEngine::getOpenOrders() {
+std::vector<OrderState> AlpacaExecutionEngine::getOpenOrders() {
+    std::vector<OrderState> ret;
+
     std::string responseStr = infra_->sendRestRequest("GET", baseHost_, "/v2/orders");
-    if (responseStr.empty()) return nlohmann::json::array();
+    if (responseStr.empty()){
+        LOG_ERROR("[AlpacaExecutionEngine] Failed to Rest-GET orders");
+        return ret;
+    } 
+
     try {
-        return nlohmann::json::parse(responseStr);
-    } catch (...) {
-        return nlohmann::json::array();
+        nlohmann::json ordersJson = nlohmann::json::parse(responseStr);
+
+        if (!ordersJson.is_array()) {
+            return ret;
+        }
+
+        // Pre-allocate to prevent reallocation overhead
+        ret.reserve(ordersJson.size());
+
+        for (const auto& oJson : ordersJson) {
+            // Resolve enums first so we can construct the struct in place
+            std::string sideStr = oJson.value("side", "buy");
+            Side side = (sideStr == "buy") ? Side::BUY : Side::SELL;
+            
+            std::string typeStr = oJson.value("type", "market");
+            OrderType type = OrderType::MARKET;
+            if (typeStr == "limit") type = OrderType::LIMIT;
+            else if (typeStr == "trailing_stop") type = OrderType::TRAILING_STOP;
+            
+            std::string statusStr = oJson.value("status", "new");
+            OrderStatus status = OrderStatus::NEW;
+            if (statusStr == "filled") status = OrderStatus::FILLED;
+            else if (statusStr == "partially_filled") status = OrderStatus::PARTIALLY_FILLED;
+            else if (statusStr == "canceled") status = OrderStatus::CANCELED;
+
+            std::string qtyStr = oJson["qty"].is_null() ? "0" : oJson.value("qty", "0");
+            std::string priceStr = oJson["limit_price"].is_null() ? "0" : oJson.value("limit_price", "0");
+
+            // Construct directly into the vector's memory
+            ret.emplace_back(OrderState{
+                oJson.value("id", ""),
+                oJson["client_order_id"].is_null() ? "" : oJson.value("client_order_id", ""),
+                oJson.value("symbol", ""),
+                side,
+                type,
+                std::stod(qtyStr),
+                std::stod(priceStr),
+                status
+            });
+        }
+            
+    } catch (const std::exception& e) {
+        LOG_ERROR("[AlpacaExecutionEngine] Error parsing synced order: {}", e.what());
     }
+
+    return ret;
 }
 
 void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {

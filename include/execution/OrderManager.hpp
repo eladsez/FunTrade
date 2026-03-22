@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <map>
+#include <unordered_map>
 #include <mutex>
 #include <thread>
 #include <atomic>
@@ -12,16 +13,6 @@
 
 namespace bot {
 
-struct OrderState {
-    std::string order_id;
-    std::string client_order_id;
-    std::string symbol;
-    Side side;
-    OrderType type;
-    double quantity;
-    double price;
-    OrderStatus status;
-};
 
 class OrderManager {
 public:
@@ -47,8 +38,8 @@ private:
     std::shared_ptr<IEventBus> eventBus_;
     std::shared_ptr<IExecutionEngine> engine_;
     
-    std::map<std::string, OrderState> ordersByClientId_;
-    std::map<std::string, std::string> exchangeToClientId_;
+    std::unordered_map<std::string, OrderState> ordersByClientId_;
+    std::unordered_map<std::string, std::string> exchangeToClientId_;
     
     // Tracks when each order should expire
     std::map<std::string, std::chrono::steady_clock::time_point> expiriesByClientId_;
