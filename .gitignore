@@ -5,6 +5,7 @@ lib/
 CMakeCache.txt
 CMakeFiles/
 *.dir/
+*.o
 
 # OS generated files
 .DS_Store
