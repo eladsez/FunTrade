@@ -22,7 +22,7 @@ public:
     bool connectToTws();
     void disconnectFromTws();
     
-    // Accessor so the Feeds/Engines can send commands (reqMktData, placeOrder, etc.)
+    // Accessor so the Feeds/Engines can send commands
     EClientSocket* getClient() const { return client_.get(); }
 
     // =========================================================================

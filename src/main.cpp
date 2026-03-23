@@ -11,12 +11,16 @@
 #include <core/Logger.hpp>
 #include <core/EventBus.hpp>
 #include <infra/AlpacaInfra.hpp>
+#include <infra/IbkrInfra.hpp>
 #include <data/AlpacaRtDataFeed.hpp>
 #include <data/CsvDataFeed.hpp>
+#include <data/IbkrDataFeed.hpp>
 #include <execution/AlpacaExecutionEngine.hpp>
 #include <execution/MockExecutionEngine.hpp>
 #include <execution/OrderManager.hpp>
+#include <execution/IbkrExecutionEngine.hpp>
 #include <risk/PortfolioManager.hpp>
+#include <strategy/MarketEventPrinter.hpp>
 #include <strategy/BasketMeanReversionStrategy.hpp>
 #include <strategy/StrategyOrchestrator.hpp>
 
@@ -37,13 +41,13 @@ void setupSignalHandlers() {
 // ============================================================================
 // LIVE TRADING MODE
 // ============================================================================
-int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
+int runAlpacaLive(const std::string& apiKey, const std::string& apiSecret) {
     LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
     
     auto dataFeed = std::make_shared<AlpacaRtDataFeed>(apiKey, apiSecret);
     auto executionEngine = std::make_shared<AlpacaExecutionEngine>(apiKey, apiSecret);
-    auto eventBus = std::make_shared<EventBus>(dataFeed, executionEngine);
 
+    auto eventBus = std::make_shared<EventBus>(dataFeed, executionEngine);
     auto orderManager = std::make_shared<OrderManager>(eventBus, executionEngine);
     auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, executionEngine);
 
@@ -132,6 +136,45 @@ int runBacktestMode(const std::string& csvTickPath, const std::string& csvHistor
     return 0;
 }
 
+int runTestIbkr() {
+    // Initialize logging (assuming your Logger has a static init method or works out of the box)
+    std::cout << "Starting IBKR Integration Test...\n";
+
+    auto infra = std::make_shared<IbkrInfra>("host.docker.internal", 4002, 1); 
+
+    auto execEngine = std::make_shared<IbkrExecutionEngine>(infra); 
+    auto dataFeed = std::make_shared<IbkrDataFeed>(infra); 
+
+    auto eventBus = std::make_shared<EventBus>(dataFeed, execEngine); 
+
+    // 4. Connect the plumbing
+    if (!infra->connectToTws()) {
+        std::cerr << "Failed to connect to IB Gateway. Is it running and configured?\n";
+        return 1;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    execEngine->connectToInfra();
+    dataFeed->connectToInfra();
+
+    auto strategy = std::make_shared<MarketEventPrinter>(eventBus, "EUR.USD");
+
+    strategy->start();
+
+    LOG_INFO("[LIVE] Bot is running and printing Press Ctrl+C to stop.");
+    
+    while (!g_shutdown_requested.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    LOG_INFO("[LIVE] Shutting down...");
+
+    strategy->stop();
+    infra->disconnectFromTws();
+    return 0;
+}
+
 // ============================================================================
 // MAIN ROUTER
 // ============================================================================
@@ -143,70 +186,37 @@ int main(int argc, char* argv[]) {
     LOG_INFO("          Algorithmic Trading Bot                 ");
     LOG_INFO("==================================================");
 
-    std::string configPath = "config/basket_configs/amzn_cmg_expe.json";
-    std::string csvTickPath = "data/testing_ticks.csv";
-    std::string csvHistorPath = "";
+    runTestIbkr();
 
-    const char* apiKey = std::getenv("APCA_API_KEY_ID");
-    const char* apiSecret = std::getenv("APCA_API_SECRET_KEY");
+    // std::string configPath = "config/basket_configs/amzn_cmg_expe.json";
+    // std::string csvTickPath = "data/testing_ticks.csv";
+    // std::string csvHistorPath = "";
 
-    // Simple CLI Argument Routing
-    if (argc > 1 && std::string(argv[1]) == "--backtest") {
-        if (argc > 2) {
-            csvTickPath = argv[2];
-        }
-        if (argc > 3) {
-            csvHistorPath = argv[3];
-        }
+    // const char* apiKey = std::getenv("APCA_API_KEY_ID");
+    // const char* apiSecret = std::getenv("APCA_API_SECRET_KEY");
 
-        if (argc > 4) {
-            configPath = argv[4];
-        }
 
-        return runBacktestMode(csvTickPath, csvHistorPath, configPath);
-    } 
-    else {
-        if (!apiKey || !apiSecret) {
-            LOG_ERROR("\nERROR: Live mode requires Alpaca credentials.\n"
-                      "To run a backtest instead, use: ./FunTrade --backtest\n");
-            return 1;
-        }
-        return runLiveMode(apiKey, apiSecret);
-    }
+    // // Simple CLI Argument Routing
+    // if (argc > 1 && std::string(argv[1]) == "--backtest") {
+    //     if (argc > 2) {
+    //         csvTickPath = argv[2];
+    //     }
+    //     if (argc > 3) {
+    //         csvHistorPath = argv[3];
+    //     }
+
+    //     if (argc > 4) {
+    //         configPath = argv[4];
+    //     }
+
+    //     return runBacktestMode(csvTickPath, csvHistorPath, configPath);
+    // } 
+    // else {
+    //     if (!apiKey || !apiSecret) {
+    //         LOG_ERROR("\nERROR: Live mode requires Alpaca credentials.\n"
+    //                   "To run a backtest instead, use: ./FunTrade --backtest\n");
+    //         return 1;
+    //     }
+    //     return runAlpacaLive(apiKey, apiSecret);
+    // }
 }
-
-// #include <core/EventBus.hpp>
-// #include <core/Logger.hpp>
-// #include <infra/IbkrInfra.hpp>
-// #include <data/IbkrDataFeed.hpp>
-// #include <execution/IbkrExecutionEngine.hpp>
-
-// #include <iostream>
-// #include <thread>
-// #include <chrono>
-
-// using namespace bot;
-
-// int main() {
-//     // Initialize logging (assuming your Logger has a static init method or works out of the box)
-//     std::cout << "Starting IBKR Integration Test...\n";
-
-//     // Port 4002 is the default for IB Gateway PAPER TRADING. 
-//     // Port 7497 is the default for TWS Desktop PAPER TRADING.
-//     auto infra = std::make_shared<IbkrInfra>("host.docker.internal", 4002, 1); 
-
-//     // 4. Connect the plumbing
-//     if (!infra->connectToTws()) {
-//         std::cerr << "Failed to connect to IB Gateway. Is it running and configured?\n";
-//         return 1;
-//     }
-    
-//     // Give TWS a moment to handshake, return nextValidId, and stream account data
-//     std::cout << "Waiting 3 seconds for handshake and account sync...\n";
-//     std::this_thread::sleep_for(std::chrono::seconds(20));
-
-//     infra->disconnectFromTws();
-//     std::cout << "Test complete. Shutting down.\n";
-
-//     return 0;
-// }

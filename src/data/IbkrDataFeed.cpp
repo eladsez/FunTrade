@@ -138,10 +138,24 @@ std::string IbkrDataFeed::getSymbolFromId(int reqId) {
 
 Contract IbkrDataFeed::createContract(const std::string& symbol) {
     Contract contract;
-    contract.symbol = symbol;
-    contract.secType = "STK";
-    contract.currency = "USD";
-    contract.exchange = "SMART"; 
+
+    // Check if the symbol is formatted as a Forex pair (e.g., "EUR.USD")
+    auto dotPos = symbol.find('.');
+    
+    if (dotPos != std::string::npos) {
+        // Build Forex Contract
+        contract.symbol = symbol.substr(0, dotPos);       // "EUR"
+        contract.currency = symbol.substr(dotPos + 1);    // "USD"
+        contract.secType = "CASH";
+        contract.exchange = "IDEALPRO";
+    } else {
+        // Build Default US Stock Contract
+        contract.symbol = symbol;
+        contract.secType = "STK";
+        contract.currency = "USD";
+        contract.exchange = "SMART";
+    }
+
     return contract;
 }
 
