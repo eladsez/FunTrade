@@ -54,6 +54,12 @@ struct QuoteTick {
     std::vector<QuoteCondition> conditions;
 };
 
+struct MidPointTick {
+    std::string symbol;
+    double mid_price = 0.0;
+    uint64_t timestamp_ms = 0;
+};
+
 struct OrderBookUpdate {
     std::string symbol;
     std::vector<PriceLevel> bids;
@@ -73,7 +79,7 @@ struct BarUpdate {
 };
 
 // The unified MarketEvent variant
-using MarketEvent = std::variant<TradeTick, QuoteTick, OrderBookUpdate, BarUpdate>;
+using MarketEvent = std::variant<TradeTick, QuoteTick, MidPointTick, OrderBookUpdate, BarUpdate>;
 
 enum class OrderType {
     MARKET,

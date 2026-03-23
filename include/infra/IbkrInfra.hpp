@@ -32,11 +32,13 @@ public:
     // --- Market Data Callbacks ---
     using TickByTickBidAskCallback = std::function<void(int, time_t, double, double, Decimal, Decimal, const TickAttribBidAsk&)>;
     using TickByTickAllLastCallback = std::function<void(int, int, time_t, double, Decimal, const TickAttribLast&, const std::string&, const std::string&)>;
+    using TickByTickMidPointCallback = std::function<void(int, time_t, double)>;
     using HistDataCallback = std::function<void(TickerId, const Bar&)>;
     using HistDataEndCallback = std::function<void(int, const std::string&, const std::string&)>;
     
     void setTickByTickBidAskCallback(TickByTickBidAskCallback cb) { tickByTickBidAskCb_ = std::move(cb); }
     void setTickByTickAllLastCallback(TickByTickAllLastCallback cb) { tickByTickAllLastCb_ = std::move(cb); }
+    void setTickByTickMidPointCallback(TickByTickMidPointCallback cb) { tickByTickMidPointCb_ = std::move(cb); }
     void setHistDataCallback(HistDataCallback cb) { histDataCb_ = std::move(cb); }
     void setHistDataEndCallback(HistDataEndCallback cb) { histDataEndCb_ = std::move(cb); }
 
@@ -64,6 +66,7 @@ public:
     
     void tickByTickBidAsk(int reqId, time_t time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, const TickAttribBidAsk& tickAttrib) override;
     void tickByTickAllLast(int reqId, int tickType, time_t time, double price, Decimal size, const TickAttribLast& tickAttrib, const std::string& exchange, const std::string& specialConditions) override;
+    void tickByTickMidPoint(int reqId, time_t time, double midPoint) override;
     void historicalData(TickerId reqId, const Bar& bar) override;
     void historicalDataEnd(int reqId, const std::string& startDateStr, const std::string& endDateStr) override;
 
@@ -98,6 +101,7 @@ private:
     // Callback instances
     TickByTickBidAskCallback tickByTickBidAskCb_;
     TickByTickAllLastCallback tickByTickAllLastCb_;
+    TickByTickMidPointCallback tickByTickMidPointCb_;
 
     HistDataCallback histDataCb_;
     HistDataEndCallback histDataEndCb_;

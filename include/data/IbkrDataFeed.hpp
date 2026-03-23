@@ -37,6 +37,7 @@ private:
     // The new atomic callbacks
     void onTickByTickBidAsk(int reqId, time_t time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, const TickAttribBidAsk& tickAttrib);
     void onTickByTickAllLast(int reqId, int tickType, time_t time, double price, Decimal size, const TickAttribLast& tickAttrib, const std::string& exchange, const std::string& specialConditions);
+    void onTickByTickMidPoint(int reqId, time_t time, double midPoint);
 
     std::string getSymbolFromId(int reqId);
     Contract createContract(const std::string& symbol);
@@ -50,10 +51,11 @@ private:
     // ID Management
     std::atomic<int> nextTickerId_{2000}; 
 
-    // Because TickByTick requires separate IDs for Quotes and Trades
+    // Because TickByTick requires separate IDs for each
     struct StreamIds {
         int bidAskId;
         int allLastId;
+        int midPointId;
     };
     
     std::unordered_map<std::string, StreamIds> symbolToIds_;

@@ -22,6 +22,12 @@ bool IbkrDataFeed::connectToInfra() {
         }
     );
 
+    infra_->setTickByTickMidPointCallback(
+        [this](int reqId, time_t time, double midPoint) {
+            this->onTickByTickMidPoint(reqId, time, midPoint);
+        }
+    );
+
     return true;
 }
 
@@ -35,7 +41,7 @@ void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
         return;
     }
 
-    int bidAskId, allLastId;
+    int bidAskId, allLastId, midPointId;
     {
         std::lock_guard<std::mutex> lock(dataMutex_);
         if (symbolToIds_.find(symbol) != symbolToIds_.end()) return; // Already subscribed
@@ -43,10 +49,12 @@ void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
         // Allocate two unique IDs for this symbol
         bidAskId = nextTickerId_++;
         allLastId = nextTickerId_++;
+        midPointId = nextTickerId_++;
 
-        symbolToIds_[symbol] = {bidAskId, allLastId};
+        symbolToIds_[symbol] = {bidAskId, allLastId, midPointId};
         idToSymbol_[bidAskId] = symbol;
         idToSymbol_[allLastId] = symbol;
+        idToSymbol_[midPointId] = symbol;
     }
 
     Contract contract = createContract(symbol);
@@ -58,14 +66,31 @@ void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
     
     // Request Trades (AllLast includes unreported/late trades, Last is strictly regular)
     infra_->getClient()->reqTickByTickData(allLastId, contract, "AllLast", 0, false);
+
+    // Request MidPoint
+    infra_->getClient()->reqTickByTickData(midPointId, contract, "MidPoint", 0, false);
 }
 
 void IbkrDataFeed::unsubscribeFromSymbol(const std::string& symbol) {
     std::lock_guard<std::mutex> lock(dataMutex_);
     auto it = symbolToIds_.find(symbol);
+    
     if (it != symbolToIds_.end()) {
-        infra_->getClient()->cancelTickByTickData(it->second.bidAskId);
-        infra_->getClient()->cancelTickByTickData(it->second.allLastId);
+        // 1. Cancel all three streams
+        if (infra_->getClient() && infra_->getClient()->isConnected()) {
+            infra_->getClient()->cancelTickByTickData(it->second.bidAskId);
+            infra_->getClient()->cancelTickByTickData(it->second.allLastId);
+            infra_->getClient()->cancelTickByTickData(it->second.midPointId);
+        }
+
+        // 2. Clean up the reverse lookup maps to prevent leaks
+        idToSymbol_.erase(it->second.bidAskId);
+        idToSymbol_.erase(it->second.allLastId);
+        idToSymbol_.erase(it->second.midPointId);
+
+        // 3. Remove from the main tracking map
+        symbolToIds_.erase(it);
+
         LOG_INFO("[IbkrDataFeed] Unsubscribed from Tick-By-Tick data for {}", symbol);
     }
 }
@@ -101,8 +126,8 @@ void IbkrDataFeed::onTickByTickBidAsk(int reqId, time_t time, double bidPrice, d
     quote.bid_size = (bidSize == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(bidSize);
     quote.ask_size = (askSize == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(askSize);
 
-    if (quote.bid_price > 0 && quote.ask_price > 0) {
-        if (tickCallback_) tickCallback_(quote);
+    if (quote.bid_price > 0 && quote.ask_price > 0 && tickCallback_) {
+        tickCallback_(quote);
     }
 }
 
@@ -118,8 +143,22 @@ void IbkrDataFeed::onTickByTickAllLast(int reqId, int tickType, time_t time, dou
     trade.price = price;
     trade.volume = (size == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(size);
 
-    if (trade.volume > 0) {
-        if (tickCallback_) tickCallback_(trade);
+    if (trade.volume > 0 && tickCallback_) {
+        tickCallback_(trade);
+    }
+}
+
+void IbkrDataFeed::onTickByTickMidPoint(int reqId, time_t time, double midPoint) {
+    std::string symbol = getSymbolFromId(reqId);
+    if (symbol.empty()) return;
+
+    MidPointTick tick;
+    tick.symbol = symbol;
+    tick.timestamp_ms = static_cast<uint64_t>(time) * 1000;
+    tick.mid_price = midPoint;
+
+    if (tick.mid_price > 0 && tickCallback_) {
+        tickCallback_(tick);
     }
 }
 

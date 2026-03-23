@@ -73,6 +73,10 @@ void IbkrInfra::tickByTickAllLast(int reqId, int tickType, time_t time, double p
     if (tickByTickAllLastCb_) tickByTickAllLastCb_(reqId, tickType, time, price, size, tickAttrib, exchange, specialConditions);
 }
 
+void IbkrInfra::tickByTickMidPoint(int reqId, time_t time, double midPoint) {
+    if (tickByTickMidPointCb_) tickByTickMidPointCb_(reqId, time, midPoint);
+}
+
 void IbkrInfra::historicalData(TickerId reqId, const Bar& bar) {
     if (histDataCb_) histDataCb_(reqId, bar);
 }
