@@ -1,36 +1,32 @@
 #include <data/IbkrDataFeed.hpp>
 #include <core/Logger.hpp>
-#include <chrono>
-
-// TWS API Includes
 #include <Decimal.h> 
 
 namespace bot {
 
-IbkrDataFeed::IbkrDataFeed(std::shared_ptr<IbkrInfra> infra, IEventBus* eventBus)
-    : infra_(std::move(infra)), eventBus_(eventBus) {}
+IbkrDataFeed::IbkrDataFeed(std::shared_ptr<IbkrInfra> infra)
+    : infra_(std::move(infra)) {}
 
 bool IbkrDataFeed::connectToInfra() {
-    LOG_INFO("[IbkrDataFeed] Hooking up market data callbacks to Infra...");
+    LOG_INFO("[IbkrDataFeed] Hooking up tick-by-tick callbacks to Infra...");
     
-    infra_->setTickPriceCallback(
-        [this](TickerId id, TickType type, double price, const TickAttrib& attr) {
-            this->onTickPrice(id, type, price, attr);
+    infra_->setTickByTickBidAskCallback(
+        [this](int reqId, time_t time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, const TickAttribBidAsk& tickAttrib) {
+            this->onTickByTickBidAsk(reqId, time, bidPrice, askPrice, bidSize, askSize, tickAttrib);
         }
     );
 
-    infra_->setTickSizeCallback(
-        [this](TickerId id, TickType type, Decimal size) {
-            this->onTickSize(id, type, size);
+    infra_->setTickByTickAllLastCallback(
+        [this](int reqId, int tickType, time_t time, double price, Decimal size, const TickAttribLast& tickAttrib, const std::string& exchange, const std::string& specialConditions) {
+            this->onTickByTickAllLast(reqId, tickType, time, price, size, tickAttrib, exchange, specialConditions);
         }
     );
 
-    return true; // Interface expects bool indicating success
+    return true;
 }
 
 void IbkrDataFeed::disconnectFromInfra() {
     LOG_INFO("[IbkrDataFeed] Disconnecting DataFeed from Infra.");
-    // In our architecture, the actual network disconnect happens in IbkrInfra.
 }
 
 void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
@@ -39,29 +35,45 @@ void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
         return;
     }
 
-    int tickerId = getOrCreateTickerId(symbol);
+    int bidAskId, allLastId;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex_);
+        if (symbolToIds_.find(symbol) != symbolToIds_.end()) return; // Already subscribed
+
+        // Allocate two unique IDs for this symbol
+        bidAskId = nextTickerId_++;
+        allLastId = nextTickerId_++;
+
+        symbolToIds_[symbol] = {bidAskId, allLastId};
+        idToSymbol_[bidAskId] = symbol;
+        idToSymbol_[allLastId] = symbol;
+    }
+
     Contract contract = createContract(symbol);
 
-    LOG_INFO("[IbkrDataFeed] Subscribing to market data for {} (ID: {})", symbol, tickerId);
+    LOG_INFO("[IbkrDataFeed] Requesting Tick-By-Tick data for {}", symbol);
     
-    // reqMktData parameters: tickerId, contract, genericTicks, snapshot, regulatorySnapshot, mktDataOptions
-    infra_->getClient()->reqMktData(tickerId, contract, "", false, false, nullptr);
+    // Request Quotes (0 = numberOfTicks (not used for real-time), false = ignoreSize)
+    infra_->getClient()->reqTickByTickData(bidAskId, contract, "BidAsk", 0, false);
+    
+    // Request Trades (AllLast includes unreported/late trades, Last is strictly regular)
+    infra_->getClient()->reqTickByTickData(allLastId, contract, "AllLast", 0, false);
 }
 
 void IbkrDataFeed::unsubscribeFromSymbol(const std::string& symbol) {
     std::lock_guard<std::mutex> lock(dataMutex_);
-    auto it = symbolToId_.find(symbol);
-    if (it != symbolToId_.end()) {
-        int tickerId = it->second;
-        infra_->getClient()->cancelMktData(tickerId);
-        LOG_INFO("[IbkrDataFeed] Unsubscribed from {}", symbol);
+    auto it = symbolToIds_.find(symbol);
+    if (it != symbolToIds_.end()) {
+        infra_->getClient()->cancelTickByTickData(it->second.bidAskId);
+        infra_->getClient()->cancelTickByTickData(it->second.allLastId);
+        LOG_INFO("[IbkrDataFeed] Unsubscribed from Tick-By-Tick data for {}", symbol);
     }
 }
 
 std::vector<std::string> IbkrDataFeed::getActiveSubscriptions() const {
     std::lock_guard<std::mutex> lock(dataMutex_);
     std::vector<std::string> active;
-    for (const auto& pair : symbolToId_) {
+    for (const auto& pair : symbolToIds_) {
         active.push_back(pair.first);
     }
     return active;
@@ -72,83 +84,42 @@ void IbkrDataFeed::setMarketTickCallback(std::function<void(const MarketEvent&)>
 }
 
 // =========================================================================
-// The Stateful Cache & Callback Processors
+// The Atomic Callback Processors
 // =========================================================================
 
-void IbkrDataFeed::onTickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& attrib) {
-    (void)attrib; // Suppress unused parameter warning
+void IbkrDataFeed::onTickByTickBidAsk(int reqId, time_t time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, const TickAttribBidAsk& tickAttrib) {
+    (void)tickAttrib; // Can map conditions later if needed
+    
+    std::string symbol = getSymbolFromId(reqId);
+    if (symbol.empty()) return; 
 
-    std::lock_guard<std::mutex> lock(dataMutex_);
-    std::string symbol = getSymbolFromId(tickerId);
-    if (symbol.empty()) return; // Unknown ID
+    QuoteTick quote;
+    quote.symbol = symbol;
+    quote.timestamp_ms = static_cast<uint64_t>(time) * 1000; // True exchange timestamp!
+    quote.bid_price = bidPrice;
+    quote.ask_price = askPrice;
+    quote.bid_size = (bidSize == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(bidSize);
+    quote.ask_size = (askSize == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(askSize);
 
-    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                     std::chrono::system_clock::now().time_since_epoch()).count();
-
-    // 1 = BID, 2 = ASK
-    if (field == TickType::BID || field == TickType::ASK) {
-        QuoteTick& quote = quoteCache_[tickerId];
-        quote.symbol = symbol;
-        quote.timestamp_ms = nowMs;
-        
-        if (field == 1) quote.bid_price = price;
-        if (field == 2) quote.ask_price = price;
-
-        if (quote.bid_price > 0 && quote.ask_price > 0) {
-            if (eventBus_) eventBus_->publishMarketEvent(quote);
-            if (tickCallback_) tickCallback_(quote);
-        }
-    }
-    // 4 = LAST (Trade)
-    else if (field == TickType::LAST) {
-        TradeTick& trade = tradeCache_[tickerId];
-        trade.symbol = symbol;
-        trade.timestamp_ms = nowMs;
-        trade.price = price;
-        
-        if (trade.volume > 0) { // Changed size to volume
-            if (eventBus_) eventBus_->publishMarketEvent(trade);
-            if (tickCallback_) tickCallback_(trade);
-        }
+    if (quote.bid_price > 0 && quote.ask_price > 0) {
+        if (tickCallback_) tickCallback_(quote);
     }
 }
 
-void IbkrDataFeed::onTickSize(TickerId tickerId, TickType field, Decimal size) {
-    std::lock_guard<std::mutex> lock(dataMutex_);
-    std::string symbol = getSymbolFromId(tickerId);
+void IbkrDataFeed::onTickByTickAllLast(int reqId, int tickType, time_t time, double price, Decimal size, const TickAttribLast& tickAttrib, const std::string& exchange, const std::string& specialConditions) {
+    (void)tickType; (void)tickAttrib; (void)exchange; (void)specialConditions;
+    
+    std::string symbol = getSymbolFromId(reqId);
     if (symbol.empty()) return;
 
-    // Use DecimalFunctions namespace for TWS API
-    double sizeDbl = (size == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(size); 
+    TradeTick trade;
+    trade.symbol = symbol;
+    trade.timestamp_ms = static_cast<uint64_t>(time) * 1000; // True exchange timestamp!
+    trade.price = price;
+    trade.volume = (size == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(size);
 
-    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                     std::chrono::system_clock::now().time_since_epoch()).count();
-
-    // 0 = BID_SIZE, 3 = ASK_SIZE
-    if (field == TickType::BID_SIZE || field == TickType::ASK_SIZE) {
-        QuoteTick& quote = quoteCache_[tickerId];
-        quote.symbol = symbol;
-        quote.timestamp_ms = nowMs;
-
-        if (field == TickType::BID_SIZE) quote.bid_size = sizeDbl;
-        if (field == TickType::ASK_SIZE) quote.ask_size = sizeDbl;
-
-        if (quote.bid_price > 0 && quote.ask_price > 0) {
-            if (eventBus_) eventBus_->publishMarketEvent(quote);
-            if (tickCallback_) tickCallback_(quote);
-        }
-    }
-    // 5 = LAST_SIZE (Trade Size)
-    else if (field == TickType::LAST_SIZE) {
-        TradeTick& trade = tradeCache_[tickerId];
-        trade.symbol = symbol;
-        trade.timestamp_ms = nowMs;
-        trade.volume = sizeDbl; // Changed size to volume
-
-        if (trade.price > 0) {
-            if (eventBus_) eventBus_->publishMarketEvent(trade);
-            if (tickCallback_) tickCallback_(trade);
-        }
+    if (trade.volume > 0) {
+        if (tickCallback_) tickCallback_(trade);
     }
 }
 
@@ -156,17 +127,9 @@ void IbkrDataFeed::onTickSize(TickerId tickerId, TickType field, Decimal size) {
 // Helpers
 // =========================================================================
 
-int IbkrDataFeed::getOrCreateTickerId(const std::string& symbol) {
-    if (symbolToId_.find(symbol) == symbolToId_.end()) {
-        int newId = nextTickerId_++;
-        symbolToId_[symbol] = newId;
-        idToSymbol_[newId] = symbol;
-    }
-    return symbolToId_[symbol];
-}
-
-std::string IbkrDataFeed::getSymbolFromId(int tickerId) {
-    auto it = idToSymbol_.find(tickerId);
+std::string IbkrDataFeed::getSymbolFromId(int reqId) {
+    std::lock_guard<std::mutex> lock(dataMutex_); // Quick lock for map access
+    auto it = idToSymbol_.find(reqId);
     if (it != idToSymbol_.end()) {
         return it->second;
     }
@@ -183,12 +146,7 @@ Contract IbkrDataFeed::createContract(const std::string& symbol) {
 }
 
 std::vector<HistoricalBar> IbkrDataFeed::fetchHistoricalBars(const std::string& symbol, const std::string& start, const std::string& end, const std::string& timeframe) {
-    // Suppress unused parameter warnings for now
-    (void)symbol; 
-    (void)start; 
-    (void)end; 
-    (void)timeframe;
-
+    (void)symbol; (void)start; (void)end; (void)timeframe;
     LOG_WARN("[IbkrDataFeed] fetchHistoricalBars not yet implemented.");
     return {};
 }

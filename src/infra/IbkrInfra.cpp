@@ -65,12 +65,12 @@ void IbkrInfra::readerLoop() {
 // EWrapper Callbacks -> Route to std::functions
 // =========================================================================
 
-void IbkrInfra::tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& attrib) {
-    if (tickPriceCb_) tickPriceCb_(tickerId, field, price, attrib);
+void IbkrInfra::tickByTickBidAsk(int reqId, time_t time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, const TickAttribBidAsk& tickAttrib) {
+    if (tickByTickBidAskCb_) tickByTickBidAskCb_(reqId, time, bidPrice, askPrice, bidSize, askSize, tickAttrib);
 }
 
-void IbkrInfra::tickSize(TickerId tickerId, TickType field, Decimal size) {
-    if (tickSizeCb_) tickSizeCb_(tickerId, field, size);
+void IbkrInfra::tickByTickAllLast(int reqId, int tickType, time_t time, double price, Decimal size, const TickAttribLast& tickAttrib, const std::string& exchange, const std::string& specialConditions) {
+    if (tickByTickAllLastCb_) tickByTickAllLastCb_(reqId, tickType, time, price, size, tickAttrib, exchange, specialConditions);
 }
 
 void IbkrInfra::historicalData(TickerId reqId, const Bar& bar) {
