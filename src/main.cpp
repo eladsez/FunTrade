@@ -41,8 +41,8 @@ int runLiveMode(const std::string& apiKey, const std::string& apiSecret) {
     LOG_INFO("--- Starting LIVE Alpaca Paper Trading Mode ---");
     
     auto dataFeed = std::make_shared<AlpacaRtDataFeed>(apiKey, apiSecret);
-    auto eventBus = std::make_shared<EventBus>(dataFeed);
-    auto executionEngine = std::make_shared<AlpacaExecutionEngine>(eventBus, apiKey, apiSecret);
+    auto executionEngine = std::make_shared<AlpacaExecutionEngine>(apiKey, apiSecret);
+    auto eventBus = std::make_shared<EventBus>(dataFeed, executionEngine);
 
     auto orderManager = std::make_shared<OrderManager>(eventBus, executionEngine);
     auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, executionEngine);
@@ -85,7 +85,7 @@ int runBacktestMode(const std::string& csvTickPath, const std::string& csvHistor
 
     // 1. Initialize Mocks
     auto dataFeed = std::make_shared<CsvDataFeed>(csvTickPath, csvHistorPath);
-    auto eventBus = std::make_shared<EventBus>(dataFeed);
+    auto eventBus = std::make_shared<EventBus>(dataFeed, nullptr);
     auto executionEngine = std::make_shared<MockExecutionEngine>(eventBus);
 
     // 2. Initialize Managers
@@ -174,3 +174,39 @@ int main(int argc, char* argv[]) {
         return runLiveMode(apiKey, apiSecret);
     }
 }
+
+// #include <core/EventBus.hpp>
+// #include <core/Logger.hpp>
+// #include <infra/IbkrInfra.hpp>
+// #include <data/IbkrDataFeed.hpp>
+// #include <execution/IbkrExecutionEngine.hpp>
+
+// #include <iostream>
+// #include <thread>
+// #include <chrono>
+
+// using namespace bot;
+
+// int main() {
+//     // Initialize logging (assuming your Logger has a static init method or works out of the box)
+//     std::cout << "Starting IBKR Integration Test...\n";
+
+//     // Port 4002 is the default for IB Gateway PAPER TRADING. 
+//     // Port 7497 is the default for TWS Desktop PAPER TRADING.
+//     auto infra = std::make_shared<IbkrInfra>("host.docker.internal", 4002, 1); 
+
+//     // 4. Connect the plumbing
+//     if (!infra->connectToTws()) {
+//         std::cerr << "Failed to connect to IB Gateway. Is it running and configured?\n";
+//         return 1;
+//     }
+    
+//     // Give TWS a moment to handshake, return nextValidId, and stream account data
+//     std::cout << "Waiting 3 seconds for handshake and account sync...\n";
+//     std::this_thread::sleep_for(std::chrono::seconds(20));
+
+//     infra->disconnectFromTws();
+//     std::cout << "Test complete. Shutting down.\n";
+
+//     return 0;
+// }

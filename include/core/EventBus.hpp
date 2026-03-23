@@ -1,6 +1,7 @@
 #pragma once
 #include <core/IEventBus.hpp>
 #include <data/IDataFeed.hpp>
+#include <execution/IExecutionEngine.hpp>
 #include <vector>
 #include <mutex>
 #include <thread>
@@ -14,7 +15,7 @@ namespace bot {
 
 class EventBus : public IEventBus {
 public:
-    explicit EventBus(std::shared_ptr<IDataFeed> dataFeed);
+    explicit EventBus(std::shared_ptr<IDataFeed> dataFeed, std::shared_ptr<IExecutionEngine> ExecutionEngine);
     ~EventBus() override;
 
     uint64_t subscribeToMarketEvents(const std::string& symbol, MarketEventCallback callback) override;
@@ -42,6 +43,7 @@ private:
     void processEvents();
 
     std::shared_ptr<IDataFeed> dataFeed_;
+    std::shared_ptr<IExecutionEngine> executionEngine_;
 
     // Outer map: Symbol -> Inner map: (SubID -> Callback)
     std::unordered_map<std::string, std::unordered_map<uint64_t, MarketEventCallback>> marketEventSubscribers;

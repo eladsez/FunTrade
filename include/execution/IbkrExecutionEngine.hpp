@@ -19,7 +19,7 @@ namespace bot {
 
 class IbkrExecutionEngine : public IExecutionEngine {
 public:
-    IbkrExecutionEngine(std::shared_ptr<IbkrInfra> infra, IEventBus* eventBus);
+    IbkrExecutionEngine(std::shared_ptr<IbkrInfra> infra);
     ~IbkrExecutionEngine() override = default;
 
     // --- IExecutionEngine Implementation ---
@@ -54,7 +54,6 @@ private:
     OrderStatus parseIbkrStatus(const std::string& status);
 
     std::shared_ptr<IbkrInfra> infra_;
-    IEventBus* eventBus_;
 
     std::mutex idMutex_;
     std::atomic<int> nextValidId_{0};

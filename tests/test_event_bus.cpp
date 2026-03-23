@@ -11,7 +11,7 @@ protected:
     std::unique_ptr<EventBus> eventBus;
 
     void SetUp() override {
-        eventBus = std::make_unique<EventBus>(nullptr);
+        eventBus = std::make_unique<EventBus>(nullptr, nullptr);
     }
 
     void TearDown() override {}

@@ -13,8 +13,8 @@
 
 namespace bot {
 
-IbkrExecutionEngine::IbkrExecutionEngine(std::shared_ptr<IbkrInfra> infra, IEventBus* eventBus)
-    : infra_(std::move(infra)), eventBus_(eventBus) {}
+IbkrExecutionEngine::IbkrExecutionEngine(std::shared_ptr<IbkrInfra> infra)
+    : infra_(std::move(infra)) {}
 
 bool IbkrExecutionEngine::connectToInfra() {
     LOG_INFO("[IbkrExecutionEngine] Hooking up execution callbacks to Infra...");
@@ -203,9 +203,8 @@ void IbkrExecutionEngine::onOrderStatus(int orderId, const std::string& status, 
     report.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::system_clock::now().time_since_epoch()).count();
 
-    if (eventBus_) {
-        eventBus_->publishExecution(report);
-    }
+    if (reportCb_)
+        reportCb_(report);
 }
 
 void IbkrExecutionEngine::onExecDetails(int reqId, const Contract& contract, const Execution& execution) {
@@ -227,9 +226,8 @@ void IbkrExecutionEngine::onExecDetails(int reqId, const Contract& contract, con
     report.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::system_clock::now().time_since_epoch()).count();
 
-    if (eventBus_) {
-        eventBus_->publishExecution(report);
-    }
+    if (reportCb_)
+        reportCb_(report);
 }
 
 void IbkrExecutionEngine::onUpdateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName) {

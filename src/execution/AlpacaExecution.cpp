@@ -16,9 +16,9 @@ static std::string formatDouble(double value) {
     return str;
 }
 
-AlpacaExecutionEngine::AlpacaExecutionEngine(std::shared_ptr<IEventBus> eventBus, std::string apiKey, std::string apiSecret)
-    : eventBus_(eventBus), apiKey_(std::move(apiKey)), 
-      apiSecret_(std::move(apiSecret)), baseHost_("paper-api.alpaca.markets") {
+AlpacaExecutionEngine::AlpacaExecutionEngine(std::string apiKey, std::string apiSecret)
+    : apiKey_(std::move(apiKey)), apiSecret_(std::move(apiSecret)), 
+      baseHost_("paper-api.alpaca.markets") {
 
     infra_ = std::make_unique<AlpacaInfra>(apiKey_, apiSecret_);
     
@@ -367,7 +367,8 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
             LOG_DEBUG("[AlpacaExecutionEngine] Execution Report: Symbol={}, Event={}, Status={}, Qty={}, Price={}", 
                      report.symbol, event, static_cast<int>(report.status), report.last_quantity, report.last_price);
             
-            eventBus_->publishExecution(report);
+            if (reportCb_)
+                reportCb_(report);
         }
     } catch (const std::exception& e) {
         LOG_ERROR("[AlpacaExecutionEngine] JSON parsing error in WS message: {} | Payload: {}", e.what(), payload);
