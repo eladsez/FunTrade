@@ -55,6 +55,12 @@ bool IbkrExecutionEngine::connectToInfra() {
         }
     );
 
+    infra_->setErrorCallback(
+        [this](int id, int errorCode, const std::string& errorString, const std::string& advancedJson) {
+            this->onError(id, errorCode, errorString, advancedJson);
+        }
+    );
+
     if (infra_->getClient() && infra_->getClient()->isConnected()) {
         infra_->getClient()->reqIds(-1); 
         infra_->getClient()->reqAccountUpdates(true, ""); 
@@ -369,6 +375,58 @@ std::vector<OrderState> IbkrExecutionEngine::getOpenOrders() {
         result.push_back(state);
     }
     return result;
+}
+
+void IbkrExecutionEngine::onError(int reqId, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson) {
+    // Error Code 201 = "Order rejected"
+    // Error Code 202 = "Order canceled" (Usually triggered by your own cancel request, 
+    //                   but sometimes by exchange limits)
+    
+    if (errorCode == 201 || errorCode == 202) {
+        if (!advancedOrderRejectJson.empty()) {
+            LOG_WARN("[IbkrExecutionEngine] Order {} Rejected/Canceled: {} | Advanced Info: {}", 
+                     reqId, errorString, advancedOrderRejectJson);
+        } else {
+            LOG_WARN("[IbkrExecutionEngine] Order {} Rejected/Canceled: {}", reqId, errorString);
+        }
+        
+        std::string clientRef;
+        OrderState updatedState;
+        bool orderFound = false;
+
+        // 1. Update our internal state maps
+        {
+            std::lock_guard<std::mutex> lock(orderMutex_);
+            auto it = openOrders_.find(reqId);
+            if (it != openOrders_.end()) {
+                it->second.status = (errorCode == 201) ? OrderStatus::REJECTED : OrderStatus::CANCELED;
+                updatedState = it->second; // Copy state to fire the event
+                clientRef = it->second.client_order_id;
+                orderFound = true;
+            }
+        }
+
+        // 2. If we tracked this order, explicitly notify the EventBus so the Orchestrator
+        //    knows the cycle failed and can react immediately instead of waiting for a timeout.
+        if (orderFound && reportCb_) {
+            ExecutionReport report;
+            report.order_id = std::to_string(reqId);
+            report.client_order_id = clientRef;
+            report.symbol = updatedState.symbol;
+            report.side = updatedState.side;
+            report.status = updatedState.status;
+            
+            report.last_quantity = 0.0;
+            report.cumulative_quantity = 0.0; // Standard for an outright rejection
+            report.last_price = 0.0;
+            report.avg_price = 0.0;
+            
+            report.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::system_clock::now().time_since_epoch()).count();
+
+            reportCb_(report);
+        }
+    }
 }
 
 } // namespace bot

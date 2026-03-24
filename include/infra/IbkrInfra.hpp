@@ -60,6 +60,11 @@ public:
     void setPositionCallback(PositionCallback cb) { positionCb_ = std::move(cb); }
     void setOpenOrderCallback(OpenOrderCallback cb) { openOrderCb_ = std::move(cb); }
 
+    // --- Error Handle ---
+    using ErrorCallback = std::function<void(int, int, const std::string&, const std::string&)>;
+
+    void setErrorCallback(ErrorCallback cb) { errorCb_ = std::move(cb); }
+
     // =========================================================================
     // EWrapper Overrides (Triggered by TWS API background thread)
     // =========================================================================
@@ -113,6 +118,8 @@ private:
     UpdateAccountValueCallback updateAccountValueCb_;
     PositionCallback positionCb_;
     OpenOrderCallback openOrderCb_;
+
+    ErrorCallback errorCb_;
 
 };
 

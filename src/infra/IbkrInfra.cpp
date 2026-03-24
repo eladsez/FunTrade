@@ -120,12 +120,10 @@ void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string
     (void)errorTime;
     (void)advancedOrderRejectJson;
 
-    // 2100-2110, 2119, 2150, 2157, 2158 are all benign connection/informational messages
-    if ((errorCode >= 2100 && errorCode <= 2110) || 
-        errorCode == 2119 || errorCode == 2158 || errorCode == 2157 || errorCode == 2150) {
-        LOG_INFO("[IbkrInfra] TWS Info ({}): {}", errorCode, errorString);
-    } else {
-        LOG_ERROR("[IbkrInfra] TWS Error ({}): {}", errorCode, errorString);
+    LOG_WARN("[IbkrInfra] TWS ({}): {}", errorCode, errorString);
+
+    if (errorCb_) {
+        errorCb_(id, errorCode, errorString, advancedOrderRejectJson);
     }
 }
 

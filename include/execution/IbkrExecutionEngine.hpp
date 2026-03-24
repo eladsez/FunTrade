@@ -47,6 +47,7 @@ private:
     void onUpdateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName);
     void onPosition(const std::string& account, const Contract& contract, Decimal pos, double avgCost);
     void onOpenOrder(OrderId orderId, const Contract& contract, const ::Order& order, const ::OrderState& ibkrOrderState);
+    void onError(int reqId, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson);
 
     // Helpers
     Contract createContract(const std::string& symbol);
