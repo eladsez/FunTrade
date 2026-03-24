@@ -140,21 +140,39 @@ std::string IbkrExecutionEngine::placeOrder(const OrderRequest& request) {
     return request.client_order_id;
 }
 
-bool IbkrExecutionEngine::cancelOrder(const std::string& client_order_id) {
-    std::lock_guard<std::mutex> lock(idMutex_);
-    auto it = clientRefToOrderId_.find(client_order_id);
-    
-    if (it != clientRefToOrderId_.end()) {
-        int orderId = it->second;
-        LOG_INFO("[IbkrExecutionEngine] Cancelling order Ref: {} (ID: {})", client_order_id, orderId);
+bool IbkrExecutionEngine::cancelOrder(const std::string& order_id) {
+    int ibkrOrderId = -1;
+
+    // 1. Try to parse it directly as the IBKR Exchange ID (integer)
+    try {
+        ibkrOrderId = std::stoi(order_id);
+    } catch (const std::invalid_argument&) {
+        // 2. Fallback: If it's not an integer, check if it's a client_order_id reference
+        std::lock_guard<std::mutex> lock(idMutex_);
+        auto it = clientRefToOrderId_.find(order_id);
         
-        ::OrderCancel cancelReq; // New TWS API requires this struct
-        infra_->getClient()->cancelOrder(orderId, cancelReq); 
-        return true;
-    } else {
-        LOG_WARN("[IbkrExecutionEngine] Could not find IBKR ID for cancel request on Ref: {}", client_order_id);
-        return false;
+        if (it != clientRefToOrderId_.end()) {
+            ibkrOrderId = it->second;
+        } else {
+            LOG_WARN("[IbkrExecutionEngine] Invalid cancel request. Could not parse or find ID: {}", order_id);
+            return false;
+        }
     }
+
+    // 3. Send the cancellation to TWS
+    if (ibkrOrderId != -1) {
+        LOG_INFO("[IbkrExecutionEngine] Requesting cancellation for IBKR Order ID: {}", ibkrOrderId);
+        
+        ::OrderCancel cancelReq; // Required struct for newer TWS API
+        if (infra_->getClient() && infra_->getClient()->isConnected()) {
+            infra_->getClient()->cancelOrder(ibkrOrderId, cancelReq); 
+            return true;
+        } else {
+            LOG_ERROR("[IbkrExecutionEngine] Cannot cancel order {}. Not connected to TWS.", ibkrOrderId);
+        }
+    }
+    
+    return false;
 }
 
 bool IbkrExecutionEngine::cancelAllOrders() {

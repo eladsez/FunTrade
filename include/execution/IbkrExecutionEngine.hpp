@@ -28,7 +28,7 @@ public:
 
     [[nodiscard]] std::string placeOrder(const OrderRequest& request) override;
     
-    bool cancelOrder(const std::string& client_order_id) override;
+    bool cancelOrder(const std::string& order_id);
     bool cancelAllOrders() override;
 
     // Synchronous Account/Portfolio Methods
