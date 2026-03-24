@@ -158,7 +158,7 @@ int runTestIbkr() {
     execEngine->connectToInfra();
     dataFeed->connectToInfra();
 
-    auto strategy = std::make_shared<MarketEventPrinter>(eventBus, "EUR.USD");
+    auto strategy = std::make_shared<MarketEventPrinter>(eventBus, "AAPL");
 
     strategy->start();
 
