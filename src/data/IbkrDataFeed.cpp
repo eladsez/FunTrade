@@ -237,7 +237,7 @@ std::vector<HistoricalBar> IbkrDataFeed::fetchHistoricalBars(const std::string& 
 
     Contract contract = createContract(symbol);
 
-    LOG_INFO("[IbkrDataFeed] Requesting Historical Data for {} (Duration: {}, End: {})", symbol, durationStr, ibkrEndDateTime);
+    LOG_DEBUG("[IbkrDataFeed] Requesting Historical Data for {} (Duration: {}, End: {})", symbol, durationStr, ibkrEndDateTime);
     
     // whatToShow = "TRADES", useRTH = 1, formatDate = 1 (String format)
     infra_->getClient()->reqHistoricalData(reqId, contract, ibkrEndDateTime, durationStr, barSize, "TRADES", 1, 1, false, TagValueListSPtr());

@@ -299,18 +299,16 @@ void IbkrExecutionEngine::onUpdateAccountValue(const std::string& key, const std
     (void)accountName;
     
     // We usually only care about the base currency (e.g., USD) to avoid double-counting
-    if (currency == "USD" || currency.empty()) {
-        try {
-            if (key == "AvailableFunds") { // Can also use "TotalCashValue"
-                cachedCash_.store(std::stod(val));
-                cashHasValue_.store(true);
-            } else if (key == "NetLiquidation") { // Total portfolio value
-                cachedPortfolioValue_.store(std::stod(val));
-                portHasValue_.store(true);
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("[IbkrExecutionEngine] Failed to parse account value for {}: {}", key, val);
+    try {
+        if (key == "AvailableFunds") { // currently this is ILS in my account
+            cachedPortfolioValue_.store(std::stod(val));
+            portHasValue_.store(true);
+        } else if (key == "NetLiquidationByCurrency" && currency == "USD") {  // filter only for USD for now
+            cachedCash_.store(std::stod(val));
+            cashHasValue_.store(true);
         }
+    } catch (const std::exception& e) {
+        LOG_WARN("[IbkrExecutionEngine] Failed to parse account value for {}: {}", key, val);
     }
 }
 

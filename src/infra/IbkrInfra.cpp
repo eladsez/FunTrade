@@ -132,7 +132,7 @@ void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string
     (void)errorTime;
     (void)advancedOrderRejectJson;
 
-    LOG_WARN("[IbkrInfra] TWS ({}): {}", errorCode, errorString);
+    LOG_DEBUG("[IbkrInfra] TWS ({}): {}", errorCode, errorString);
 
     if (errorCb_) {
         errorCb_(id, errorCode, errorString, advancedOrderRejectJson);
