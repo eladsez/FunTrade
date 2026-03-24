@@ -136,9 +136,8 @@ int runBacktestMode(const std::string& csvTickPath, const std::string& csvHistor
     return 0;
 }
 
-int runTestIbkr() {
+int runLiveIbkr() {
     // Initialize logging (assuming your Logger has a static init method or works out of the box)
-    std::cout << "Starting IBKR Integration Test...\n";
 
     auto infra = std::make_shared<IbkrInfra>("host.docker.internal", 4002, 1); 
 
@@ -149,7 +148,7 @@ int runTestIbkr() {
 
     // 4. Connect the plumbing
     if (!infra->connectToTws()) {
-        std::cerr << "Failed to connect to IB Gateway. Is it running and configured?\n";
+        LOG_ERROR("[LIVE] Failed to connect to IB Gateway. Is it running and configured?\n");
         return 1;
     }
 
@@ -158,9 +157,24 @@ int runTestIbkr() {
     execEngine->connectToInfra();
     dataFeed->connectToInfra();
 
-    auto strategy = std::make_shared<MarketEventPrinter>(eventBus, "AAPL");
+    auto orderManager = std::make_shared<OrderManager>(eventBus, execEngine);
+    auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, execEngine);
 
-    strategy->start();
+    double percentPerStrategy = 0.05; // Representing 5% of available cash
+
+    // Initialize the Orchestrator
+    LOG_INFO("[LIVE] Booting up Strategy Orchestrator...");
+    StrategyOrchestrator orchestrator(
+        eventBus, 
+        orderManager, 
+        portfolioManager, 
+        "config/basket_configs", 
+        percentPerStrategy
+    );
+
+    // Load and start all strategies
+    orchestrator.loadStrategies();
+    orchestrator.startAll();
 
     LOG_INFO("[LIVE] Bot is running and printing Press Ctrl+C to stop.");
     
@@ -170,7 +184,6 @@ int runTestIbkr() {
 
     LOG_INFO("[LIVE] Shutting down...");
 
-    strategy->stop();
     infra->disconnectFromTws();
     return 0;
 }
@@ -186,37 +199,37 @@ int main(int argc, char* argv[]) {
     LOG_INFO("          Algorithmic Trading Bot                 ");
     LOG_INFO("==================================================");
 
-    runTestIbkr();
+    std::string configPath = "config/basket_configs/amzn_cmg_expe.json";
+    std::string csvTickPath = "data/testing_ticks.csv";
+    std::string csvHistorPath = "";
 
-    // std::string configPath = "config/basket_configs/amzn_cmg_expe.json";
-    // std::string csvTickPath = "data/testing_ticks.csv";
-    // std::string csvHistorPath = "";
+    const char* apiKey = std::getenv("APCA_API_KEY_ID");
+    const char* apiSecret = std::getenv("APCA_API_SECRET_KEY");
 
-    // const char* apiKey = std::getenv("APCA_API_KEY_ID");
-    // const char* apiSecret = std::getenv("APCA_API_SECRET_KEY");
+    // Simple CLI Argument Routing
+    if (argc > 1 && std::string(argv[1]) == "--backtest") {
+        if (argc > 2) {
+            csvTickPath = argv[2];
+        }
+        if (argc > 3) {
+            csvHistorPath = argv[3];
+        }
 
+        if (argc > 4) {
+            configPath = argv[4];
+        }
 
-    // // Simple CLI Argument Routing
-    // if (argc > 1 && std::string(argv[1]) == "--backtest") {
-    //     if (argc > 2) {
-    //         csvTickPath = argv[2];
-    //     }
-    //     if (argc > 3) {
-    //         csvHistorPath = argv[3];
-    //     }
-
-    //     if (argc > 4) {
-    //         configPath = argv[4];
-    //     }
-
-    //     return runBacktestMode(csvTickPath, csvHistorPath, configPath);
-    // } 
-    // else {
-    //     if (!apiKey || !apiSecret) {
-    //         LOG_ERROR("\nERROR: Live mode requires Alpaca credentials.\n"
-    //                   "To run a backtest instead, use: ./FunTrade --backtest\n");
-    //         return 1;
-    //     }
-    //     return runAlpacaLive(apiKey, apiSecret);
-    // }
+        return runBacktestMode(csvTickPath, csvHistorPath, configPath);
+    } 
+    else if (argc > 1 && std::string(argv[1]) == "--alpaca"){
+        if (!apiKey || !apiSecret) {
+            LOG_ERROR("\nERROR: Live mode requires Alpaca credentials.\n"
+                      "To run a backtest instead, use: ./FunTrade --backtest\n");
+            return 1;
+        }
+        return runAlpacaLive(apiKey, apiSecret);
+    }
+    else{
+        runLiveIbkr();
+    }
 }

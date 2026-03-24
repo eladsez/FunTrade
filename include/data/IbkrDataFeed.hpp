@@ -12,6 +12,8 @@
 #include <atomic>
 #include <mutex>
 #include <functional>
+#include <future>
+#include <chrono>
 
 namespace bot {
 
@@ -39,6 +41,12 @@ private:
     void onTickByTickAllLast(int reqId, int tickType, time_t time, double price, Decimal size, const TickAttribLast& tickAttrib, const std::string& exchange, const std::string& specialConditions);
     void onTickByTickMidPoint(int reqId, time_t time, double midPoint);
 
+    void onHistoricalData(TickerId reqId, const Bar& bar);
+    void onHistoricalDataEnd(int reqId, const std::string& startDateStr, const std::string& endDateStr);
+
+    std::string formatIbkrDate(const std::string& iso8601);
+    std::string calculateDurationDays(const std::string& start, const std::string& end);
+    uint64_t parseIbkrDateToMs(const std::string& ibkrDate);
     std::string getSymbolFromId(int reqId);
     Contract createContract(const std::string& symbol);
 
@@ -47,9 +55,11 @@ private:
     std::function<void(const MarketEvent&)> tickCallback_;
 
     mutable std::mutex dataMutex_;
+    std::mutex histMutex_;
 
     // ID Management
     std::atomic<int> nextTickerId_{2000}; 
+    std::atomic<int> nextHistReqId_{4000}; // Separate ID space for historical requests
 
     // Because TickByTick requires separate IDs for each
     struct StreamIds {
@@ -60,6 +70,9 @@ private:
     
     std::unordered_map<std::string, StreamIds> symbolToIds_;
     std::unordered_map<int, std::string> idToSymbol_; // Maps any ID back to its symbol
+    std::unordered_map<int, std::promise<std::vector<HistoricalBar>>> histPromises_;
+    std::unordered_map<int, std::vector<HistoricalBar>> histDataBuffer_;
+    std::unordered_map<int, std::string> histIdToSymbol_;
 };
 
 } // namespace bot

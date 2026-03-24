@@ -1,6 +1,9 @@
 #include <data/IbkrDataFeed.hpp>
 #include <core/Logger.hpp>
-#include <Decimal.h> 
+#include <Decimal.h>
+#include <iomanip>
+#include <sstream>
+#include <algorithm>
 
 namespace bot {
 
@@ -25,6 +28,18 @@ bool IbkrDataFeed::connectToInfra() {
     infra_->setTickByTickMidPointCallback(
         [this](int reqId, time_t time, double midPoint) {
             this->onTickByTickMidPoint(reqId, time, midPoint);
+        }
+    );
+
+    infra_->setHistDataCallback(
+        [this](TickerId reqId, const Bar& bar) {
+            this->onHistoricalData(reqId, bar);
+        }
+    );
+
+    infra_->setHistDataEndCallback(
+        [this](int reqId, const std::string& start, const std::string& end) {
+            this->onHistoricalDataEnd(reqId, start, end);
         }
     );
 
@@ -199,9 +214,122 @@ Contract IbkrDataFeed::createContract(const std::string& symbol) {
 }
 
 std::vector<HistoricalBar> IbkrDataFeed::fetchHistoricalBars(const std::string& symbol, const std::string& start, const std::string& end, const std::string& timeframe) {
-    (void)symbol; (void)start; (void)end; (void)timeframe;
-    LOG_WARN("[IbkrDataFeed] fetchHistoricalBars not yet implemented.");
-    return {};
+    if (!infra_->getClient() || !infra_->getClient()->isConnected()) {
+        LOG_ERROR("[IbkrDataFeed] Cannot fetch historical data. Not connected to TWS.");
+        return {};
+    }
+
+    // 1. Prepare formatting (Strategy sends ISO8601, IBKR needs "yyyyMMdd HH:mm:ss")
+    std::string ibkrEndDateTime = formatIbkrDate(end);
+    std::string durationStr = calculateDurationDays(start, end) + " D";
+    std::string barSize = (timeframe == "1Day") ? "1 day" : timeframe; 
+
+    int reqId = nextHistReqId_++;
+    std::future<std::vector<HistoricalBar>> future;
+
+    {
+        std::lock_guard<std::mutex> lock(histMutex_);
+        histPromises_[reqId] = std::promise<std::vector<HistoricalBar>>();
+        future = histPromises_[reqId].get_future();
+        histDataBuffer_[reqId] = std::vector<HistoricalBar>();
+        histIdToSymbol_[reqId] = symbol;
+    }
+
+    Contract contract = createContract(symbol);
+
+    LOG_INFO("[IbkrDataFeed] Requesting Historical Data for {} (Duration: {}, End: {})", symbol, durationStr, ibkrEndDateTime);
+    
+    // whatToShow = "TRADES", useRTH = 1, formatDate = 1 (String format)
+    infra_->getClient()->reqHistoricalData(reqId, contract, ibkrEndDateTime, durationStr, barSize, "TRADES", 1, 1, false, TagValueListSPtr());
+
+    // 2. Block and wait for the EWrapper callbacks to resolve the promise
+    // Use a 30-second timeout to prevent the strategy thread from hanging on a bad connection
+    if (future.wait_for(std::chrono::seconds(30)) == std::future_status::ready) {
+        return future.get();
+    } else {
+        LOG_ERROR("[IbkrDataFeed] Historical data request timed out for {}", symbol);
+        infra_->getClient()->cancelHistoricalData(reqId); // Cleanup in TWS
+        
+        std::lock_guard<std::mutex> lock(histMutex_);
+        histPromises_.erase(reqId);
+        histDataBuffer_.erase(reqId);
+        histIdToSymbol_.erase(reqId);
+        return {};
+    }
+}
+
+void IbkrDataFeed::onHistoricalData(TickerId reqId, const Bar& bar) {
+    std::lock_guard<std::mutex> lock(histMutex_);
+    if (histDataBuffer_.find(reqId) != histDataBuffer_.end()) {
+        HistoricalBar hBar;
+        hBar.symbol = histIdToSymbol_[reqId];
+        hBar.timestamp_ms = parseIbkrDateToMs(bar.time); // bar.time is a string because formatDate = 1
+        hBar.open = bar.open;
+        hBar.high = bar.high;
+        hBar.low = bar.low;
+        hBar.close = bar.close;
+        hBar.volume = (bar.volume == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(bar.volume);
+        
+        histDataBuffer_[reqId].push_back(hBar);
+    }
+}
+
+void IbkrDataFeed::onHistoricalDataEnd(int reqId, const std::string& startDateStr, const std::string& endDateStr) {
+    (void)startDateStr; (void)endDateStr;
+    
+    std::lock_guard<std::mutex> lock(histMutex_);
+    auto it = histPromises_.find(reqId);
+    if (it != histPromises_.end()) {
+        // Fulfill the promise, unblocking the strategy thread
+        it->second.set_value(histDataBuffer_[reqId]);
+        
+        // Cleanup memory
+        histPromises_.erase(it);
+        histDataBuffer_.erase(reqId);
+        histIdToSymbol_.erase(reqId);
+    }
+}
+
+std::string IbkrDataFeed::formatIbkrDate(const std::string& iso8601) {
+    // Basic validation for "YYYY-MM-DDTHH:MM:SSZ"
+    if (iso8601.length() < 19) return "";
+    
+    // Extract strictly what we need
+    std::string year  = iso8601.substr(0, 4);
+    std::string month = iso8601.substr(5, 2);
+    std::string day   = iso8601.substr(8, 2);
+    std::string time  = iso8601.substr(11, 8);
+    
+    // Assemble into the explicit IBKR format: "yyyyMMdd HH:mm:ss TMZ"
+    return year + month + day + " " + time + " UTC"; 
+}
+
+// Approximates the duration string (e.g., "60 D") based on strategy bounds
+std::string IbkrDataFeed::calculateDurationDays(const std::string& start, const std::string& end) {
+    std::tm tm_start = {}, tm_end = {};
+    std::istringstream ss_start(start);
+    std::istringstream ss_end(end);
+    
+    ss_start >> std::get_time(&tm_start, "%Y-%m-%dT%H:%M:%SZ");
+    ss_end >> std::get_time(&tm_end, "%Y-%m-%dT%H:%M:%SZ");
+    
+    auto time_start = std::mktime(&tm_start);
+    auto time_end = std::mktime(&tm_end);
+    
+    // Convert seconds to days, ensure minimum of 1
+    int days = std::max(1, static_cast<int>(std::difftime(time_end, time_start) / (60 * 60 * 24)));
+    return std::to_string(days);
+}
+
+// Converts IBKR's "yyyyMMdd" output string back to a timestamp
+uint64_t IbkrDataFeed::parseIbkrDateToMs(const std::string& ibkrDate) {
+    if (ibkrDate.length() == 8) { // format for 1 day bars is "yyyyMMdd"
+        std::tm tm_val = {};
+        std::istringstream ss(ibkrDate);
+        ss >> std::get_time(&tm_val, "%Y%m%d");
+        return static_cast<uint64_t>(std::mktime(&tm_val)) * 1000;
+    }
+    return 0;
 }
 
 } // namespace bot
