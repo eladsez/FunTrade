@@ -60,6 +60,16 @@ public:
     void setPositionCallback(PositionCallback cb) { positionCb_ = std::move(cb); }
     void setOpenOrderCallback(OpenOrderCallback cb) { openOrderCb_ = std::move(cb); }
 
+    // --- End Marker Callbacks ---
+    // for Initialization Barrier
+    using AccountDownloadEndCallback = std::function<void(const std::string&)>;
+    using PositionEndCallback = std::function<void()>;
+    using OpenOrderEndCallback = std::function<void()>;
+
+    void setAccountDownloadEndCallback(AccountDownloadEndCallback cb) { accountDownloadEndCb_ = std::move(cb); }
+    void setPositionEndCallback(PositionEndCallback cb) { positionEndCb_ = std::move(cb); }
+    void setOpenOrderEndCallback(OpenOrderEndCallback cb) { openOrderEndCb_ = std::move(cb); }
+
     // --- Error Handle ---
     using ErrorCallback = std::function<void(int, int, const std::string&, const std::string&)>;
 
@@ -84,6 +94,10 @@ public:
     void updateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName) override;
     void position(const std::string& account, const Contract& contract, Decimal position, double avgCost) override;
     void openOrder(OrderId orderId, const Contract& contract, const ::Order& order, const ::OrderState& orderState) override;
+
+    void accountDownloadEnd(const std::string& accountName) override;
+    void positionEnd() override;
+    void openOrderEnd() override;
 
     void error(int id, time_t errorTime, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson) override;
     void connectionClosed() override;
@@ -118,6 +132,10 @@ private:
     UpdateAccountValueCallback updateAccountValueCb_;
     PositionCallback positionCb_;
     OpenOrderCallback openOrderCb_;
+
+    AccountDownloadEndCallback accountDownloadEndCb_;
+    PositionEndCallback positionEndCb_;
+    OpenOrderEndCallback openOrderEndCb_;
 
     ErrorCallback errorCb_;
 

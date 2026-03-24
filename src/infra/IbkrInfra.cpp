@@ -111,6 +111,18 @@ void IbkrInfra::openOrder(OrderId orderId, const Contract& contract, const ::Ord
     if (openOrderCb_) openOrderCb_(orderId, contract, order, orderState);
 }
 
+void IbkrInfra::accountDownloadEnd(const std::string& accountName) {
+    if (accountDownloadEndCb_) accountDownloadEndCb_(accountName);
+}
+
+void IbkrInfra::positionEnd() {
+    if (positionEndCb_) positionEndCb_();
+}
+
+void IbkrInfra::openOrderEnd() {
+    if (openOrderEndCb_) openOrderEndCb_();
+}
+
 // --- System & Error Handling ---
 
 // Add time_t errorTime and cast unused parameters

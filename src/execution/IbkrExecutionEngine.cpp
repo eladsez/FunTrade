@@ -61,18 +61,55 @@ bool IbkrExecutionEngine::connectToInfra() {
         }
     );
 
+    infra_->setAccountDownloadEndCallback(
+        [this](const std::string& accountName) { 
+            this->onAccountDownloadEnd(accountName); 
+        }
+    );
+
+    infra_->setPositionEndCallback(
+        [this]() { 
+            this->onPositionEnd(); 
+        }
+    );
+
+    infra_->setOpenOrderEndCallback(
+        [this]() { 
+            this->onOpenOrderEnd(); 
+        }
+    );
+
     if (infra_->getClient() && infra_->getClient()->isConnected()) {
         infra_->getClient()->reqIds(-1); 
         infra_->getClient()->reqAccountUpdates(true, ""); 
         infra_->getClient()->reqPositions();
         infra_->getClient()->reqAllOpenOrders();
     }
+    else {
+        LOG_ERROR("[IbkrExecutionEngine] Failed to connect to IbkrInfra");
+    }
+
+    // THE BARRIER: Wait for TWS to finish downloading the state
+    LOG_DEBUG("[IbkrExecutionEngine] Waiting for initial account, position, and order sync from TWS...");
+    std::unique_lock<std::mutex> lock(syncMutex_);
+    
+    // Wait up to 10 seconds for the sync to complete
+    bool synced = syncCv_.wait_for(lock, std::chrono::seconds(10), [this] {
+        return isAccountSynced_ && isPositionsSynced_ && isOrdersSynced_;
+    });
+
+    if (!synced) {
+        LOG_ERROR("[IbkrExecutionEngine] Timeout waiting for TWS state sync. Proceeding with partial/empty state.");
+        // Depending on your risk tolerance, you might want to return false here to crash the bot safely.
+    } else {
+        LOG_DEBUG("[IbkrExecutionEngine] Successfully synced all initial state from TWS.");
+    }
 
     return true;
 }
 
 void IbkrExecutionEngine::disconnectFromInfra() {
-    LOG_INFO("[IbkrExecutionEngine] Disconnecting ExecutionEngine from Infra.");
+    LOG_DEBUG("[IbkrExecutionEngine] Disconnecting ExecutionEngine from Infra.");
 }
 
 // =========================================================================
@@ -134,13 +171,13 @@ std::string IbkrExecutionEngine::placeOrder(const OrderRequest& request) {
             break;
     }
 
-    LOG_INFO("[IbkrExecutionEngine] Placing {} Order {} for {} {} (ID: {}, Ref: {})", 
+    LOG_DEBUG("[IbkrExecutionEngine] Placing {} Order {} for {} {} (ID: {}, Ref: {})", 
              order.orderType, order.action, DecimalFunctions::decimalToDouble(order.totalQuantity), 
              request.symbol, order.orderId, order.orderRef);
 
     infra_->getClient()->placeOrder(ibkrOrderId, contract, order);
     // return request.client_order_id and not uniqueClientId because
-    // the unique exsist only in the execution level (for the exchange to get unique for sure)
+    // the unique exist only in the execution level (for the exchange to get unique for sure)
     return request.client_order_id;
 }
 
@@ -463,6 +500,25 @@ void IbkrExecutionEngine::onError(int reqId, int errorCode, const std::string& e
             reportCb_(report);
         }
     }
+}
+
+void IbkrExecutionEngine::onAccountDownloadEnd(const std::string& accountName) {
+    (void)accountName;
+    std::lock_guard<std::mutex> lock(syncMutex_);
+    isAccountSynced_ = true;
+    syncCv_.notify_all();
+}
+
+void IbkrExecutionEngine::onPositionEnd() {
+    std::lock_guard<std::mutex> lock(syncMutex_);
+    isPositionsSynced_ = true;
+    syncCv_.notify_all();
+}
+
+void IbkrExecutionEngine::onOpenOrderEnd() {
+    std::lock_guard<std::mutex> lock(syncMutex_);
+    isOrdersSynced_ = true;
+    syncCv_.notify_all();
 }
 
 } // namespace bot

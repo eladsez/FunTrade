@@ -48,6 +48,9 @@ private:
     void onPosition(const std::string& account, const Contract& contract, Decimal pos, double avgCost);
     void onOpenOrder(OrderId orderId, const Contract& contract, const ::Order& order, const ::OrderState& ibkrOrderState);
     void onError(int reqId, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson);
+    void onAccountDownloadEnd(const std::string& accountName);
+    void onPositionEnd();
+    void onOpenOrderEnd();
 
     // Helpers
     Contract createContract(const std::string& symbol);
@@ -70,6 +73,13 @@ private:
     
     std::atomic<double> cachedPortfolioValue_{0.0};
     std::atomic<bool> portHasValue_{false};
+
+    // Initialization Sync Barrier
+    std::mutex syncMutex_;
+    std::condition_variable syncCv_;
+    bool isAccountSynced_{false};
+    bool isPositionsSynced_{false};
+    bool isOrdersSynced_{false};
 
     // Portfolio State
     std::mutex positionMutex_;

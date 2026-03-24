@@ -137,8 +137,6 @@ int runBacktestMode(const std::string& csvTickPath, const std::string& csvHistor
 }
 
 int runLiveIbkr() {
-    // Initialize logging (assuming your Logger has a static init method or works out of the box)
-
     auto infra = std::make_shared<IbkrInfra>("host.docker.internal", 4002, 1); 
 
     auto execEngine = std::make_shared<IbkrExecutionEngine>(infra); 
