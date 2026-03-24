@@ -1,7 +1,7 @@
 #pragma once
 #include <core/IEventBus.hpp>
 #include <core/DomainModels.hpp>
-#include <map>
+#include <unordered_map>
 #include <set>
 #include <string>
 #include <mutex>
@@ -11,19 +11,6 @@
 namespace bot {
 
 class IExecutionEngine;
-
-struct Position {
-    std::string symbol;
-    double quantity = 0.0;
-    double avg_price = 0.0;
-    double current_price = 0.0;
-    double realized_pnl = 0.0;
-
-    double unrealized_pnl() const {
-        if (quantity == 0.0) return 0.0;
-        return quantity * (current_price - avg_price);
-    }
-};
 
 class PortfolioManager {
 public:
@@ -48,7 +35,7 @@ private:
 
     std::shared_ptr<IEventBus> eventBus_;
     std::shared_ptr<IExecutionEngine> engine_;
-    std::map<std::string, Position> positions_;
+    std::unordered_map<std::string, Position> positions_;
     std::set<std::string> subscribedSymbols_; // Tracks active tick subscriptions
     mutable std::mutex mtx_;
     double total_realized_pnl_ = 0.0;

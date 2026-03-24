@@ -13,7 +13,7 @@ namespace bot {
 class AlpacaExecutionEngine : public IExecutionEngine {
 public:
     // We inject the shared Infra instance here
-    AlpacaExecutionEngine(std::shared_ptr<IEventBus> eventBus, std::string apiKey, std::string apiSecret);
+    AlpacaExecutionEngine(std::string apiKey, std::string apiSecret);
     ~AlpacaExecutionEngine() override;
 
     // IExecutionEngine Implementation
@@ -26,11 +26,10 @@ public:
     // Extended Domain Specific API
     std::optional<double> getPortfolioValue() override;
     std::optional<double> getAvailableCash() override;
-    nlohmann::json getOpenPositions() override;
-    nlohmann::json getOpenOrders() override;
+    std::vector<Position> getOpenPositions() override;
+    std::vector<OrderState> getOpenOrders() override;
 
 private:
-    std::shared_ptr<IEventBus> eventBus_;
     std::shared_ptr<AlpacaInfra> infra_;
     std::string apiKey_;
     std::string apiSecret_;
@@ -39,7 +38,6 @@ private:
     const char* sideToString(Side side);
     const char* orderTypeToString(OrderType type);
     const char* timeInForceToString(TimeInForce tif);
-    std::string generateClientOrderId(const std::string& prefix);
 
     void onWebSocketMessage(const std::string& payload);
 };

@@ -58,8 +58,8 @@ public:
     bool cancelAllOrders() override { return true; }
     std::optional<double> getPortfolioValue() override { return 100000.0; }
     std::optional<double> getAvailableCash() override { return 100000.0; }
-    nlohmann::json getOpenPositions() override { return nlohmann::json::array(); }
-    nlohmann::json getOpenOrders() override { return nlohmann::json::array(); }
+    std::vector<Position> getOpenPositions() override { return std::vector<Position>(); }
+    std::vector<OrderState> getOpenOrders() override { return std::vector<OrderState>(); }
 
 private:
     std::shared_ptr<IEventBus> event_bus_;

@@ -1,0 +1,3 @@
+[submodule "external/twsapi"]
+	path = external/twsapi
+	url = https://github.com/eladsez/twsapi

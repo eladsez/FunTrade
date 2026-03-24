@@ -2,11 +2,18 @@
 #include <core/Logger.hpp>
 #include <chrono>
 
-EventBus::EventBus(std::shared_ptr<IDataFeed> dataFeed) : dataFeed_(std::move(dataFeed)) {
-    // If a data feed is provided, wire its output directly to our lock-free queue
+namespace bot {
+
+EventBus::EventBus(std::shared_ptr<IDataFeed> dataFeed, std::shared_ptr<IExecutionEngine> executionEngine)
+                    : dataFeed_(std::move(dataFeed)), executionEngine_(std::move(executionEngine)){
     if (dataFeed_) {
         dataFeed_->setMarketTickCallback([this](const MarketEvent& tick) {
             this->publishMarketEvent(tick);
+        });
+    }
+    if (executionEngine_){
+        executionEngine_->setExecutionReportCallback([this] (const ExecutionReport& rep){
+            this->publishExecution(rep);
         });
     }
     start();
@@ -95,7 +102,7 @@ void EventBus::dispatchEvent(const Event& event) {
         if constexpr (std::is_same_v<T, MarketEvent>) {
             // Safely extract the symbol from the variant
             std::string symbol = std::visit([](auto&& e) { return e.symbol; }, arg);
-            
+            // I need to evaluate if this copy is realy needed  
             std::unordered_map<uint64_t, MarketEventCallback> localCallbacks;
             std::unordered_map<uint64_t, MarketEventCallback> wildcardCallbacks;
             {
@@ -163,4 +170,6 @@ std::vector<HistoricalBar> EventBus::fetchHistoricalBars(
     
     LOG_ERROR("[EventBus] Cannot fetch historical bars for {}: No DataFeed attached!", symbol);
     return {}; // Return an empty vector if there is no feed
+}
+
 }

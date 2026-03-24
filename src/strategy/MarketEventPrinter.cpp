@@ -83,6 +83,9 @@ void printMarketEvent(const MarketEvent& event) {
                      condStr,
                      tick.timestamp_ms);
         } 
+        else if constexpr (std::is_same_v<T, MidPointTick>) {
+            LOG_INFO("[MarketEvent] MIDPOINT | MidPrice{}: TS: {}", tick.mid_price, tick.timestamp_ms);
+        }
         else if constexpr (std::is_same_v<T, OrderBookUpdate>) {
             // Safely grab the top of the book for a quick preview if it exists
             double bestBid = tick.bids.empty() ? 0.0 : tick.bids.front().price;

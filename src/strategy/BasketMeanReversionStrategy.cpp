@@ -157,9 +157,7 @@ void BasketMeanReversionStrategy::warmUp() {
 bool BasketMeanReversionStrategy::isValidMarketEvent(const MarketEvent& event) const {
     if (const auto* trade = std::get_if<TradeTick>(&event)) {
         // Trade Defense: Must have a real positive price
-        // return trade->price > 0.0;
-        return false;
-        
+        return trade->price > 0.0;
     } else if (const auto* quote = std::get_if<QuoteTick>(&event)) {
         // Quote Defense 1: No zero prices or crossed markets
         if (quote->bid_price <= 0.0 || quote->ask_price <= 0.0 || quote->bid_price >= quote->ask_price) {
@@ -168,7 +166,8 @@ bool BasketMeanReversionStrategy::isValidMarketEvent(const MarketEvent& event) c
         // Quote Defense 2: Reject massive spreads (e.g., > 5%)
         double spread_pct = (quote->ask_price - quote->bid_price) / quote->ask_price;
         return spread_pct < 0.05;
-        
+    } else if (const auto* midTick = std::get_if<MidPointTick>(&event)) {
+        return midTick->mid_price > 0; 
     } else if (const auto* bar = std::get_if<BarUpdate>(&event)) {
         // Bar Defense: EOD close must be valid
         return bar->close > 0.0;
@@ -185,10 +184,12 @@ void BasketMeanReversionStrategy::onMarketEvent(const MarketEvent& event) {
     }
 
     if (const auto* trade = std::get_if<TradeTick>(&event)) {
-        processTick(trade->symbol, trade->price, trade->timestamp_ms);
+        // processTick(trade->symbol, trade->price, trade->timestamp_ms);
     } else if (const auto* quote = std::get_if<QuoteTick>(&event)) {
-        double mid_price = (quote->bid_price + quote->ask_price) * 0.5;
-        processTick(quote->symbol, mid_price, quote->timestamp_ms);
+        // double mid_price = (quote->bid_price + quote->ask_price) * 0.5;
+        // processTick(quote->symbol, mid_price, quote->timestamp_ms);
+    } else if (const auto* midTick = std::get_if<MidPointTick>(&event)) {
+        processTick(midTick->symbol, midTick->mid_price, midTick->timestamp_ms);
     }
     else if (const auto* bar = std::get_if<BarUpdate>(&event)) {
         basket_state_->updateDailyClose(bar->symbol, bar->close);

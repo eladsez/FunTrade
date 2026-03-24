@@ -3,6 +3,10 @@
 #include <cstdint>
 #include <variant>
 #include <vector>
+#include <atomic>
+#include <chrono>
+
+namespace bot {
 
 enum class Side {
     BUY,
@@ -52,6 +56,12 @@ struct QuoteTick {
     std::vector<QuoteCondition> conditions;
 };
 
+struct MidPointTick {
+    std::string symbol;
+    double mid_price = 0.0;
+    uint64_t timestamp_ms = 0;
+};
+
 struct OrderBookUpdate {
     std::string symbol;
     std::vector<PriceLevel> bids;
@@ -71,7 +81,7 @@ struct BarUpdate {
 };
 
 // The unified MarketEvent variant
-using MarketEvent = std::variant<TradeTick, QuoteTick, OrderBookUpdate, BarUpdate>;
+using MarketEvent = std::variant<TradeTick, QuoteTick, MidPointTick, OrderBookUpdate, BarUpdate>;
 
 enum class OrderType {
     MARKET,
@@ -138,7 +148,52 @@ struct HistoricalBar {
     double vwap = 0.0;
 };
 
+
+struct Position {
+    std::string symbol;
+    double quantity = 0.0;
+    double avg_price = 0.0;
+    double current_price = 0.0;
+    double realized_pnl = 0.0;
+
+    double unrealized_pnl() const {
+        if (quantity == 0.0) return 0.0;
+        return quantity * (current_price - avg_price);
+    }
+};
+
+struct OrderState {
+    std::string order_id;
+    std::string client_order_id;
+    std::string symbol;
+    Side side;
+    OrderType type;
+    double quantity;
+    double price;
+    OrderStatus status;
+};
+
 namespace OrderIdUtils {
+
+    // Generates a unique, Alpaca-compliant client_order_id (max 48 chars).
+    // Thread-safe and guarantees uniqueness even for sub-microsecond calls.
+    inline std::string generateClientOrderId(const std::string& prefix) {
+        static std::atomic<uint32_t> order_counter{0};
+        
+        std::string base_prefix = prefix.empty() ? "bot" : prefix;
+        
+        uint64_t timestamp = std::chrono::system_clock::now().time_since_epoch().count();
+        uint32_t current_count = ++order_counter;
+        
+        std::string generated_id = base_prefix + "_" + std::to_string(timestamp) + "_" + std::to_string(current_count);
+        
+        // Alpaca restricts client_order_id to a maximum of 48 characters
+        if (generated_id.length() > 48) {
+            generated_id = generated_id.substr(0, 48);
+        }
+        
+        return generated_id;
+    }
 
     // Safely extracts the original base prefix from a generated execution ID
     // E.g., "given_client_id_1710543210000_1" -> "given_client_id"
@@ -161,3 +216,5 @@ namespace OrderIdUtils {
     }
 
 } // namespace OrderIdUtils
+
+}

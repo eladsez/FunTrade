@@ -26,8 +26,12 @@ public:
     // Portfolio tracking
     virtual std::optional<double> getPortfolioValue() = 0;
     virtual std::optional<double> getAvailableCash() = 0;
-    virtual nlohmann::json getOpenPositions() = 0;
-    virtual nlohmann::json getOpenOrders() = 0;
+    virtual std::vector<Position> getOpenPositions() = 0;
+    virtual std::vector<OrderState> getOpenOrders() = 0;
+
+    virtual void setExecutionReportCallback(std::function<void(const ExecutionReport&)> callback){ reportCb_ = callback; }
+
+    std::function<void(const ExecutionReport&)> reportCb_;
 };
 
 } // namespace bot
