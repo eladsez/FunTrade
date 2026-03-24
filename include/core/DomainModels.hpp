@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <variant>
 #include <vector>
+#include <atomic>
+#include <chrono>
 
 namespace bot {
 
@@ -172,6 +174,26 @@ struct OrderState {
 };
 
 namespace OrderIdUtils {
+
+    // Generates a unique, Alpaca-compliant client_order_id (max 48 chars).
+    // Thread-safe and guarantees uniqueness even for sub-microsecond calls.
+    inline std::string generateClientOrderId(const std::string& prefix) {
+        static std::atomic<uint32_t> order_counter{0};
+        
+        std::string base_prefix = prefix.empty() ? "bot" : prefix;
+        
+        uint64_t timestamp = std::chrono::system_clock::now().time_since_epoch().count();
+        uint32_t current_count = ++order_counter;
+        
+        std::string generated_id = base_prefix + "_" + std::to_string(timestamp) + "_" + std::to_string(current_count);
+        
+        // Alpaca restricts client_order_id to a maximum of 48 characters
+        if (generated_id.length() > 48) {
+            generated_id = generated_id.substr(0, 48);
+        }
+        
+        return generated_id;
+    }
 
     // Safely extracts the original base prefix from a generated execution ID
     // E.g., "given_client_id_1710543210000_1" -> "given_client_id"

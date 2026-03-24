@@ -85,16 +85,10 @@ protected:
         auto it = clientToExchangeId.find(clientId);
         return (it != clientToExchangeId.end()) ? it->second : "";
     }
-
-    std::string genId(const std::string& prefix) {
-        static std::atomic<int> counter{0};
-        auto now = std::chrono::system_clock::now().time_since_epoch().count();
-        return prefix + "_" + std::to_string(now) + "_" + std::to_string(++counter);
-    }
 };
 
 TEST_F(IbkrExecutionEngineTest, PlaceMarket) {
-    std::string b1 = genId("ibkr_mkt_buy_aapl");
+    std::string b1 = "ibkr_mkt_buy_aapl";
 
     // Using 1.0 quantity of US Equities
     OrderRequest buy1{b1, "AAPL", Side::BUY, OrderType::MARKET, TimeInForce::GTC, 1.0, 0.0, 0.0, 0.0};
@@ -108,7 +102,7 @@ TEST_F(IbkrExecutionEngineTest, PlaceMarket) {
 }
 
 TEST_F(IbkrExecutionEngineTest, CancelOrderReturnsTrue) {
-    std::string l1 = genId("ibkr_limit_cancel_spy");
+    std::string l1 = "ibkr_limit_cancel_spy";
 
     // Place a limit buy far below market value so it doesn't fill
     OrderRequest lowLimit{l1, "SPY", Side::BUY, OrderType::LIMIT, TimeInForce::GTC, 1.0, 100.0, 0.0, 0.0};
@@ -127,7 +121,7 @@ TEST_F(IbkrExecutionEngineTest, CancelOrderReturnsTrue) {
 }
 
 TEST_F(IbkrExecutionEngineTest, PlaceLimit) {
-    std::string b1 = genId("ibkr_limit_buy_msft");
+    std::string b1 = "ibkr_limit_buy_msft";
 
     // Use a low limit buy ($150) so it doesn't trigger the aggressive price collar
     OrderRequest buy1{b1, "MSFT", Side::BUY, OrderType::LIMIT, TimeInForce::GTC, 1.0, 150.0, 0.0, 0.0};
@@ -143,7 +137,7 @@ TEST_F(IbkrExecutionEngineTest, PlaceLimit) {
 }
 
 TEST_F(IbkrExecutionEngineTest, PlaceTrailingStop) {
-    std::string b1 = genId("ibkr_ts_buy_tsla");
+    std::string b1 = "ibkr_ts_buy_tsla";
 
     // 5% Trailing Stop
     OrderRequest buy1{b1, "TSLA", Side::BUY, OrderType::TRAILING_STOP, TimeInForce::GTC, 1.0, 0.0, 0.0, 0.0, 5.0};
@@ -159,7 +153,7 @@ TEST_F(IbkrExecutionEngineTest, PlaceTrailingStop) {
 }
 
 TEST_F(IbkrExecutionEngineTest, PlaceStopLimit) {
-    std::string s1 = genId("ibkr_stop_limit_sell_nvda");
+    std::string s1 = "ibkr_stop_limit_sell_nvda";
 
     OrderRequest sell1{s1, "NVDA", Side::SELL, OrderType::STOP_LIMIT, TimeInForce::GTC, 1.0, 100.0, 105.0, 0.0, 0.0};
     engine->placeOrder(sell1);

@@ -85,21 +85,23 @@ std::string IbkrExecutionEngine::placeOrder(const OrderRequest& request) {
         return "";
     }
 
+    std::string uniqueClientId = OrderIdUtils::generateClientOrderId(request.client_order_id);
+
     int ibkrOrderId = 0;
     {
         std::unique_lock<std::mutex> lock(idMutex_);
         idCv_.wait(lock, [this]{ return validIdReceived_; });
         
         ibkrOrderId = nextValidId_++;
-        clientRefToOrderId_[request.client_order_id] = ibkrOrderId;
-        orderIdToClientRef_[ibkrOrderId] = request.client_order_id;
+        clientRefToOrderId_[uniqueClientId] = ibkrOrderId;
+        orderIdToClientRef_[ibkrOrderId] = uniqueClientId;
     }
 
     Contract contract = createContract(request.symbol);
 
     ::Order order; 
     order.orderId = ibkrOrderId;
-    order.orderRef = request.client_order_id; 
+    order.orderRef = uniqueClientId; 
     
     order.action = (request.side == Side::BUY) ? "BUY" : "SELL";
     order.totalQuantity = DecimalFunctions::doubleToDecimal(request.quantity);
@@ -134,9 +136,11 @@ std::string IbkrExecutionEngine::placeOrder(const OrderRequest& request) {
 
     LOG_INFO("[IbkrExecutionEngine] Placing {} Order {} for {} {} (ID: {}, Ref: {})", 
              order.orderType, order.action, DecimalFunctions::decimalToDouble(order.totalQuantity), 
-             request.symbol, ibkrOrderId, request.client_order_id);
+             request.symbol, order.orderId, order.orderRef);
 
     infra_->getClient()->placeOrder(ibkrOrderId, contract, order);
+    // return request.client_order_id and not uniqueClientId because
+    // the unique exsist only in the execution level (for the exchange to get unique for sure)
     return request.client_order_id;
 }
 
@@ -218,7 +222,7 @@ void IbkrExecutionEngine::onOrderStatus(int orderId, const std::string& status, 
 
     ExecutionReport report;
     report.order_id = std::to_string(orderId);
-    report.client_order_id = clientRef;
+    report.client_order_id = OrderIdUtils::extractBaseClientId(clientRef);;
     report.status = parseIbkrStatus(status);
     
     report.cumulative_quantity = (filled == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(filled);
@@ -236,7 +240,7 @@ void IbkrExecutionEngine::onExecDetails(int reqId, const Contract& contract, con
 
     ExecutionReport report;
     report.order_id = std::to_string(execution.orderId);
-    report.client_order_id = execution.orderRef; 
+    report.client_order_id = OrderIdUtils::extractBaseClientId(execution.orderRef);; 
     report.symbol = contract.symbol;
     report.side = (execution.side == "BOT") ? Side::BUY : Side::SELL;
     report.status = OrderStatus::FILLED; 
@@ -301,7 +305,7 @@ void IbkrExecutionEngine::onOpenOrder(OrderId orderId, const Contract& contract,
     
     OrderState state; // This resolves safely to bot::OrderState
     state.order_id = std::to_string(orderId);
-    state.client_order_id = order.orderRef; 
+    state.client_order_id = OrderIdUtils::extractBaseClientId(order.orderRef);
     state.symbol = contract.symbol;
     
     state.side = (order.action == "BUY") ? Side::BUY : Side::SELL;
@@ -408,34 +412,48 @@ void IbkrExecutionEngine::onError(int reqId, int errorCode, const std::string& e
             LOG_WARN("[IbkrExecutionEngine] Order {} Rejected/Canceled: {}", reqId, errorString);
         }
         
-        std::string clientRef;
+        std::string baseClientId; // Store the already-stripped ID here
         OrderState updatedState;
         bool orderFound = false;
 
-        // 1. Update our internal state maps
+        // 1. Check our ID mapping first (This has the suffix, so we strip it)
+        {
+            std::lock_guard<std::mutex> lock(idMutex_);
+            auto it = orderIdToClientRef_.find(reqId);
+            if (it != orderIdToClientRef_.end()) {
+                baseClientId = OrderIdUtils::extractBaseClientId(it->second); 
+                orderFound = true;
+            }
+        }
+
+        // 2. Update openOrders_ map if it happens to be tracked there
         {
             std::lock_guard<std::mutex> lock(orderMutex_);
             auto it = openOrders_.find(reqId);
             if (it != openOrders_.end()) {
                 it->second.status = (errorCode == 201) ? OrderStatus::REJECTED : OrderStatus::CANCELED;
-                updatedState = it->second; // Copy state to fire the event
-                clientRef = it->second.client_order_id;
-                orderFound = true;
+                updatedState = it->second;
+                
+                // Fallback: if we only found it here, it is ALREADY stripped by onOpenOrder
+                if (!orderFound) {
+                    baseClientId = it->second.client_order_id; 
+                    orderFound = true;
+                }
             }
         }
 
-        // 2. If we tracked this order, explicitly notify the EventBus so the Orchestrator
-        //    knows the cycle failed and can react immediately instead of waiting for a timeout.
+        // 3. Fire the execution report back to the strategy
         if (orderFound && reportCb_) {
             ExecutionReport report;
             report.order_id = std::to_string(reqId);
-            report.client_order_id = clientRef;
-            report.symbol = updatedState.symbol;
+            report.client_order_id = baseClientId; // Use the cleanly resolved ID
+            
+            report.symbol = updatedState.symbol; 
             report.side = updatedState.side;
-            report.status = updatedState.status;
+            report.status = (errorCode == 201) ? OrderStatus::REJECTED : OrderStatus::CANCELED;
             
             report.last_quantity = 0.0;
-            report.cumulative_quantity = 0.0; // Standard for an outright rejection
+            report.cumulative_quantity = 0.0; 
             report.last_price = 0.0;
             report.avg_price = 0.0;
             

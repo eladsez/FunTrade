@@ -84,29 +84,9 @@ const char* AlpacaExecutionEngine::timeInForceToString(TimeInForce tif) {
     }
 }
 
-// Generates a unique, Alpaca-compliant client_order_id (max 48 chars).
-// Thread-safe and guarantees uniqueness even for sub-microsecond calls.
-inline std::string AlpacaExecutionEngine::generateClientOrderId(const std::string& prefix) {
-    static std::atomic<uint32_t> order_counter{0};
-    
-    std::string base_prefix = prefix.empty() ? "bot" : prefix;
-    
-    uint64_t timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-    uint32_t current_count = ++order_counter;
-    
-    std::string generated_id = base_prefix + "_" + std::to_string(timestamp) + "_" + std::to_string(current_count);
-    
-    // Alpaca restricts client_order_id to a maximum of 48 characters
-    if (generated_id.length() > 48) {
-        generated_id = generated_id.substr(0, 48);
-    }
-    
-    return generated_id;
-}
-
 std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
 
-    std::string clientOrderId = generateClientOrderId(request.client_order_id);
+    std::string clientOrderId = OrderIdUtils::generateClientOrderId(request.client_order_id);
     
     nlohmann::json orderPayload = {
         {"symbol", request.symbol},
