@@ -66,7 +66,6 @@ private:
     size_t history_idx_;
 
     double running_sum_;
-    double running_sum_sq_;
     bool is_warmed_up_;
 
     // --- Embedded EMA State ---

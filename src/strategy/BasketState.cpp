@@ -7,7 +7,7 @@ namespace bot {
 BasketState::BasketState(int window_size, const std::vector<std::string>& symbols, const std::vector<double>& weights)
     : window_size_(window_size), symbols_(symbols), weights_(weights),
         num_components_(symbols.size()), history_idx_(0),
-        running_sum_(0.0), running_sum_sq_(0.0), is_warmed_up_(false),
+        running_sum_(0.0), is_warmed_up_(false),
         ema_periods_(10), // Define the period length here
         ema_multiplier_(2.0 / (ema_periods_ + 1.0)), // Calculate dynamically
         is_ema_initialized_(false),
@@ -108,7 +108,6 @@ void BasketState::advanceWindow() {
     spread_history_[history_idx_] = closing_spread;
 
     running_sum_ += closing_spread - old_spread;
-    running_sum_sq_ += (closing_spread * closing_spread) - (old_spread * old_spread);
 
     history_idx_ = (history_idx_ + 1) % window_size_;
 }
@@ -119,7 +118,6 @@ void BasketState::feedHistoricalSpread(double spread) {
     spread_history_[history_idx_] = spread;
 
     running_sum_ += spread - old_spread;
-    running_sum_sq_ += (spread * spread) - (old_spread * old_spread);
 
     history_idx_ = (history_idx_ + 1) % window_size_;
 }
@@ -158,19 +156,25 @@ bool BasketState::arePricesSynchronized() const {
     return (max_ts - min_ts) <= max_allowed_staleness_ms_;
 }
 
-// Calculate Z-Score using the Smoothed Spread
 std::optional<double> BasketState::getZScore() const {
-    // Check synchronization, but it no longer mutates the EMA
     if (!is_warmed_up_ || !arePricesSynchronized() || !is_ema_initialized_) {
         return std::nullopt;
     }
 
+    // 1. Calculate the mean using the safe rolling sum
     double mean = running_sum_ / window_size_;
     
-    double variance = std::max(0.0, (running_sum_sq_ - (running_sum_ * running_sum_) / window_size_) / (window_size_ - 1));
+    // 2. Safely calculate variance via O(N) pass to prevent catastrophic cancellation
+    double sum_sq_diff = 0.0;
+    for (int i = 0; i < window_size_; ++i) {
+        double diff = spread_history_[i] - mean;
+        sum_sq_diff += diff * diff;
+    }
+    
+    double variance = sum_sq_diff / (window_size_ - 1); // Bessel's correction for sample variance
     double stddev = std::sqrt(variance);
 
-    if (stddev < 1e-6) return 0.0;
+    if (stddev < 1e-6) return 0.0; // Prevent division by zero
     
     // Use the safely smoothed spread
     return (current_smoothed_spread_ - mean) / stddev;
