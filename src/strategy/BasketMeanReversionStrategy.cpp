@@ -279,11 +279,12 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
             req.side = targets[i].side;
             req.type = OrderType::MARKET;
             req.quantity = targets[i].quantity;
+            req.tif = TimeInForce::IOC;
 
-            LOG_INFO("[{}] Routing: {} {} {:.4f} shares.", 
+            LOG_INFO("[{}] Routing: {} {} {:.4f} shares (IOC).", 
                      basket_id_, (req.side == Side::BUY ? "BUY" : "SELL"), symbols[i], req.quantity);
 
-            order_mngr_->submitOrder(req, std::chrono::milliseconds(10000));
+            order_mngr_->submitOrder(req);
         }
     }
 
@@ -351,7 +352,7 @@ void BasketMeanReversionStrategy::stop() {
 
         // current_cycle_ will be reset to nullptr by evaluateCompletedCycle() 
         // once all execution reports are received.
-        int timeout_ms = 10000; // Give Alpaca 10 seconds maximum to fill the orders
+        int timeout_ms = 10000; // Give exchange 10 seconds maximum to fill the orders
         int elapsed = 0;
         
         while (current_cycle_ != nullptr && elapsed < timeout_ms) {
@@ -362,7 +363,7 @@ void BasketMeanReversionStrategy::stop() {
         if (current_cycle_ != nullptr) {
             LOG_ERROR("[{}] Network timeout! Cycle did not resolve.", basket_id_);
         } else if (current_position_ != PositionState::FLAT) {
-            LOG_WARN("[{}] Shutdown cycle completed, but failed to reach FLAT state. Orphaned inventory may remain in Alpaca.", basket_id_);
+            LOG_WARN("[{}] Shutdown cycle completed, but failed to reach FLAT state. Orphaned inventory may remain in exchange.", basket_id_);
         } else {
             LOG_INFO("[{}] Successfully flattened all positions for shutdown.", basket_id_);
         }

@@ -11,40 +11,17 @@ OrderManager::OrderManager(std::shared_ptr<IEventBus> eventBus, std::shared_ptr<
     });
 
     syncWithExchange();
-
-    // Start the background monitor thread
-    isRunning_ = true;
-    monitorThread_ = std::thread(&OrderManager::monitorLoop, this);
-    LOG_INFO("[OrderManager] Active timeout monitor started.");
 }
 
-OrderManager::~OrderManager() {
-    isRunning_ = false;
-    cv_.notify_all();
-    if (monitorThread_.joinable()) {
-        monitorThread_.join();
-    }
-}
-
-// Intercepts the order, applies the fractional DAY workaround, and tracks the timeout
-std::string OrderManager::submitOrder(OrderRequest request, std::chrono::milliseconds timeout) {
-    // 1. Force TIF to DAY to bypass fractional share limitations on IOC
-    request.tif = TimeInForce::DAY;
-    
-    // 2. Submit to the exchange
+std::string OrderManager::submitOrder(OrderRequest request) {
+    // Submit directly to the exchange
     std::string clientId = engine_->placeOrder(request);
     
     if (!clientId.empty()) {
-        auto expiration = std::chrono::steady_clock::now() + timeout;
-        
         std::lock_guard<std::mutex> lock(mtx_);
         // Pre-allocate the state so we know about it immediately
         ordersByClientId_[clientId].client_order_id = clientId;
         ordersByClientId_[clientId].status = OrderStatus::NEW;
-        
-        // Track the expiration
-        expiriesByClientId_[clientId] = expiration;
-        cv_.notify_one(); // Wake up the monitor thread
     }
     
     return clientId;
@@ -88,63 +65,6 @@ void OrderManager::onExecution(const ExecutionReport& report) {
     exchangeToClientId_[report.order_id] = clientOrderId;
     
     LOG_DEBUG("[OrderManager] Updated Order: ClientID={}, Status={}", clientOrderId, (int)report.status);
-    
-    // If the order reached a terminal state, stop tracking it for timeouts
-    if (report.status == OrderStatus::FILLED || 
-        report.status == OrderStatus::CANCELED || 
-        report.status == OrderStatus::REJECTED || 
-        report.status == OrderStatus::EXPIRED) {
-        
-        expiriesByClientId_.erase(clientOrderId);
-    }
-}
-
-void OrderManager::monitorLoop() {
-    while (isRunning_) {
-        std::unique_lock<std::mutex> lock(mtx_);
-        
-        if (expiriesByClientId_.empty()) {
-            // Nothing to track, sleep until notified
-            cv_.wait(lock, [this] { return !isRunning_ || !expiriesByClientId_.empty(); });
-        } else {
-            // Find the closest expiration time
-            auto now = std::chrono::steady_clock::now();
-            auto next_expiry = expiriesByClientId_.begin()->second;
-            
-            for (const auto& [cid, exp] : expiriesByClientId_) {
-                if (exp < next_expiry) {
-                    next_expiry = exp;
-                }
-            }
-            
-            // Sleep until the closest expiration time
-            if (now < next_expiry) {
-                cv_.wait_until(lock, next_expiry, [this] { return !isRunning_; });
-            }
-            
-            // We woke up (either timed out or notified to shut down). Re-calculate 'now'.
-            if (!isRunning_) break;
-            now = std::chrono::steady_clock::now();
-            
-            // Scan for and cancel expired orders
-            for (auto it = expiriesByClientId_.begin(); it != expiriesByClientId_.end(); ) {
-                if (now >= it->second) {
-                    std::string cid = it->first;
-                    auto orderIt = ordersByClientId_.find(cid);
-                    
-                    if (orderIt != ordersByClientId_.end() && !orderIt->second.order_id.empty()) {
-                        LOG_WARN("[OrderManager] Order {} timed out! Sending CANCEL.", cid);
-                        engine_->cancelOrder(orderIt->second.order_id);
-                    }
-                    
-                    // Remove from tracking so we don't spam cancels
-                    it = expiriesByClientId_.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
-    }
 }
 
 void OrderManager::syncWithExchange() {
