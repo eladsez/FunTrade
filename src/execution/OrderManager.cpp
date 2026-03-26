@@ -20,8 +20,14 @@ std::string OrderManager::submitOrder(OrderRequest request) {
     if (!clientId.empty()) {
         std::lock_guard<std::mutex> lock(mtx_);
         // Pre-allocate the state so we know about it immediately
-        ordersByClientId_[clientId].client_order_id = clientId;
-        ordersByClientId_[clientId].status = OrderStatus::NEW;
+        OrderState& state = ordersByClientId_[clientId];
+        state.client_order_id = clientId;
+        state.symbol = request.symbol;
+        state.side = request.side;
+        state.type = request.type;
+        state.quantity = request.quantity;
+        state.filled_quantity = 0.0;
+        state.status = OrderStatus::NEW;
     }
     
     return clientId;
@@ -56,15 +62,27 @@ void OrderManager::onExecution(const ExecutionReport& report) {
     }
 
     OrderState& state = ordersByClientId_[clientOrderId];
+    
     state.order_id = report.order_id;
     state.client_order_id = clientOrderId;
-    state.symbol = report.symbol;
-    state.side = report.side;
+    
+    // Only set symbol and side if they are empty (they should be populated from submitOrder)
+    if (state.symbol.empty() && !report.symbol.empty()) state.symbol = report.symbol;
+    
     state.status = report.status;
+    
+    // Safely update the cumulative filled quantity and average price
+    if (report.cumulative_quantity > 0.0) {
+        state.filled_quantity = report.cumulative_quantity;
+    }
+    if (report.avg_price > 0.0) {
+        state.avg_price = report.avg_price;
+    }
     
     exchangeToClientId_[report.order_id] = clientOrderId;
     
-    LOG_DEBUG("[OrderManager] Updated Order: ClientID={}, Status={}", clientOrderId, (int)report.status);
+    LOG_DEBUG("[OrderManager] Updated Order: ClientID={}, Status={}, TargetQty={:.4f}, Filled={:.4f}", 
+              clientOrderId, (int)report.status, state.quantity, state.filled_quantity);
 }
 
 void OrderManager::syncWithExchange() {

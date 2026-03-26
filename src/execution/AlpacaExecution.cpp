@@ -278,17 +278,19 @@ std::vector<OrderState> AlpacaExecutionEngine::getOpenOrders() {
             std::string qtyStr = oJson["qty"].is_null() ? "0" : oJson.value("qty", "0");
             std::string priceStr = oJson["limit_price"].is_null() ? "0" : oJson.value("limit_price", "0");
 
-            // Construct directly into the vector's memory
-            ret.emplace_back(OrderState{
-                oJson.value("id", ""),
-                oJson["client_order_id"].is_null() ? "" : oJson.value("client_order_id", ""),
-                oJson.value("symbol", ""),
-                side,
-                type,
-                std::stod(qtyStr),
-                std::stod(priceStr),
-                status
-            });
+            OrderState state;
+            state.order_id = oJson.value("id", "");
+            state.client_order_id = oJson["client_order_id"].is_null() ? "" : oJson.value("client_order_id", "");
+            state.symbol = oJson.value("symbol", "");
+            state.side = side;
+            state.type = type;
+            state.price = std::stod(priceStr);
+            state.quantity = std::stod(qtyStr);
+            state.filled_quantity = 0.0; // Initialize tracking fields
+            state.avg_price = 0.0;
+            state.status = status;
+
+            ret.push_back(state);
         }
             
     } catch (const std::exception& e) {

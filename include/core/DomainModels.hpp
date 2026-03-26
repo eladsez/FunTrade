@@ -168,9 +168,12 @@ struct OrderState {
     std::string symbol;
     Side side;
     OrderType type;
-    double quantity;
-    double price;
     OrderStatus status;
+
+    double price = 0.0;              // Requested limit/stop price
+    double quantity = 0.0;           // Target total quantity
+    double filled_quantity = 0.0;    // Cumulative quantity filled so far
+    double avg_price = 0.0;          // Average execution price
 };
 
 namespace OrderIdUtils {
