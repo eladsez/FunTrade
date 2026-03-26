@@ -77,6 +77,14 @@ void IbkrInfra::tickByTickMidPoint(int reqId, time_t time, double midPoint) {
     if (tickByTickMidPointCb_) tickByTickMidPointCb_(reqId, time, midPoint);
 }
 
+void IbkrInfra::tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& attribs) {
+    if (tickPriceCb_) tickPriceCb_(tickerId, field, price, attribs);
+}
+
+void IbkrInfra::tickSize(TickerId tickerId, TickType field, Decimal size) {
+    if (tickSizeCb_) tickSizeCb_(tickerId, field, size);
+}
+
 void IbkrInfra::historicalData(TickerId reqId, const Bar& bar) {
     if (histDataCb_) histDataCb_(reqId, bar);
 }

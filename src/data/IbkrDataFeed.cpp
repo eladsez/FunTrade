@@ -7,8 +7,8 @@
 
 namespace bot {
 
-IbkrDataFeed::IbkrDataFeed(std::shared_ptr<IbkrInfra> infra)
-    : infra_(std::move(infra)) {}
+IbkrDataFeed::IbkrDataFeed(std::shared_ptr<IbkrInfra> infra, bool useTickByTick) 
+    : infra_(std::move(infra)), useTickByTick_(useTickByTick) {}
 
 bool IbkrDataFeed::connectToInfra() {
     LOG_INFO("[IbkrDataFeed] Hooking up tick-by-tick callbacks to Infra...");
@@ -31,6 +31,14 @@ bool IbkrDataFeed::connectToInfra() {
         }
     );
 
+    infra_->setTickPriceCallback([this](TickerId tickerId, TickType field, double price, const TickAttrib& attribs) {
+        this->onTickPrice(tickerId, field, price, attribs);
+    });
+
+    infra_->setTickSizeCallback([this](TickerId tickerId, TickType field, Decimal size) {
+        this->onTickSize(tickerId, field, size);
+    });
+
     infra_->setHistDataCallback(
         [this](TickerId reqId, const Bar& bar) {
             this->onHistoricalData(reqId, bar);
@@ -51,69 +59,78 @@ void IbkrDataFeed::disconnectFromInfra() {
 }
 
 void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
-    if (!infra_->getClient() || !infra_->getClient()->isConnected()) {
-        LOG_ERROR("[IbkrDataFeed] Cannot subscribe. Not connected to TWS.");
-        return;
-    }
+    if (!infra_->getClient() || !infra_->getClient()->isConnected()) return;
 
-    int bidAskId, allLastId, midPointId;
+    SymbolSubscriptionIds ids;
     {
         std::lock_guard<std::mutex> lock(dataMutex_);
-        if (symbolToIds_.find(symbol) != symbolToIds_.end()) return; // Already subscribed
+        if (activeSubscriptions_.count(symbol)) return;
 
-        // Allocate two unique IDs for this symbol
-        bidAskId = nextTickerId_++;
-        allLastId = nextTickerId_++;
-        midPointId = nextTickerId_++;
-
-        symbolToIds_[symbol] = {bidAskId, allLastId, midPointId};
-        idToSymbol_[bidAskId] = symbol;
-        idToSymbol_[allLastId] = symbol;
-        idToSymbol_[midPointId] = symbol;
+        if (useTickByTick_) {
+            ids.tbtBidAskId = nextTickerId_++;
+            ids.tbtAllLastId = nextTickerId_++;
+            ids.tbtMidPointId = nextTickerId_++;
+            idToSymbol_[ids.tbtBidAskId] = symbol;
+            idToSymbol_[ids.tbtAllLastId] = symbol;
+            idToSymbol_[ids.tbtMidPointId] = symbol;
+        } else {
+            ids.mktDataId = nextTickerId_++;
+            idToSymbol_[ids.mktDataId] = symbol;
+            mktDataCache_[ids.mktDataId] = TopOfBookCache();
+        }
+        
+        activeSubscriptions_[symbol] = ids;
     }
 
     Contract contract = createContract(symbol);
 
-    LOG_INFO("[IbkrDataFeed] Requesting Tick-By-Tick data for {}", symbol);
-    
-    // Request Quotes (0 = numberOfTicks (not used for real-time), false = ignoreSize)
-    infra_->getClient()->reqTickByTickData(bidAskId, contract, "BidAsk", 0, false);
-    
-    // Request Trades (AllLast includes unreported/late trades, Last is strictly regular)
-    infra_->getClient()->reqTickByTickData(allLastId, contract, "AllLast", 0, false);
-
-    // Request MidPoint
-    infra_->getClient()->reqTickByTickData(midPointId, contract, "MidPoint", 0, false);
+    if (useTickByTick_) {
+        LOG_INFO("[IbkrDataFeed] Requesting TICK-BY-TICK for {}", symbol);
+        infra_->getClient()->reqTickByTickData(ids.tbtBidAskId, contract, "BidAsk", 0, false);
+        infra_->getClient()->reqTickByTickData(ids.tbtAllLastId, contract, "AllLast", 0, false);
+        infra_->getClient()->reqTickByTickData(ids.tbtMidPointId, contract, "MidPoint", 0, false);
+    } else {
+        LOG_INFO("[IbkrDataFeed] Requesting MKT DATA (L1) for {}", symbol);
+        infra_->getClient()->reqMktData(ids.mktDataId, contract, "", false, false, TagValueListSPtr());
+    }
 }
 
 void IbkrDataFeed::unsubscribeFromSymbol(const std::string& symbol) {
-    std::lock_guard<std::mutex> lock(dataMutex_);
-    auto it = symbolToIds_.find(symbol);
-    
-    if (it != symbolToIds_.end()) {
-        // 1. Cancel all three streams
-        if (infra_->getClient() && infra_->getClient()->isConnected()) {
-            infra_->getClient()->cancelTickByTickData(it->second.bidAskId);
-            infra_->getClient()->cancelTickByTickData(it->second.allLastId);
-            infra_->getClient()->cancelTickByTickData(it->second.midPointId);
+    SymbolSubscriptionIds ids;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex_);
+        auto it = activeSubscriptions_.find(symbol);
+        if (it == activeSubscriptions_.end()) return;
+
+        ids = it->second;
+        
+        // Clean maps
+        if (useTickByTick_) {
+            idToSymbol_.erase(ids.tbtBidAskId);
+            idToSymbol_.erase(ids.tbtAllLastId);
+            idToSymbol_.erase(ids.tbtMidPointId);
+        } else {
+            idToSymbol_.erase(ids.mktDataId);
+            mktDataCache_.erase(ids.mktDataId);
         }
+        activeSubscriptions_.erase(it);
+    }
 
-        // 2. Clean up the reverse lookup maps to prevent leaks
-        idToSymbol_.erase(it->second.bidAskId);
-        idToSymbol_.erase(it->second.allLastId);
-        idToSymbol_.erase(it->second.midPointId);
-
-        // 3. Remove from the main tracking map
-        symbolToIds_.erase(it);
-
-        LOG_INFO("[IbkrDataFeed] Unsubscribed from Tick-By-Tick data for {}", symbol);
+    if (infra_->getClient() && infra_->getClient()->isConnected()) {
+        if (useTickByTick_) {
+            infra_->getClient()->cancelTickByTickData(ids.tbtBidAskId);
+            infra_->getClient()->cancelTickByTickData(ids.tbtAllLastId);
+            infra_->getClient()->cancelTickByTickData(ids.tbtMidPointId);
+        } else {
+            infra_->getClient()->cancelMktData(ids.mktDataId);
+        }
     }
 }
 
 std::vector<std::string> IbkrDataFeed::getActiveSubscriptions() const {
     std::lock_guard<std::mutex> lock(dataMutex_);
     std::vector<std::string> active;
-    for (const auto& pair : symbolToIds_) {
+    for (const auto& pair : activeSubscriptions_) {
         active.push_back(pair.first);
     }
     return active;
@@ -175,6 +192,110 @@ void IbkrDataFeed::onTickByTickMidPoint(int reqId, time_t time, double midPoint)
     if (tick.mid_price > 0 && tickCallback_) {
         tickCallback_(tick);
     }
+}
+
+void IbkrDataFeed::onTickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& /*attribs*/) {
+    std::string symbol = getSymbolFromId(tickerId);
+    if (symbol.empty() || price <= 0.0) return;
+
+    // We will construct the events inside the lock, but emit them OUTSIDE the lock
+    bool emitTrade = false;
+    bool emitMidPoint = false;
+    bool emitQuote = false;
+    TradeTick trade;
+    MidPointTick midTick;
+    QuoteTick quoteTick;
+
+    uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+
+    {
+        std::lock_guard<std::mutex> lock(dataMutex_);
+        auto& cache = mktDataCache_[tickerId];
+        bool quoteChanged = false;
+
+        if (field == TickType::BID) {
+            cache.bid_price = price;
+            quoteChanged = true;
+        } else if (field == TickType::ASK) {
+            cache.ask_price = price;
+            quoteChanged = true;
+        } else if (field == TickType::LAST) {
+            trade.symbol = symbol;
+            trade.price = price;
+            trade.timestamp_ms = now_ms;
+            emitTrade = true;
+        }
+
+        if (quoteChanged) {
+            // 1. Can we emit a MidPoint?
+            if (cache.isValidMidPoint()) {
+                midTick.symbol = symbol;
+                midTick.mid_price = (cache.bid_price + cache.ask_price) / 2.0;
+                midTick.timestamp_ms = now_ms;
+                emitMidPoint = true;
+            }
+
+            // 2. Can we emit a full Quote?
+            if (cache.isValidQuote()) {
+                quoteTick.symbol = symbol;
+                quoteTick.bid_price = cache.bid_price;
+                quoteTick.ask_price = cache.ask_price;
+                quoteTick.bid_size = DecimalFunctions::decimalToDouble(cache.bid_size);
+                quoteTick.ask_size = DecimalFunctions::decimalToDouble(cache.ask_size);
+                quoteTick.timestamp_ms = now_ms;
+                emitQuote = true;
+            }
+        }
+    }
+
+    // Safely emit to the eventBus without holding the mutex
+    if (emitTrade && tickCallback_) tickCallback_(trade);
+    if (emitMidPoint && tickCallback_) tickCallback_(midTick);
+    if (emitQuote && tickCallback_) tickCallback_(quoteTick);
+}
+
+void IbkrDataFeed::onTickSize(TickerId tickerId, TickType field, Decimal size) {
+    std::string symbol = getSymbolFromId(tickerId);
+    if (symbol.empty()) return;
+
+    bool emitQuote = false;
+    QuoteTick quoteTick;
+    {
+        std::lock_guard<std::mutex> lock(dataMutex_);
+        auto& cache = mktDataCache_[tickerId];
+        bool sizeChanged = false;
+
+        if (field == TickType::BID_SIZE) {
+            cache.bid_size = size;
+            sizeChanged = true;
+        } else if (field == TickType::ASK_SIZE) {
+            cache.ask_size = size;
+            sizeChanged = true;
+        }
+        
+        // If the size changed, and we have a valid 2-sided market, emit the new Quote state
+        if (sizeChanged && cache.isValidQuote()) {
+            quoteTick.symbol = symbol;
+            quoteTick.bid_price = cache.bid_price;
+            quoteTick.ask_price = cache.ask_price;
+            quoteTick.bid_size = (cache.bid_size == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(cache.bid_size);
+            quoteTick.ask_size = (cache.ask_size == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(cache.ask_size);
+            quoteTick.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            
+            emitQuote = true;
+        }
+    }
+
+    // Safely emit outside the lock
+    if (emitQuote && tickCallback_) {
+        tickCallback_(quoteTick);
+    }
+
+    // Note: We don't recalculate the MidPoint here because the midpoint *price* // hasn't changed, only the size at those levels. 
+    // If your strategy ever evolves to use Volume Weighted Midprice (VWM), 
+    // you would trigger the calculation here as well!
 }
 
 // =========================================================================

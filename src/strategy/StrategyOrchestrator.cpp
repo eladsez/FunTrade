@@ -37,11 +37,11 @@ void StrategyOrchestrator::loadStrategies() {
     LOG_INFO("[Orchestrator] Total Available Cash: ${}. Allocating {:.2f}% -> ${} per strategy.", 
              availableCash, percent_allocation_per_strategy_ * 100.0, capital_per_strategy);
 
-    std::vector<std::string> configs = {"amzn_cmg_ebay.json"};
-                                        // "amzn_cmg_expe.json",
-                                        // "aig_ben_ma.json",
-                                        // "mco_mrsh_syf.json",
-                                        // "duk_pcg_ppl.json"};
+    std::vector<std::string> configs = {"amzn_cmg_ebay.json",
+                                        "amzn_cmg_expe.json",
+                                        "aig_ben_ma.json",
+                                        "mco_mrsh_syf.json",
+                                        "duk_pcg_ppl.json"};
     std::for_each(configs.begin(), configs.end(), [&](std::string& s) { s.insert(0, config_directory_ + "/"); });
     
     // Iterate over the directory and find all JSON files

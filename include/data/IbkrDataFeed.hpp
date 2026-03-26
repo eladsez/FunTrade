@@ -14,12 +14,13 @@
 #include <functional>
 #include <future>
 #include <chrono>
+#include <Decimal.h>
 
 namespace bot {
 
 class IbkrDataFeed : public IDataFeed {
 public:
-    IbkrDataFeed(std::shared_ptr<IbkrInfra> infra);
+    IbkrDataFeed(std::shared_ptr<IbkrInfra> infra, bool useTickByTick = false);
     ~IbkrDataFeed() override = default;
 
     bool connectToInfra() override;
@@ -36,10 +37,14 @@ public:
     void setMarketTickCallback(std::function<void(const MarketEvent&)> callback) override;
 
 private:
-    // The new atomic callbacks
+    // Tick-By-Tick Callbacks
     void onTickByTickBidAsk(int reqId, time_t time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, const TickAttribBidAsk& tickAttrib);
     void onTickByTickAllLast(int reqId, int tickType, time_t time, double price, Decimal size, const TickAttribLast& tickAttrib, const std::string& exchange, const std::string& specialConditions);
     void onTickByTickMidPoint(int reqId, time_t time, double midPoint);
+
+    // Top-Of-Book (L1) Callbacks
+    void onTickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& attribs);
+    void onTickSize(TickerId tickerId, TickType field, Decimal size);
 
     void onHistoricalData(TickerId reqId, const Bar& bar);
     void onHistoricalDataEnd(int reqId, const std::string& startDateStr, const std::string& endDateStr);
@@ -60,15 +65,39 @@ private:
     // ID Management
     std::atomic<int> nextTickerId_{2000}; 
     std::atomic<int> nextHistReqId_{4000}; // Separate ID space for historical requests
+    bool useTickByTick_;
 
-    // Because TickByTick requires separate IDs for each
-    struct StreamIds {
-        int bidAskId;
-        int allLastId;
-        int midPointId;
+    // Tracks the specific reqIds used for a symbol depending on the mode
+    struct SymbolSubscriptionIds {
+        int mktDataId = -1;
+        int tbtBidAskId = -1;
+        int tbtAllLastId = -1;
+        int tbtMidPointId = -1;
+    };
+
+    struct TopOfBookCache {
+        double bid_price = 0.0;
+        double ask_price = 0.0;
+        Decimal bid_size = UNSET_DECIMAL; // Default to UNSET
+        Decimal ask_size = UNSET_DECIMAL; // Default to UNSET
+        
+        // For Mean Reversion: We only need prices to calculate the mid
+        bool isValidMidPoint() const {
+            return bid_price > 0.0 && ask_price > 0.0 && bid_price < ask_price;
+        }
+
+        // For full Order Book / Liquidity strategies: We need prices AND valid sizes
+        bool isValidQuote() const {
+            if (!isValidMidPoint()) return false;
+            if (bid_size == UNSET_DECIMAL || ask_size == UNSET_DECIMAL) return false;
+            
+            return DecimalFunctions::decimalToDouble(bid_size) > 0.0 && 
+                DecimalFunctions::decimalToDouble(ask_size) > 0.0;
+        }
     };
     
-    std::unordered_map<std::string, StreamIds> symbolToIds_;
+    std::unordered_map<std::string, SymbolSubscriptionIds> activeSubscriptions_;
+    std::unordered_map<int, TopOfBookCache> mktDataCache_;
     std::unordered_map<int, std::string> idToSymbol_; // Maps any ID back to its symbol
     std::unordered_map<int, std::promise<std::vector<HistoricalBar>>> histPromises_;
     std::unordered_map<int, std::vector<HistoricalBar>> histDataBuffer_;
