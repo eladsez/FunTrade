@@ -378,7 +378,6 @@ void BasketMeanReversionStrategy::stop() {
 }
 
 inline void BasketMeanReversionStrategy::logZScoreThrottled(double z_score, uint64_t timestamp) {
-    static uint64_t last_z_log_time_ms_ = 0;
     if (timestamp - last_z_log_time_ms_ >= 5000) {
         LOG_INFO("[{}] Current Z-Score: {:.4f}", basket_id_, z_score);
         last_z_log_time_ms_ = timestamp;

@@ -68,6 +68,8 @@ private:
     std::string basket_id_;
     
     double capital_allocation_;
+
+    uint64_t last_z_log_time_ms_ = 0;
 };
 
 } // namespace bot

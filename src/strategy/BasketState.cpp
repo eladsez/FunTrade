@@ -35,8 +35,13 @@ void BasketState::updatePrice(const std::string& symbol, double price, uint64_t 
             current_prices_[i] = price;
             last_timestamps_[i] = timestamp;
             
-            // --- Update EMA here, immediately after recording the tick ---
-            if (arePricesSynchronized()) {
+            /*
+             * --- Update EMA here, immediately after recording the tick ---
+             * It is better to keep updating the internal EMA even if one stock is slightly lagging,
+             * but block the trading execution if the data is stale (in getZScore).
+             * 
+            */
+            if (hasAllPrices()) {
                 double raw_spread = calculateRawSpread();
                 updateSpreadEma(raw_spread);
             }
