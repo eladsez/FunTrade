@@ -67,7 +67,8 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
         return;
     }
 
-    total_trades_++;
+    if (report.status == OrderStatus::FILLED)
+        total_trades_++;
 
     // the point of the virtualkey here is to be able to track per strategy positions
     // when there is more the one strategy sharing the same symbol 
