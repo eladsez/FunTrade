@@ -17,12 +17,12 @@ void MarketEventPrinter::start() {
 }
 
 std::string takerSideToString(Side side) {
-        switch (side) {
-            case Side::BUY: return "BUY";
-            case Side::SELL: return "SELL";
-            default: return "UNKNOWN";
-        }
+    switch (side) {
+        case Side::BUY: return "BUY";
+        case Side::SELL: return "SELL";
+        default: return "UNKNOWN";
     }
+}
 
 std::string tradeConditionToString(TradeCondition cond) {
     switch (cond) {

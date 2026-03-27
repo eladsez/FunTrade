@@ -1,4 +1,5 @@
 #include <strategy/BasketMeanReversionStrategy.hpp>
+#include <utils/TimeUtils.hpp>
 #include <core/Logger.hpp>
 #include <fstream>
 #include <iostream>
@@ -72,22 +73,6 @@ void BasketMeanReversionStrategy::loadConfig() {
     basket_state_ = std::make_unique<BasketState>(window_size, symbols, weights);
 }
 
-// Helper function to generate RFC3339 / ISO8601 timestamps
-static std::string formatTimePoint(std::chrono::system_clock::time_point tp) {
-    auto time_t_val = std::chrono::system_clock::to_time_t(tp);
-    std::tm tm_val;
-    
-    // Thread-safe GMT time conversion
-#if defined(_WIN32)
-    gmtime_s(&tm_val, &time_t_val);
-#else
-    gmtime_r(&time_t_val, &tm_val);
-#endif
-
-    std::ostringstream oss;
-    oss << std::put_time(&tm_val, "%Y-%m-%dT%H:%M:%SZ");
-    return oss.str();
-}
 
 std::map<uint64_t, std::vector<double>> BasketMeanReversionStrategy::alignHistoricalBars(
     const std::vector<std::vector<HistoricalBar>>& all_bars, 
@@ -112,8 +97,8 @@ void BasketMeanReversionStrategy::warmUp() {
     int calendar_days_back = basket_state_->getWindowSize() * 2; 
     auto start = now - std::chrono::hours(24 * calendar_days_back);
 
-    std::string end_time = formatTimePoint(now);
-    std::string start_time = formatTimePoint(start);
+    std::string end_time = utils::formatTimePoint(now);
+    std::string start_time = utils::formatTimePoint(start);
 
     size_t num_components = basket_state_->getNumComponents();
     const auto& symbols = basket_state_->getSymbols();

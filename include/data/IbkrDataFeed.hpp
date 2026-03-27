@@ -15,13 +15,44 @@
 #include <future>
 #include <chrono>
 #include <Decimal.h>
+#include <thread>
+#include <condition_variable>
 
 namespace bot {
+
+// Tracks the specific reqIds used for a symbol depending on the mode
+struct SymbolSubscriptionIds {
+    int mktDataId = -1;
+    int tbtBidAskId = -1;
+    int tbtAllLastId = -1;
+    int tbtMidPointId = -1;
+};
+
+struct TopOfBookCache {
+    double bid_price = 0.0;
+    double ask_price = 0.0;
+    Decimal bid_size = UNSET_DECIMAL; // Default to UNSET
+    Decimal ask_size = UNSET_DECIMAL; // Default to UNSET
+    
+    // For Mean Reversion: We only need prices to calculate the mid
+    bool isValidMidPoint() const {
+        return bid_price > 0.0 && ask_price > 0.0 && bid_price < ask_price;
+    }
+
+    // For full Order Book / Liquidity strategies: We need prices AND valid sizes
+    bool isValidQuote() const {
+        if (!isValidMidPoint()) return false;
+        if (bid_size == UNSET_DECIMAL || ask_size == UNSET_DECIMAL) return false;
+        
+        return DecimalFunctions::decimalToDouble(bid_size) > 0.0 && 
+            DecimalFunctions::decimalToDouble(ask_size) > 0.0;
+    }
+};
 
 class IbkrDataFeed : public IDataFeed {
 public:
     IbkrDataFeed(std::shared_ptr<IbkrInfra> infra, bool useTickByTick = false);
-    ~IbkrDataFeed() override = default;
+    ~IbkrDataFeed() override;
 
     bool connectToInfra() override;
     void disconnectFromInfra() override;
@@ -55,6 +86,10 @@ private:
     std::string getSymbolFromId(int reqId);
     Contract createContract(const std::string& symbol);
 
+    void eodTaskLoop();
+    void processEodBars();
+    long calcSecondsUntilNextEod(long current_ibkr_utc_time);
+
     std::shared_ptr<IbkrInfra> infra_;
     
     std::function<void(const MarketEvent&)> tickCallback_;
@@ -66,35 +101,6 @@ private:
     std::atomic<int> nextTickerId_{2000}; 
     std::atomic<int> nextHistReqId_{4000}; // Separate ID space for historical requests
     bool useTickByTick_;
-
-    // Tracks the specific reqIds used for a symbol depending on the mode
-    struct SymbolSubscriptionIds {
-        int mktDataId = -1;
-        int tbtBidAskId = -1;
-        int tbtAllLastId = -1;
-        int tbtMidPointId = -1;
-    };
-
-    struct TopOfBookCache {
-        double bid_price = 0.0;
-        double ask_price = 0.0;
-        Decimal bid_size = UNSET_DECIMAL; // Default to UNSET
-        Decimal ask_size = UNSET_DECIMAL; // Default to UNSET
-        
-        // For Mean Reversion: We only need prices to calculate the mid
-        bool isValidMidPoint() const {
-            return bid_price > 0.0 && ask_price > 0.0 && bid_price < ask_price;
-        }
-
-        // For full Order Book / Liquidity strategies: We need prices AND valid sizes
-        bool isValidQuote() const {
-            if (!isValidMidPoint()) return false;
-            if (bid_size == UNSET_DECIMAL || ask_size == UNSET_DECIMAL) return false;
-            
-            return DecimalFunctions::decimalToDouble(bid_size) > 0.0 && 
-                DecimalFunctions::decimalToDouble(ask_size) > 0.0;
-        }
-    };
     
     std::unordered_map<std::string, SymbolSubscriptionIds> activeSubscriptions_;
     std::unordered_map<int, TopOfBookCache> mktDataCache_;
@@ -102,6 +108,13 @@ private:
     std::unordered_map<int, std::promise<std::vector<HistoricalBar>>> histPromises_;
     std::unordered_map<int, std::vector<HistoricalBar>> histDataBuffer_;
     std::unordered_map<int, std::string> histIdToSymbol_;
+
+    // eod bars
+    std::thread eodThread_;
+    std::mutex eodMutex_;
+    std::condition_variable eodCv_;
+    std::atomic<bool> stopEodThread_{false};
+    std::atomic<long> ibkrCurrentTime_{0};
 };
 
 } // namespace bot

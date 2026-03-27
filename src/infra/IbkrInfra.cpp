@@ -147,6 +147,10 @@ void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string
     }
 }
 
+void IbkrInfra::currentTime(long time) {
+    if (currentTimeCb_) currentTimeCb_(time);
+}
+
 void IbkrInfra::connectionClosed() {
     LOG_WARN("[IbkrInfra] Connection closed by TWS.");
     isRunning_ = false;

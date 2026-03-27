@@ -1,5 +1,6 @@
 #include <data/IbkrDataFeed.hpp>
 #include <core/Logger.hpp>
+#include <utils/TimeUtils.hpp>
 #include <Decimal.h>
 #include <iomanip>
 #include <sstream>
@@ -51,11 +52,37 @@ bool IbkrDataFeed::connectToInfra() {
         }
     );
 
+    infra_->setCurrentTimeCallback([this](long time) {
+        ibkrCurrentTime_.store(time);
+        eodCv_.notify_one(); // Wake up the thread if it's waiting for the initial sync
+    });
+
+    stopEodThread_ = false;
+    eodThread_ = std::thread(&IbkrDataFeed::eodTaskLoop, this);
+
     return true;
 }
 
 void IbkrDataFeed::disconnectFromInfra() {
+    // 1. Lock the mutex to ensure the thread isn't evaluating the condition
+    {
+        std::lock_guard<std::mutex> lock(eodMutex_);
+        stopEodThread_ = true;
+    }
+    
+    // 2. Wake up the sleeping thread
+    eodCv_.notify_all();
+    
+    // 3. Wait for it to cleanly exit its loop
+    if (eodThread_.joinable()) {
+        eodThread_.join();
+    }
+
     LOG_INFO("[IbkrDataFeed] Disconnecting DataFeed from Infra.");
+}
+
+IbkrDataFeed::~IbkrDataFeed() {
+    disconnectFromInfra();
 }
 
 void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
@@ -409,6 +436,104 @@ void IbkrDataFeed::onHistoricalDataEnd(int reqId, const std::string& startDateSt
         histDataBuffer_.erase(reqId);
         histIdToSymbol_.erase(reqId);
     }
+}
+
+void IbkrDataFeed::eodTaskLoop() {
+    LOG_INFO("[IbkrDataFeed] EOD Timer thread started.");
+
+    while (!stopEodThread_) {
+        // 1. Request the official time from IBKR
+        ibkrCurrentTime_.store(0);
+        if (infra_->getClient() && infra_->getClient()->isConnected()) {
+            infra_->getClient()->reqCurrentTime();
+        }
+
+        // 2. Wait until the callback populates the time (with a small timeout for safety)
+        std::unique_lock<std::mutex> lock(eodMutex_);
+        eodCv_.wait_for(lock, std::chrono::seconds(5), [this] { 
+            return ibkrCurrentTime_.load() > 0 || stopEodThread_; 
+        });
+
+        if (stopEodThread_) break;
+
+        long current_utc = ibkrCurrentTime_.load();
+        if (current_utc == 0) {
+            // If IBKR didn't respond, sleep for a minute and retry
+            eodCv_.wait_for(lock, std::chrono::minutes(1));
+            continue;
+        }
+
+        // 3. Calculate seconds to sleep
+        long seconds_to_sleep = calcSecondsUntilNextEod(current_utc);
+        LOG_DEBUG("[IbkrDataFeed] Synchronized with exchange clock. Sleeping for {} seconds until EOD fetch.", seconds_to_sleep);
+
+        // 4. Sleep using the monotonic clock condition variable
+        bool interrupted = eodCv_.wait_for(lock, std::chrono::seconds(seconds_to_sleep), [this] {
+            return stopEodThread_.load();
+        });
+
+        if (interrupted) break; // System is shutting down
+
+        // 5. Wake up! The market has closed. Fetch the data.
+        processEodBars();
+    }
+
+    LOG_INFO("[IbkrDataFeed] EOD Timer thread stopped.");
+}
+
+void IbkrDataFeed::processEodBars() {
+    auto active_subs = getActiveSubscriptions();
+    LOG_DEBUG("[IbkrDataFeed] Firing EOD Historical Fetch for {} symbols...", active_subs.size());
+
+    std::string end_time_str = utils::formatTimePoint(std::chrono::system_clock::now());
+
+    for (const auto& sym : active_subs) {
+        // Request "1 Day" duration ending today to get the official EOD close
+        auto bars = fetchHistoricalBars(sym, end_time_str, end_time_str, "1Day");
+        
+        if (!bars.empty() && tickCallback_) {
+            BarUpdate bar_event;
+            bar_event.symbol = sym;
+            bar_event.open = bars.back().open;
+            bar_event.high = bars.back().high;
+            bar_event.low = bars.back().low;
+            bar_event.close = bars.back().close;
+            bar_event.volume = bars.back().volume;
+            bar_event.timestamp_ms = bars.back().timestamp_ms;
+
+            LOG_DEBUG("[IbkrDataFeed] EOD Bar Retrieved for {}: Close = {:.2f}", sym, bar_event.close);
+            
+            tickCallback_(bar_event);
+        }
+    }
+}
+
+long IbkrDataFeed::calcSecondsUntilNextEod(long current_ibkr_utc_time) {
+    using namespace std::chrono;
+    
+    // Create a time_point from the IBKR UTC timestamp
+    system_clock::time_point current_utc{seconds{current_ibkr_utc_time}};
+    
+    // Bind it to the New York timezone
+    auto ny_zone = locate_zone("America/New_York");
+    auto ny_local = ny_zone->to_local(current_utc);
+    
+    // Extract the calendar date in NY
+    auto ny_day = floor<days>(ny_local);
+    year_month_day ymd{ny_day};
+    
+    // Construct 18:00:00 on that specific NY day
+    auto target_local = local_days{ymd} + hours{18};
+    
+    // Convert back to UTC to get the absolute system epoch
+    auto target_utc = ny_zone->to_sys(target_local);
+    
+    // If it's already past 18:00, add 24 hours
+    if (target_utc <= current_utc) {
+        target_utc += hours{24};
+    }
+    
+    return duration_cast<seconds>(target_utc - current_utc).count();
 }
 
 std::string IbkrDataFeed::formatIbkrDate(const std::string& iso8601) {

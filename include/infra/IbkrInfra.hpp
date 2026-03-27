@@ -81,6 +81,11 @@ public:
 
     void setErrorCallback(ErrorCallback cb) { errorCb_ = std::move(cb); }
 
+    // --- System & Time Callbacks ---
+    using CurrentTimeCallback = std::function<void(long)>;
+
+    void setCurrentTimeCallback(CurrentTimeCallback cb) { currentTimeCb_ = std::move(cb); }
+
     // =========================================================================
     // EWrapper Overrides (Triggered by TWS API background thread)
     // =========================================================================
@@ -112,6 +117,8 @@ public:
     void error(int id, time_t errorTime, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson) override;
     void connectionClosed() override;
     void connectAck() override;
+
+    void currentTime(long time) override;
 
 private:
     void readerLoop(); // The background thread processing TWS messages
@@ -151,6 +158,7 @@ private:
     OpenOrderEndCallback openOrderEndCb_;
 
     ErrorCallback errorCb_;
+    CurrentTimeCallback currentTimeCb_;
 
 };
 
