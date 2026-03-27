@@ -20,8 +20,7 @@ StrategyOrchestrator::StrategyOrchestrator(
       percent_allocation_per_strategy_(percentAllocationPerStrategy) {}
 
 void StrategyOrchestrator::loadStrategies() {
-    LOG_INFO("[Orchestrator] Loading strategy configs from: {}", config_directory_);
-    
+
     if (!fs::exists(config_directory_) || !fs::is_directory(config_directory_)) {
         LOG_ERROR("[Orchestrator] Config directory does not exist or is invalid: {}", config_directory_);
         return;
@@ -63,7 +62,7 @@ void StrategyOrchestrator::loadStrategies() {
         // }
     }
     
-    LOG_INFO("[Orchestrator] Successfully loaded {} strategies.", strategies_.size());
+    LOG_DEBUG("[Orchestrator] Successfully loaded {} strategies.", strategies_.size());
 }
 
 void StrategyOrchestrator::startAll() {

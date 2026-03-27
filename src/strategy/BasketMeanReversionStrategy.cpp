@@ -70,7 +70,7 @@ void BasketMeanReversionStrategy::loadConfig() {
         client_order_ids_.push_back(config["basket_id"].get<std::string>() + "_" + sym);
     }
 
-    basket_state_ = std::make_unique<BasketState>(window_size, symbols, weights);
+    basket_state_ = std::make_unique<BasketState>(window_size, symbols, weights, basket_id_);
 }
 
 

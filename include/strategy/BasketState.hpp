@@ -20,7 +20,7 @@ enum class PositionState {
 
 class BasketState {
 public:
-    BasketState(int window_size, const std::vector<std::string>& symbols, const std::vector<double>& weights);
+    BasketState(int window_size, const std::vector<std::string>& symbols, const std::vector<double>& weights, std::string basket_id);
 
     // Fast O(N) linear search for small arrays (fits in CPU cache)
     void updatePrice(const std::string& symbol, double price, uint64_t timestamp);
@@ -50,6 +50,8 @@ private:
     void advanceWindow();
     double calculateRawSpread() const; 
     void updateSpreadEma(double raw_spread);
+
+    std::string basket_id_;
 
     int window_size_;
     std::vector<std::string> symbols_;

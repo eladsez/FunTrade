@@ -1,11 +1,12 @@
 #include <strategy/BasketState.hpp>
 #include <cmath>
+#include <core/Logger.hpp>
 
 namespace bot {
 
 
-BasketState::BasketState(int window_size, const std::vector<std::string>& symbols, const std::vector<double>& weights)
-    : window_size_(window_size), symbols_(symbols), weights_(weights),
+BasketState::BasketState(int window_size, const std::vector<std::string>& symbols, const std::vector<double>& weights, std::string basket_id)
+    : basket_id_(basket_id), window_size_(window_size), symbols_(symbols), weights_(weights),
         num_components_(symbols.size()), history_idx_(0),
         running_sum_(0.0), is_warmed_up_(false),
         ema_periods_(10), // Define the period length here
@@ -80,6 +81,7 @@ void BasketState::updateDailyClose(const std::string& symbol, double close_price
 
             // If all components have reported their daily close, advance the math
             if (checkAndResetBarrier()) {
+                LOG_DEBUG("[BasketState] All closing price of {} arrived, advancing window...", basket_id_);
                 advanceWindow();
             }
             return;
