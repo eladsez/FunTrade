@@ -143,11 +143,11 @@ void EventBus::processEvents() {
     
     // Main live processing loop
     while (isRunning) {
-        if (queue.try_dequeue(event)) {
+        // Block for up to 100ms waiting for an event. 
+        // This drops CPU usage to 0% while idle, but still wakes up 
+        // periodically to check if isRunning is false during shutdown.
+        if (queue.wait_dequeue_timed(event, std::chrono::milliseconds(100))) {
             dispatchEvent(event);
-        } else {
-            // Spin-wait or yield to prevent maxing out CPU
-            std::this_thread::yield(); 
         }
     }
     

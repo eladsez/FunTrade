@@ -6,7 +6,7 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
-#include <concurrentqueue.h> // moodycamel lock-free queue
+#include <blockingconcurrentqueue.h>
 #include <variant>
 #include <unordered_map>
 #include <memory>
@@ -55,7 +55,7 @@ private:
 
     std::mutex subMtx; // Mutex only for registering subscribers, not for publishing
 
-    moodycamel::ConcurrentQueue<Event> queue;
+    moodycamel::BlockingConcurrentQueue<Event> queue;
     
     std::atomic<bool> isRunning{false};
     std::thread dispatcherThread;
