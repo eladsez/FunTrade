@@ -7,29 +7,29 @@
     ],
     "weights": {
         "AMZN": 1.0,
-        "CMG": -0.4855,
-        "EBAY": -0.9206
+        "CMG": -0.5133,
+        "EBAY": -0.8984
     },
     "backtest_periods": {
         "training": {
-            "start": "2021-03-17",
-            "end": "2025-03-13"
+            "start": "2021-03-29",
+            "end": "2025-03-26"
         },
         "testing": {
-            "start": "2025-03-14",
-            "end": "2026-03-13"
+            "start": "2025-03-27",
+            "end": "2026-03-27"
         }
     },
     "metrics": {
-        "train_p": 0.035064,
-        "oos_p": 0.006351,
-        "train_hl": 39.63,
-        "oos_sharpe": 2.654
+        "train_p": 0.03802,
+        "oos_p": 0.006706,
+        "train_hl": 40.46,
+        "oos_sharpe": 1.94
     },
     "trading_params": {
-        "window_size": 79,
+        "window_size": 81,
         "entry_z": 1.5,
         "exit_z": 0.5
     },
-    "exported_at": "2026-03-16 16:32:13"
+    "exported_at": "2026-03-28 15:12:22"
 }

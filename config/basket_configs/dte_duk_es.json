@@ -1,0 +1,35 @@
+{
+    "basket_id": "dte_duk_es",
+    "tickers": [
+        "DTE",
+        "DUK",
+        "ES"
+    ],
+    "weights": {
+        "DTE": 1.0,
+        "DUK": -0.8933,
+        "ES": -0.1834
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-29",
+            "end": "2025-03-26"
+        },
+        "testing": {
+            "start": "2025-03-27",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.003351,
+        "oos_p": 0.009325,
+        "train_hl": 23.84,
+        "oos_sharpe": 1.094
+    },
+    "trading_params": {
+        "window_size": 48,
+        "entry_z": 2.25,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-28 15:50:41"
+}

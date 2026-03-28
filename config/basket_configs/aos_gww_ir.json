@@ -1,0 +1,35 @@
+{
+    "basket_id": "aos_gww_ir",
+    "tickers": [
+        "AOS",
+        "GWW",
+        "IR"
+    ],
+    "weights": {
+        "AOS": -0.7722,
+        "GWW": -0.5718,
+        "IR": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-29",
+            "end": "2025-03-26"
+        },
+        "testing": {
+            "start": "2025-03-27",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.001675,
+        "oos_p": 0.04606,
+        "train_hl": 22.84,
+        "oos_sharpe": 0.702
+    },
+    "trading_params": {
+        "window_size": 46,
+        "entry_z": 1.75,
+        "exit_z": 0.0
+    },
+    "exported_at": "2026-03-28 15:40:22"
+}

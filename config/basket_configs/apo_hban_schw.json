@@ -6,30 +6,30 @@
         "SCHW"
     ],
     "weights": {
-        "APO": -0.1713,
+        "APO": -0.1675,
         "HBAN": 1.0,
-        "SCHW": -0.972
+        "SCHW": -0.9628
     },
     "backtest_periods": {
         "training": {
             "start": "2021-07-29",
-            "end": "2025-04-08"
+            "end": "2025-04-21"
         },
         "testing": {
-            "start": "2025-04-09",
-            "end": "2026-03-13"
+            "start": "2025-04-22",
+            "end": "2026-03-27"
         }
     },
     "metrics": {
-        "train_p": 0.00222,
-        "oos_p": 0.022007,
-        "train_hl": 20.46,
-        "oos_sharpe": 1.535
+        "train_p": 0.002088,
+        "oos_p": 0.020494,
+        "train_hl": 20.61,
+        "oos_sharpe": 0.972
     },
     "trading_params": {
         "window_size": 41,
         "entry_z": 2.0,
         "exit_z": 0.5
     },
-    "exported_at": "2026-03-16 16:48:37"
+    "exported_at": "2026-03-28 15:25:40"
 }

@@ -7,29 +7,29 @@
     ],
     "weights": {
         "HBAN": 1.0,
-        "KKR": -0.1876,
-        "SCHW": -0.8012
+        "KKR": -0.1878,
+        "SCHW": -0.7944
     },
     "backtest_periods": {
         "training": {
             "start": "2021-07-29",
-            "end": "2025-04-08"
+            "end": "2025-04-21"
         },
         "testing": {
-            "start": "2025-04-09",
-            "end": "2026-03-13"
+            "start": "2025-04-22",
+            "end": "2026-03-27"
         }
     },
     "metrics": {
-        "train_p": 0.000438,
-        "oos_p": 0.047656,
-        "train_hl": 16.42,
-        "oos_sharpe": 1.617
+        "train_p": 0.000371,
+        "oos_p": 0.034125,
+        "train_hl": 16.43,
+        "oos_sharpe": 0.913
     },
     "trading_params": {
         "window_size": 33,
         "entry_z": 2.5,
         "exit_z": -0.25
     },
-    "exported_at": "2026-03-16 16:48:37"
+    "exported_at": "2026-03-28 15:25:40"
 }

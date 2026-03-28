@@ -103,20 +103,13 @@ def calculate_hurst(ts, max_lag=20):
 
 def calculate_execution_shares(current_prices, weights, direction, max_capital=5000.0, max_error=0.025):
     """
-    Unified execution logic for order routing.
-    Calculates exact share counts: strict integer shorts, compensatory fractional longs.
+    Calculates exact integer share counts for ALL legs.
     """
     total_abs_weight = sum(abs(w) for w in weights.values())
     ratios = {t: abs(w) / total_abs_weight for t, w in weights.items()}
     
-    short_legs = [t for t, w in weights.items() if (w * direction) < 0]
-    long_legs = [t for t, w in weights.items() if (w * direction) > 0]
-    
-    if not short_legs or not long_legs:
-        return None
-        
-    # 1. Anchor on the most restrictive short leg
-    capital_reqs = [current_prices[t] / ratios[t] for t in short_legs]
+    # 1. Base capital required to buy at least 1 share of the most "restrictive" leg
+    capital_reqs = [current_prices[t] / ratios[t] for t in weights.keys()]
     base_capital = max(capital_reqs)
     
     if base_capital > max_capital:
@@ -128,31 +121,20 @@ def calculate_execution_shares(current_prices, weights, direction, max_capital=5
         return None
         
     target_cap = base_capital * multiplier
-    
     shares = {}
-    actual_short_cap = 0.0
-    short_weight_sum = sum(ratios[t] for t in short_legs)
+    total_actual_cap = 0.0
     
-    # 3. Lock in Short Shares (Strict Integers)
-    for t in short_legs:
+    # 3. Lock in Shares for all legs
+    for t in weights.keys():
         ideal_cap = target_cap * ratios[t]
         shares[t] = round(ideal_cap / current_prices[t]) 
         
         if shares[t] == 0:
             return None
             
-        actual_short_cap += (shares[t] * current_prices[t])
+        total_actual_cap += (shares[t] * current_prices[t])
         
-    # 4. Compensatory Long Rebalancing
-    long_weight_sum = sum(ratios[t] for t in long_legs)
-    target_long_cap = actual_short_cap * (long_weight_sum / short_weight_sum)
-    
-    for t in long_legs:
-        ideal_long_leg_cap = target_long_cap * (ratios[t] / long_weight_sum)
-        shares[t] = ideal_long_leg_cap / current_prices[t]
-        
-    # 5. Final Tracking Error Gatekeeper
-    total_actual_cap = actual_short_cap + target_long_cap
+    # 4. Final Tracking Error Gatekeeper
     for t in weights.keys():
         actual_ratio = (shares[t] * current_prices[t]) / total_actual_cap
         if abs(actual_ratio - ratios[t]) / ratios[t] > max_error:
@@ -310,6 +292,10 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
         max_idx = np.argmax(np.abs(raw_weights))
         anchor_weight = raw_weights[max_idx]
         weights = {combo[i]: round(raw_weights[i] / anchor_weight, 4) for i in range(len(combo))}
+
+        # STRICT GATEKEEPER: Drop baskets where a leg becomes irrelevant
+        if any(w == 0.0 for w in weights.values()):
+            return None
 
         # Weight Explosion Sanity Check
         # Prevent mathematically sound but practically untradeable allocations.

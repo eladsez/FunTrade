@@ -1,0 +1,35 @@
+{
+    "basket_id": "cms_ed_ppl",
+    "tickers": [
+        "CMS",
+        "ED",
+        "PPL"
+    ],
+    "weights": {
+        "CMS": 1.0,
+        "ED": 0.0385,
+        "PPL": -0.7661
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-29",
+            "end": "2025-03-26"
+        },
+        "testing": {
+            "start": "2025-03-27",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.027723,
+        "oos_p": 0.016283,
+        "train_hl": 36.92,
+        "oos_sharpe": 1.724
+    },
+    "trading_params": {
+        "window_size": 74,
+        "entry_z": 2.0,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-28 15:50:41"
+}

@@ -1,0 +1,35 @@
+{
+    "basket_id": "aapl_mu_wdc",
+    "tickers": [
+        "AAPL",
+        "MU",
+        "WDC"
+    ],
+    "weights": {
+        "AAPL": -0.6059,
+        "MU": 1.0,
+        "WDC": -0.6967
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-04-15",
+            "end": "2025-03-31"
+        },
+        "testing": {
+            "start": "2025-04-01",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.006547,
+        "oos_p": 0.049659,
+        "train_hl": 28.08,
+        "oos_sharpe": 0.745
+    },
+    "trading_params": {
+        "window_size": 56,
+        "entry_z": 2.0,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-28 15:48:18"
+}

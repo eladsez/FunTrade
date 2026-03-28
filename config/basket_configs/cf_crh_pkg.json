@@ -1,0 +1,35 @@
+{
+    "basket_id": "cf_crh_pkg",
+    "tickers": [
+        "CF",
+        "CRH",
+        "PKG"
+    ],
+    "weights": {
+        "CF": -0.3174,
+        "CRH": -0.5873,
+        "PKG": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-29",
+            "end": "2025-03-26"
+        },
+        "testing": {
+            "start": "2025-03-27",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.027724,
+        "oos_p": 0.047296,
+        "train_hl": 33.19,
+        "oos_sharpe": 0.865
+    },
+    "trading_params": {
+        "window_size": 66,
+        "entry_z": 1.5,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-28 15:48:43"
+}

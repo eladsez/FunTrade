@@ -1,0 +1,35 @@
+{
+    "basket_id": "cinf_key_tfc",
+    "tickers": [
+        "CINF",
+        "KEY",
+        "TFC"
+    ],
+    "weights": {
+        "CINF": 0.0686,
+        "KEY": -0.9044,
+        "TFC": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-21"
+        },
+        "testing": {
+            "start": "2025-04-22",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.008123,
+        "oos_p": 0.027662,
+        "train_hl": 17.74,
+        "oos_sharpe": 1.001
+    },
+    "trading_params": {
+        "window_size": 35,
+        "entry_z": 2.5,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-28 15:25:40"
+}

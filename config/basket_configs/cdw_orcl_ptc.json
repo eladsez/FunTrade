@@ -1,0 +1,35 @@
+{
+    "basket_id": "cdw_orcl_ptc",
+    "tickers": [
+        "CDW",
+        "ORCL",
+        "PTC"
+    ],
+    "weights": {
+        "CDW": -0.4449,
+        "ORCL": -0.5187,
+        "PTC": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-04-15",
+            "end": "2025-03-31"
+        },
+        "testing": {
+            "start": "2025-04-01",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.001801,
+        "oos_p": 0.020844,
+        "train_hl": 24.99,
+        "oos_sharpe": 0.619
+    },
+    "trading_params": {
+        "window_size": 50,
+        "entry_z": 1.5,
+        "exit_z": 0.0
+    },
+    "exported_at": "2026-03-28 15:48:18"
+}

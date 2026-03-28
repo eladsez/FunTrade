@@ -1,0 +1,35 @@
+{
+    "basket_id": "fis_hban_stt",
+    "tickers": [
+        "FIS",
+        "HBAN",
+        "STT"
+    ],
+    "weights": {
+        "FIS": -0.3532,
+        "HBAN": 1.0,
+        "STT": -0.7034
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-21"
+        },
+        "testing": {
+            "start": "2025-04-22",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.00453,
+        "oos_p": 0.004371,
+        "train_hl": 32.98,
+        "oos_sharpe": 0.549
+    },
+    "trading_params": {
+        "window_size": 66,
+        "entry_z": 2.0,
+        "exit_z": 0.25
+    },
+    "exported_at": "2026-03-28 15:25:40"
+}

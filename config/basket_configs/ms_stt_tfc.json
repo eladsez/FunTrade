@@ -1,0 +1,35 @@
+{
+    "basket_id": "ms_stt_tfc",
+    "tickers": [
+        "MS",
+        "STT",
+        "TFC"
+    ],
+    "weights": {
+        "MS": -0.6993,
+        "STT": 1.0,
+        "TFC": -0.1843
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-21"
+        },
+        "testing": {
+            "start": "2025-04-22",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.003575,
+        "oos_p": 0.032923,
+        "train_hl": 23.56,
+        "oos_sharpe": 0.981
+    },
+    "trading_params": {
+        "window_size": 47,
+        "entry_z": 2.25,
+        "exit_z": 0.25
+    },
+    "exported_at": "2026-03-28 15:25:40"
+}

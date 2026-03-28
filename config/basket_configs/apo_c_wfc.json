@@ -1,0 +1,35 @@
+{
+    "basket_id": "apo_c_wfc",
+    "tickers": [
+        "APO",
+        "C",
+        "WFC"
+    ],
+    "weights": {
+        "APO": -0.2816,
+        "C": -0.5709,
+        "WFC": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-21"
+        },
+        "testing": {
+            "start": "2025-04-22",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.019736,
+        "oos_p": 0.039928,
+        "train_hl": 32.5,
+        "oos_sharpe": 1.522
+    },
+    "trading_params": {
+        "window_size": 65,
+        "entry_z": 3.0,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-28 15:25:40"
+}

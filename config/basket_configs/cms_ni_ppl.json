@@ -1,0 +1,35 @@
+{
+    "basket_id": "cms_ni_ppl",
+    "tickers": [
+        "CMS",
+        "NI",
+        "PPL"
+    ],
+    "weights": {
+        "CMS": 1.0,
+        "NI": -0.1784,
+        "PPL": -0.5008
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-29",
+            "end": "2025-03-26"
+        },
+        "testing": {
+            "start": "2025-03-27",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.017167,
+        "oos_p": 0.021498,
+        "train_hl": 33.0,
+        "oos_sharpe": 0.951
+    },
+    "trading_params": {
+        "window_size": 66,
+        "entry_z": 1.75,
+        "exit_z": -0.25
+    },
+    "exported_at": "2026-03-28 15:50:41"
+}

@@ -1,0 +1,35 @@
+{
+    "basket_id": "cpt_eqr_irm",
+    "tickers": [
+        "CPT",
+        "EQR",
+        "IRM"
+    ],
+    "weights": {
+        "CPT": -0.7804,
+        "EQR": 1.0,
+        "IRM": -0.1216
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-29",
+            "end": "2025-03-26"
+        },
+        "testing": {
+            "start": "2025-03-27",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.001359,
+        "oos_p": 0.04384,
+        "train_hl": 30.42,
+        "oos_sharpe": 0.84
+    },
+    "trading_params": {
+        "window_size": 61,
+        "entry_z": 2.25,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-28 15:49:27"
+}

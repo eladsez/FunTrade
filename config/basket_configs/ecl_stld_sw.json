@@ -1,0 +1,35 @@
+{
+    "basket_id": "ecl_stld_sw",
+    "tickers": [
+        "ECL",
+        "STLD",
+        "SW"
+    ],
+    "weights": {
+        "ECL": -0.9424,
+        "STLD": 0.154,
+        "SW": 1.0
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-29",
+            "end": "2025-03-26"
+        },
+        "testing": {
+            "start": "2025-03-27",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000383,
+        "oos_p": 0.013504,
+        "train_hl": 13.87,
+        "oos_sharpe": 0.813
+    },
+    "trading_params": {
+        "window_size": 28,
+        "entry_z": 2.25,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-28 15:48:43"
+}

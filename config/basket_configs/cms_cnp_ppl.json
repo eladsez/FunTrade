@@ -1,0 +1,35 @@
+{
+    "basket_id": "cms_cnp_ppl",
+    "tickers": [
+        "CMS",
+        "CNP",
+        "PPL"
+    ],
+    "weights": {
+        "CMS": 1.0,
+        "CNP": -0.0391,
+        "PPL": -0.6885
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-03-29",
+            "end": "2025-03-26"
+        },
+        "testing": {
+            "start": "2025-03-27",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.02836,
+        "oos_p": 0.017312,
+        "train_hl": 36.65,
+        "oos_sharpe": 1.387
+    },
+    "trading_params": {
+        "window_size": 73,
+        "entry_z": 2.0,
+        "exit_z": 0.0
+    },
+    "exported_at": "2026-03-28 15:50:41"
+}

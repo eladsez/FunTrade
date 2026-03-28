@@ -1,0 +1,35 @@
+{
+    "basket_id": "amp_hban_schw",
+    "tickers": [
+        "AMP",
+        "HBAN",
+        "SCHW"
+    ],
+    "weights": {
+        "AMP": -0.2681,
+        "HBAN": 1.0,
+        "SCHW": -0.8937
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-21"
+        },
+        "testing": {
+            "start": "2025-04-22",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000375,
+        "oos_p": 0.016599,
+        "train_hl": 19.82,
+        "oos_sharpe": 1.017
+    },
+    "trading_params": {
+        "window_size": 40,
+        "entry_z": 1.75,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-28 15:25:40"
+}

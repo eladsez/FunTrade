@@ -6,30 +6,30 @@
         "WFC"
     ],
     "weights": {
-        "APO": -0.2208,
-        "SYF": -0.512,
+        "APO": -0.2223,
+        "SYF": -0.5215,
         "WFC": 1.0
     },
     "backtest_periods": {
         "training": {
             "start": "2021-07-29",
-            "end": "2025-04-08"
+            "end": "2025-04-21"
         },
         "testing": {
-            "start": "2025-04-09",
-            "end": "2026-03-13"
+            "start": "2025-04-22",
+            "end": "2026-03-27"
         }
     },
     "metrics": {
-        "train_p": 0.026402,
-        "oos_p": 0.009896,
-        "train_hl": 32.52,
-        "oos_sharpe": 1.503
+        "train_p": 0.017697,
+        "oos_p": 0.032977,
+        "train_hl": 31.31,
+        "oos_sharpe": 1.271
     },
     "trading_params": {
-        "window_size": 65,
+        "window_size": 63,
         "entry_z": 1.5,
-        "exit_z": 0.5
+        "exit_z": 0.0
     },
-    "exported_at": "2026-03-16 16:48:37"
+    "exported_at": "2026-03-28 15:25:40"
 }

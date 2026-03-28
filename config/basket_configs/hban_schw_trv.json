@@ -1,0 +1,35 @@
+{
+    "basket_id": "hban_schw_trv",
+    "tickers": [
+        "HBAN",
+        "SCHW",
+        "TRV"
+    ],
+    "weights": {
+        "HBAN": 1.0,
+        "SCHW": -0.8708,
+        "TRV": -0.3486
+    },
+    "backtest_periods": {
+        "training": {
+            "start": "2021-07-29",
+            "end": "2025-04-21"
+        },
+        "testing": {
+            "start": "2025-04-22",
+            "end": "2026-03-27"
+        }
+    },
+    "metrics": {
+        "train_p": 0.000745,
+        "oos_p": 0.044375,
+        "train_hl": 20.37,
+        "oos_sharpe": 1.183
+    },
+    "trading_params": {
+        "window_size": 41,
+        "entry_z": 2.0,
+        "exit_z": 0.5
+    },
+    "exported_at": "2026-03-28 15:25:40"
+}

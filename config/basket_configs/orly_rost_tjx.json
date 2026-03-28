@@ -6,30 +6,30 @@
         "TJX"
     ],
     "weights": {
-        "ORLY": -0.6643,
-        "ROST": -0.5123,
+        "ORLY": -0.6485,
+        "ROST": -0.5279,
         "TJX": 1.0
     },
     "backtest_periods": {
         "training": {
-            "start": "2021-03-17",
-            "end": "2025-03-13"
+            "start": "2021-03-29",
+            "end": "2025-03-26"
         },
         "testing": {
-            "start": "2025-03-14",
-            "end": "2026-03-13"
+            "start": "2025-03-27",
+            "end": "2026-03-27"
         }
     },
     "metrics": {
-        "train_p": 0.000666,
-        "oos_p": 0.024256,
-        "train_hl": 22.13,
-        "oos_sharpe": 1.155
+        "train_p": 0.000754,
+        "oos_p": 0.016575,
+        "train_hl": 22.29,
+        "oos_sharpe": 1.226
     },
     "trading_params": {
-        "window_size": 44,
+        "window_size": 45,
         "entry_z": 2.25,
         "exit_z": -0.25
     },
-    "exported_at": "2026-03-16 16:32:13"
+    "exported_at": "2026-03-28 15:12:22"
 }

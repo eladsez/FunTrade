@@ -6,30 +6,30 @@
         "TFC"
     ],
     "weights": {
-        "FITB": 0.0959,
-        "KEY": -0.9297,
+        "FITB": 0.1055,
+        "KEY": -0.9385,
         "TFC": 1.0
     },
     "backtest_periods": {
         "training": {
             "start": "2021-07-29",
-            "end": "2025-04-08"
+            "end": "2025-04-21"
         },
         "testing": {
-            "start": "2025-04-09",
-            "end": "2026-03-13"
+            "start": "2025-04-22",
+            "end": "2026-03-27"
         }
     },
     "metrics": {
-        "train_p": 0.006577,
-        "oos_p": 0.03975,
-        "train_hl": 17.83,
-        "oos_sharpe": 1.535
+        "train_p": 0.007003,
+        "oos_p": 0.010976,
+        "train_hl": 17.89,
+        "oos_sharpe": 1.16
     },
     "trading_params": {
         "window_size": 36,
         "entry_z": 2.5,
         "exit_z": -0.25
     },
-    "exported_at": "2026-03-16 16:48:37"
+    "exported_at": "2026-03-28 15:25:40"
 }

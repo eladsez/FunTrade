@@ -6,30 +6,30 @@
         "PNC"
     ],
     "weights": {
-        "KEY": -0.4528,
-        "NDAQ": -0.5899,
+        "KEY": -0.4649,
+        "NDAQ": -0.5645,
         "PNC": 1.0
     },
     "backtest_periods": {
         "training": {
             "start": "2021-07-29",
-            "end": "2025-04-08"
+            "end": "2025-04-21"
         },
         "testing": {
-            "start": "2025-04-09",
-            "end": "2026-03-13"
+            "start": "2025-04-22",
+            "end": "2026-03-27"
         }
     },
     "metrics": {
-        "train_p": 0.007033,
-        "oos_p": 0.038378,
-        "train_hl": 20.07,
-        "oos_sharpe": 1.053
+        "train_p": 0.011599,
+        "oos_p": 0.032213,
+        "train_hl": 21.03,
+        "oos_sharpe": 0.936
     },
     "trading_params": {
-        "window_size": 40,
-        "entry_z": 1.5,
-        "exit_z": 0.25
+        "window_size": 42,
+        "entry_z": 1.75,
+        "exit_z": 0.0
     },
-    "exported_at": "2026-03-16 16:48:37"
+    "exported_at": "2026-03-28 15:25:40"
 }
