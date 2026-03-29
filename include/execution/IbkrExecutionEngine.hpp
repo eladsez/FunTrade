@@ -51,6 +51,7 @@ private:
     void onAccountDownloadEnd(const std::string& accountName);
     void onPositionEnd();
     void onOpenOrderEnd();
+    void onReconnect();
 
     // Helpers
     Contract createContract(const std::string& symbol);

@@ -79,6 +79,12 @@ bool IbkrExecutionEngine::connectToInfra() {
         }
     );
 
+    infra_->addReconnectCallback(
+        [this]() {
+            this->onReconnect(); 
+        }
+    );
+
     if (infra_->getClient() && infra_->getClient()->isConnected()) {
         infra_->getClient()->reqIds(-1); 
         infra_->getClient()->reqAccountUpdates(true, ""); 
@@ -110,6 +116,16 @@ bool IbkrExecutionEngine::connectToInfra() {
 
 void IbkrExecutionEngine::disconnectFromInfra() {
     LOG_DEBUG("[IbkrExecutionEngine] Disconnecting ExecutionEngine from Infra.");
+}
+
+void IbkrExecutionEngine::onReconnect() {
+    LOG_INFO("[IbkrExecutionEngine] Re-requesting account, positions, and open orders after reconnect...");
+    
+    if (infra_->getClient() && infra_->getClient()->isConnected()) {
+        infra_->getClient()->reqAccountUpdates(true, ""); 
+        infra_->getClient()->reqPositions();
+        infra_->getClient()->reqAllOpenOrders();
+    }
 }
 
 // =========================================================================

@@ -90,6 +90,8 @@ private:
     void processEodBars();
     long calcSecondsUntilNextEod(long current_ibkr_utc_time);
 
+    void onReconnect();
+
     std::shared_ptr<IbkrInfra> infra_;
     
     std::function<void(const MarketEvent&)> tickCallback_;

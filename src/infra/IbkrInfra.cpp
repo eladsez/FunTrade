@@ -123,9 +123,17 @@ void IbkrInfra::historicalDataEnd(int reqId, const std::string& startDateStr, co
 
 void IbkrInfra::nextValidId(OrderId orderId) {
     if (!isConnected_.load()) {
-        LOG_INFO("[IbkrInfra] Received Next Valid ID: {}. Connection fully established.", orderId);
+        LOG_DEBUG("[IbkrInfra] Received Next Valid ID: {}. Connection fully established.", orderId);
         isConnected_ = true;
         connectCv_.notify_all(); // Unblock the constructor!
+        // Check if this is a reconnect
+        if (!isInitialConnection_.load()) {
+            LOG_DEBUG("[IbkrInfra] Reconnection detected. Firing reconnect callbacks...");
+            for (const auto& cb : reconnectCallbacks_) {
+                if (cb) cb();
+            }
+        }
+        isInitialConnection_ = false;
     }
 
     if (nextValidIdCb_) nextValidIdCb_(orderId);

@@ -57,6 +57,10 @@ bool IbkrDataFeed::connectToInfra() {
         eodCv_.notify_one(); // Wake up the thread if it's waiting for the initial sync
     });
 
+    infra_->addReconnectCallback([this]() {
+        this->onReconnect(); 
+    });
+
     stopEodThread_ = false;
     eodThread_ = std::thread(&IbkrDataFeed::eodTaskLoop, this);
 
@@ -161,6 +165,27 @@ std::vector<std::string> IbkrDataFeed::getActiveSubscriptions() const {
         active.push_back(pair.first);
     }
     return active;
+}
+
+void IbkrDataFeed::onReconnect() {
+    LOG_INFO("[IbkrDataFeed] Re-establishing active subscriptions after reconnect...");
+    
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    if (!infra_->getClient() || !infra_->getClient()->isConnected()) return;
+
+    for (const auto& [symbol, ids] : activeSubscriptions_) {
+        Contract contract = createContract(symbol);
+        
+        if (useTickByTick_) {
+            LOG_DEBUG("[IbkrDataFeed] Re-requesting TICK-BY-TICK for {}", symbol);
+            infra_->getClient()->reqTickByTickData(ids.tbtBidAskId, contract, "BidAsk", 0, false);
+            infra_->getClient()->reqTickByTickData(ids.tbtAllLastId, contract, "AllLast", 0, false);
+            infra_->getClient()->reqTickByTickData(ids.tbtMidPointId, contract, "MidPoint", 0, false);
+        } else {
+            LOG_DEBUG("[IbkrDataFeed] Re-requesting MKT DATA (L1) for {}", symbol);
+            infra_->getClient()->reqMktData(ids.mktDataId, contract, "", false, false, TagValueListSPtr());
+        }
+    }
 }
 
 void IbkrDataFeed::setMarketTickCallback(std::function<void(const MarketEvent&)> callback) {

@@ -82,8 +82,10 @@ public:
 
     // --- System & Time Callbacks ---
     using CurrentTimeCallback = std::function<void(long)>;
-
     void setCurrentTimeCallback(CurrentTimeCallback cb) { currentTimeCb_ = std::move(cb); }
+
+    using ReconnectCallback = std::function<void()>;
+    void addReconnectCallback(ReconnectCallback cb) { reconnectCallbacks_.push_back(std::move(cb)); }
 
     // =========================================================================
     // EWrapper Overrides (Triggered by TWS API background thread)
@@ -140,8 +142,10 @@ private:
     std::thread monitorThread_;
     std::atomic<bool> stopRequested_{false};
     std::atomic<bool> isConnected_{false};
+    std::atomic<bool> isInitialConnection_{true};
     std::mutex connectMutex_;
     std::condition_variable connectCv_;
+    std::vector<ReconnectCallback> reconnectCallbacks_;
 
     // Callback instances
     TickByTickBidAskCallback tickByTickBidAskCb_;
