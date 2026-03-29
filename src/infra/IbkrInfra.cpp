@@ -81,8 +81,12 @@ void IbkrInfra::monitorLoop() {
         lock.unlock();
 
         if (tryConnect()) {
-            // Successfully connected. The next loop iteration will block on the CV.
-            continue; 
+            // Wait for isConnected_ to become true (set by nextValidId)
+            std::unique_lock<std::mutex> connectLock(connectMutex_);
+            connectCv_.wait_for(connectLock, std::chrono::seconds(10), [this](){ 
+                return isConnected_.load() || stopRequested_.load(); 
+            });
+            continue;
         } else {
             LOG_ERROR("[IbkrInfra] Connection failed. Retrying in 5 seconds...");
             
@@ -143,7 +147,7 @@ void IbkrInfra::nextValidId(OrderId orderId) {
     if (!isConnected_.load()) {
         LOG_DEBUG("[IbkrInfra] Received Next Valid ID: {}. Connection fully established.", orderId);
         isConnected_ = true;
-        connectCv_.notify_all(); // Unblock the constructor!
+        connectCv_.notify_all(); // Unblock the constructor or the monitor thread
         // Check if this is a reconnect
         if (!isInitialConnection_.load()) {
             LOG_DEBUG("[IbkrInfra] Reconnection detected. Firing reconnect callbacks...");
@@ -200,9 +204,7 @@ void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string
     // Common disconnect codes: 502, 504, 1100, 2110
     if (errorCode == 504 || errorCode == 502 || errorCode == 1100 || errorCode == 2110) { 
         LOG_WARN("[IbkrInfra] Connection loss detected (Code {}). Watchdog taking over.", errorCode);
-        isConnected_ = false; 
-        isRunning_ = false;
-        monitorCv_.notify_one(); // Wake up the monitor loop instantly
+        handleDisconnect();
     }
 
     if (errorCb_) errorCb_(id, errorCode, errorString, advancedOrderRejectJson);
@@ -214,9 +216,19 @@ void IbkrInfra::currentTime(long time) {
 
 void IbkrInfra::connectionClosed() {
     LOG_WARN("[IbkrInfra] Connection closed by TWS. Watchdog will attempt reconnect.");
-    isConnected_ = false;
-    isRunning_ = false;
-    monitorCv_.notify_one(); // Wake up the monitor loop instantly
+    handleDisconnect();
+}
+
+void IbkrInfra::handleDisconnect() {
+    isRunning_ = false; // Stop the reader loop immediately
+
+    if (isConnected_.exchange(false)) {
+        // We were fully connected. Wake up the main monitor wait.
+        monitorCv_.notify_one(); 
+    } else {
+        // We were in the middle of a handshake! Interrupt the 10-second wait.
+        connectCv_.notify_all(); 
+    }
 }
 
 void IbkrInfra::connectAck() {

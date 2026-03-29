@@ -126,6 +126,7 @@ private:
     bool tryConnect();
     void cleanupConnection();
     void monitorLoop();
+    void handleDisconnect();
 
     std::string host_;
     int port_;
