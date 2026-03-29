@@ -115,6 +115,7 @@ private:
     std::condition_variable eodCv_;
     std::atomic<bool> stopEodThread_{false};
     std::atomic<long> ibkrCurrentTime_{0};
+    std::unordered_map<std::string, uint64_t> lastEodTimestamp_;
 };
 
 } // namespace bot

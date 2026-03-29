@@ -492,6 +492,19 @@ void IbkrDataFeed::processEodBars() {
         auto bars = fetchHistoricalBars(sym, end_time_str, end_time_str, "1Day");
         
         if (!bars.empty() && tickCallback_) {
+            uint64_t current_bar_ts = bars.back().timestamp_ms;
+
+            // --- Dynamic Holiday Detection ---
+            // If the bar's timestamp is equal to or older than the last one we processed,
+            // the market was closed today, and IBKR just handed us yesterday's bar again.
+            if (lastEodTimestamp_.count(sym) && current_bar_ts <= lastEodTimestamp_[sym]) {
+                LOG_DEBUG("[IbkrDataFeed] Skipped EOD bar for {}. Market was likely closed today (Holiday).", sym);
+                continue;
+            }
+
+            // Update the cache with the new, valid timestamp
+            lastEodTimestamp_[sym] = current_bar_ts;
+
             BarUpdate bar_event;
             bar_event.symbol = sym;
             bar_event.open = bars.back().open;
@@ -499,7 +512,7 @@ void IbkrDataFeed::processEodBars() {
             bar_event.low = bars.back().low;
             bar_event.close = bars.back().close;
             bar_event.volume = bars.back().volume;
-            bar_event.timestamp_ms = bars.back().timestamp_ms;
+            bar_event.timestamp_ms = current_bar_ts;
 
             LOG_DEBUG("[IbkrDataFeed] EOD Bar Retrieved for {}: Close = {:.2f}", sym, bar_event.close);
             
@@ -528,9 +541,18 @@ long IbkrDataFeed::calcSecondsUntilNextEod(long current_ibkr_utc_time) {
     // Convert back to UTC to get the absolute system epoch
     auto target_utc = ny_zone->to_sys(target_local);
     
-    // If it's already past 18:00, add 24 hours
+    // If it's already past 18:00 today, aim for tomorrow 18:00
     if (target_utc <= current_utc) {
         target_utc += hours{24};
+        ny_day += days{1}; // Keep track of the target day
+    }
+    
+    // --- Dynamic Weekend Skipping ---
+    weekday wd{ny_day};
+    if (wd == Saturday) {
+        target_utc += hours{48}; // Push Saturday 18:00 to Monday 18:00
+    } else if (wd == Sunday) {
+        target_utc += hours{24}; // Push Sunday 18:00 to Monday 18:00
     }
     
     return duration_cast<seconds>(target_utc - current_utc).count();
