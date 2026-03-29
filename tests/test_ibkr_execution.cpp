@@ -38,10 +38,6 @@ protected:
         engine = std::make_shared<IbkrExecutionEngine>(infra);
         eventBus = std::make_shared<EventBus>(nullptr, engine);
 
-        if (!infra->connectToTws()) {
-            GTEST_SKIP() << "Skipping tests: Could not connect to IBKR TWS/Gateway at " << host << ":" << port;
-        }
-
         // Give the socket a moment to establish before hooking up engine requests
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         engine->connectToInfra();
@@ -61,9 +57,6 @@ protected:
         if (engine) {
             engine->cancelAllOrders();
             std::this_thread::sleep_for(std::chrono::milliseconds(500));    
-        }
-        if (infra) {
-            infra->disconnectFromTws();
         }
     }
 

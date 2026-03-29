@@ -5,6 +5,8 @@
 #include <thread>
 #include <atomic>
 #include <functional>
+#include <mutex>
+#include <condition_variable>
 
 // TWS API Includes
 #include "DefaultEWrapper.h"
@@ -19,9 +21,6 @@ public:
     IbkrInfra(std::string host, int port, int clientId);
     ~IbkrInfra() override;
 
-    bool connectToTws();
-    void disconnectFromTws();
-    
     // Accessor so the Feeds/Engines can send commands
     EClientSocket* getClient() const { return client_.get(); }
 
@@ -122,6 +121,9 @@ public:
 
 private:
     void readerLoop(); // The background thread processing TWS messages
+    bool tryConnect();
+    void cleanupConnection();
+    void monitorLoop();
 
     std::string host_;
     int port_;
@@ -133,6 +135,13 @@ private:
     
     std::thread readerThread_;
     std::atomic<bool> isRunning_{false};
+
+    // Monitor & Synchronization Variables
+    std::thread monitorThread_;
+    std::atomic<bool> stopRequested_{false};
+    std::atomic<bool> isConnected_{false};
+    std::mutex connectMutex_;
+    std::condition_variable connectCv_;
 
     // Callback instances
     TickByTickBidAskCallback tickByTickBidAskCb_;

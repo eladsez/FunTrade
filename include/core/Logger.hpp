@@ -2,8 +2,18 @@
 
 #define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_DEBUG
 
+#if defined(__GNUC__) && __GNUC__ >= 13
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Warray-bounds"
+    #pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/rotating_file_sink.h>
+#if defined(__GNUC__) && __GNUC__ >= 13
+    #pragma GCC diagnostic pop
+#endif
+
 #include <memory>
 
 namespace bot {

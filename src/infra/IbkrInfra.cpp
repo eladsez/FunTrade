@@ -9,56 +9,84 @@ IbkrInfra::IbkrInfra(std::string host, int port, int clientId)
     // TWS requires an OS signal to know when network data arrives
     osSignal_ = std::make_unique<EReaderOSSignal>(2000); 
     client_ = std::make_unique<EClientSocket>(this, osSignal_.get());
+
+    monitorThread_ = std::thread(&IbkrInfra::monitorLoop, this);
+
+    LOG_INFO("[IbkrInfra] Waiting for TWS connection and initialization...");
+    std::unique_lock<std::mutex> lock(connectMutex_);
+    if (connectCv_.wait_for(lock, std::chrono::seconds(10), [this]() { return isConnected_.load(); })) {
+        LOG_INFO("[IbkrInfra] Successfully initialized and ready.");
+    } else {
+        LOG_ERROR("[IbkrInfra] Timeout waiting for initial connection. Watchdog will keep trying.");
+    }
 }
 
 IbkrInfra::~IbkrInfra() {
-    disconnectFromTws();
+    stopRequested_ = true;
+
+    if (monitorThread_.joinable()) 
+        monitorThread_.join();
+
+    cleanupConnection();
 }
 
-bool IbkrInfra::connectToTws() {
-    LOG_INFO("[IbkrInfra] Connecting to IB Gateway at {}:{} ClientID: {}", host_, port_, clientId_);
-    
-    // Using Async connection mode (false parameter = not extraAuth)
-    bool connected = client_->eConnect(host_.c_str(), port_, clientId_, false);
-
-    if (connected) {
-        LOG_INFO("[IbkrInfra] Socket connected. Starting reader thread...");
-        
-        // EReader fetches data from the socket and places it in a queue
-        reader_ = std::make_unique<EReader>(client_.get(), osSignal_.get());
-        reader_->start();
-
-        // Start our background loop to process the queue
-        isRunning_ = true;
-        readerThread_ = std::thread(&IbkrInfra::readerLoop, this);
-        return true;
-    } else {
-        LOG_ERROR("[IbkrInfra] Failed to connect to IB Gateway.");
-        return false;
-    }
-}
-
-void IbkrInfra::disconnectFromTws() {
+void IbkrInfra::cleanupConnection() {
     isRunning_ = false;
+    isConnected_ = false;
+
     if (client_ && client_->isConnected()) {
         client_->eDisconnect();
     }
+    
+    if (osSignal_) {
+        osSignal_->issueSignal(); // Unblock the reader thread safely
+    }
+
     if (readerThread_.joinable()) {
         readerThread_.join();
     }
 }
 
+bool IbkrInfra::tryConnect() {
+    LOG_INFO("[IbkrInfra] Attempting connection to IB Gateway {}:{}", host_, port_);
+    cleanupConnection();
+
+    if (client_->eConnect(host_.c_str(), port_, clientId_, false)) {
+        LOG_INFO("[IbkrInfra] Socket connected. Starting reader thread...");
+        reader_ = std::make_unique<EReader>(client_.get(), osSignal_.get());
+        reader_->start();
+
+        isRunning_ = true;
+        readerThread_ = std::thread(&IbkrInfra::readerLoop, this);
+        return true;
+    }
+    return false;
+}
+
+void IbkrInfra::monitorLoop() {
+    while (!stopRequested_) {
+        if (!isConnected_) {
+            if (tryConnect()) {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+            } else {
+                LOG_ERROR("[IbkrInfra] Connection failed. Retrying in 5 seconds...");
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+            }
+        } else {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+        }
+    }
+}
+
 void IbkrInfra::readerLoop() {
-    LOG_DEBUG("[IbkrInfra] Reader thread started.");
-    
     // This loop constantly waits for the OS signal, then tells the reader to process messages,
     // which in turn fires the EWrapper override methods below.
     while (isRunning_ && client_->isConnected()) {
         osSignal_->waitForSignal();
-        reader_->processMsgs();
+        if (isRunning_) { 
+            reader_->processMsgs();
+        }
     }
-    
-    LOG_DEBUG("[IbkrInfra] Reader thread exiting.");
 }
 
 // =========================================================================
@@ -94,6 +122,12 @@ void IbkrInfra::historicalDataEnd(int reqId, const std::string& startDateStr, co
 }
 
 void IbkrInfra::nextValidId(OrderId orderId) {
+    if (!isConnected_.load()) {
+        LOG_INFO("[IbkrInfra] Received Next Valid ID: {}. Connection fully established.", orderId);
+        isConnected_ = true;
+        connectCv_.notify_all(); // Unblock the constructor!
+    }
+
     if (nextValidIdCb_) nextValidIdCb_(orderId);
 }
 
@@ -133,18 +167,18 @@ void IbkrInfra::openOrderEnd() {
 
 // --- System & Error Handling ---
 
-// Add time_t errorTime and cast unused parameters
 void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson) {
-    // Suppress unused parameter warnings
-    (void)id;
-    (void)errorTime;
-    (void)advancedOrderRejectJson;
-
+    (void)id; (void)errorTime; (void)advancedOrderRejectJson;
     LOG_DEBUG("[IbkrInfra] TWS ({}): {}", errorCode, errorString);
 
-    if (errorCb_) {
-        errorCb_(id, errorCode, errorString, advancedOrderRejectJson);
+    // Common disconnect codes: 502, 504, 1100, 2110
+    if (errorCode == 504 || errorCode == 502 || errorCode == 1100 || errorCode == 2110) { 
+        LOG_WARN("[IbkrInfra] Connection loss detected (Code {}). Watchdog taking over.", errorCode);
+        isConnected_ = false; 
+        isRunning_ = false;
     }
+
+    if (errorCb_) errorCb_(id, errorCode, errorString, advancedOrderRejectJson);
 }
 
 void IbkrInfra::currentTime(long time) {
@@ -152,14 +186,15 @@ void IbkrInfra::currentTime(long time) {
 }
 
 void IbkrInfra::connectionClosed() {
-    LOG_WARN("[IbkrInfra] Connection closed by TWS.");
+    LOG_WARN("[IbkrInfra] Connection closed by TWS. Watchdog will attempt reconnect.");
+    isConnected_ = false;
     isRunning_ = false;
 }
 
 void IbkrInfra::connectAck() {
     if (client_->asyncEConnect()) {
         client_->startApi();
-        LOG_INFO("[IbkrInfra] Connected & API Started successfully.");
+        LOG_INFO("[IbkrInfra] Socket connected. Waiting for NextValidId...");
     }
 }
 

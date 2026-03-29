@@ -144,14 +144,6 @@ int runLiveIbkr() {
 
     auto eventBus = std::make_shared<EventBus>(dataFeed, execEngine); 
 
-    // 4. Connect the plumbing
-    if (!infra->connectToTws()) {
-        LOG_ERROR("[LIVE] Failed to connect to IB Gateway. Is it running and configured?\n");
-        return 1;
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
     execEngine->connectToInfra();
     dataFeed->connectToInfra();
 
@@ -181,8 +173,6 @@ int runLiveIbkr() {
     }
 
     LOG_INFO("[LIVE] Shutting down...");
-
-    infra->disconnectFromTws();
     return 0;
 }
 
