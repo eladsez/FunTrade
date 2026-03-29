@@ -145,6 +145,8 @@ private:
     std::atomic<bool> isInitialConnection_{true};
     std::mutex connectMutex_;
     std::condition_variable connectCv_;
+    std::mutex monitorMutex_;
+    std::condition_variable monitorCv_;
     std::vector<ReconnectCallback> reconnectCallbacks_;
 
     // Callback instances

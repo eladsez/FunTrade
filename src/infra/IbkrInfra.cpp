@@ -23,6 +23,7 @@ IbkrInfra::IbkrInfra(std::string host, int port, int clientId)
 
 IbkrInfra::~IbkrInfra() {
     stopRequested_ = true;
+    monitorCv_.notify_all();
 
     if (monitorThread_.joinable()) 
         monitorThread_.join();
@@ -65,15 +66,32 @@ bool IbkrInfra::tryConnect() {
 
 void IbkrInfra::monitorLoop() {
     while (!stopRequested_) {
-        if (!isConnected_) {
-            if (tryConnect()) {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-            } else {
-                LOG_ERROR("[IbkrInfra] Connection failed. Retrying in 5 seconds...");
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-            }
+        std::unique_lock<std::mutex> lock(monitorMutex_);
+
+        // If we are connected, sleep peacefully until a disconnect or stop is requested
+        if (isConnected_) {
+            monitorCv_.wait(lock, [this]() {
+                return !isConnected_.load() || stopRequested_.load();
+            });
+        }
+
+        if (stopRequested_) break;
+
+        // We are disconnected. Release the lock before attempting network IO
+        lock.unlock();
+
+        if (tryConnect()) {
+            // Successfully connected. The next loop iteration will block on the CV.
+            continue; 
         } else {
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+            LOG_ERROR("[IbkrInfra] Connection failed. Retrying in 5 seconds...");
+            
+            // Re-acquire lock to wait. This allows the 5-second retry delay 
+            // to be instantly interrupted if the application is shutting down.
+            lock.lock();
+            monitorCv_.wait_for(lock, std::chrono::seconds(5), [this]() {
+                return stopRequested_.load();
+            });
         }
     }
 }
@@ -184,6 +202,7 @@ void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string
         LOG_WARN("[IbkrInfra] Connection loss detected (Code {}). Watchdog taking over.", errorCode);
         isConnected_ = false; 
         isRunning_ = false;
+        monitorCv_.notify_one(); // Wake up the monitor loop instantly
     }
 
     if (errorCb_) errorCb_(id, errorCode, errorString, advancedOrderRejectJson);
@@ -197,6 +216,7 @@ void IbkrInfra::connectionClosed() {
     LOG_WARN("[IbkrInfra] Connection closed by TWS. Watchdog will attempt reconnect.");
     isConnected_ = false;
     isRunning_ = false;
+    monitorCv_.notify_one(); // Wake up the monitor loop instantly
 }
 
 void IbkrInfra::connectAck() {
