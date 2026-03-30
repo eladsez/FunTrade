@@ -1,4 +1,5 @@
 #include <strategy/BasketMeanReversionStrategy.hpp>
+#include <risk/UiBroadcaster.hpp>
 #include <utils/TimeUtils.hpp>
 #include <core/Logger.hpp>
 #include <fstream>
@@ -41,6 +42,9 @@ void BasketMeanReversionStrategy::start() {
     report_subid_ = event_bus_->subscribeToExecution(
         [this](const ExecutionReport& report) { this->onExecutionReport(report); }
     );
+
+    // 3. BroadCast to UI
+    UiBroadcaster::getInstance().broadcastNewBasket(basket_id_, symbols, basket_state_->getWeights());
 }
 
 void BasketMeanReversionStrategy::loadConfig() {

@@ -21,6 +21,8 @@ public:
         double percentAllocationPerStrategy
     );
 
+    ~StrategyOrchestrator();
+
     // Iterates through the config directory and initializes strategies
     void loadStrategies();
     

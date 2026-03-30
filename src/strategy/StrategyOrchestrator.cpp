@@ -1,6 +1,7 @@
 #include <strategy/StrategyOrchestrator.hpp>
 #include <strategy/BasketMeanReversionStrategy.hpp>
 #include <core/Logger.hpp>
+#include <risk/UiBroadcaster.hpp>
 #include <filesystem>
 
 namespace fs = std::filesystem;
@@ -17,7 +18,13 @@ StrategyOrchestrator::StrategyOrchestrator(
       order_mngr_(std::move(orderMngr)),
       portfolio_mngr_(std::move(portfolioMngr)),
       config_directory_(configDirectory),
-      percent_allocation_per_strategy_(percentAllocationPerStrategy) {}
+      percent_allocation_per_strategy_(percentAllocationPerStrategy) {
+    UiBroadcaster::getInstance().startServer(9000);
+}
+
+StrategyOrchestrator::~StrategyOrchestrator(){
+    UiBroadcaster::getInstance().stopServer();
+}
 
 void StrategyOrchestrator::loadStrategies() {
 
