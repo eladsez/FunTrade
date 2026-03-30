@@ -1,16 +1,19 @@
 #include <strategy/LegExecutionState.hpp>
+#include <risk/UiBroadcaster.hpp>
 
 namespace bot {
 
-LegExecutionState::LegExecutionState(std::string symbol, std::string clientOrderId, double targetQty, Side side)
-    : symbol_(std::move(symbol)), client_order_id_(std::move(clientOrderId)), 
-      target_qty_(targetQty), side_(side) {}
+LegExecutionState::LegExecutionState(std::string symbol, std::string clientOrderId, double targetQty, Side side, std::string basket_id)
+    : symbol_(std::move(symbol)), client_order_id_(std::move(clientOrderId)), basket_id_(std::move(basket_id)),
+      target_qty_(targetQty), side_(side){}
 
 bool LegExecutionState::updateFromReport(const ExecutionReport& report) {
     if (report.client_order_id != client_order_id_) return false;
 
     current_status_ = report.status;
     filled_qty_ = report.cumulative_quantity;
+
+    UiBroadcaster::getInstance().broadcastFill(basket_id_, symbol_, target_qty_, filled_qty_);
 
     // Return true if this update pushed the leg into a terminal state
     return isTerminal();

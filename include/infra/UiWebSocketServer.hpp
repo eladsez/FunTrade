@@ -32,8 +32,8 @@ using tcp = boost::asio::ip::tcp;       // from <boost/asio/ip/tcp.hpp>
 // -----------------------------------------------------------------------------
 class WsSession : public std::enable_shared_from_this<WsSession> {
 public:
-    explicit WsSession(tcp::socket&& socket, std::function<void(std::shared_ptr<WsSession>)> on_close)
-        : ws_(std::move(socket)), on_close_callback_(std::move(on_close)) {}
+    explicit WsSession(tcp::socket&& socket, std::function<void(std::shared_ptr<WsSession>)> on_close, std::function<void(std::shared_ptr<WsSession>)> on_connect)
+        : ws_(std::move(socket)), on_close_callback_(std::move(on_close)), on_connect_callback_(std::move(on_connect)) {}
 
     void run() {
         // Set suggested timeout settings for the websocket
@@ -57,6 +57,11 @@ private:
             return;
         }
         LOG_INFO("[UiWebSocketServer] UI Terminal Connected.");
+
+        if (on_connect_callback_) {
+            on_connect_callback_(shared_from_this()); 
+        }
+
         do_read(); // Must start reading to detect disconnects
     }
 
@@ -111,6 +116,7 @@ private:
     beast::flat_buffer buffer_;
     std::queue<std::string> queue_;
     std::function<void(std::shared_ptr<WsSession>)> on_close_callback_;
+    std::function<void(std::shared_ptr<WsSession>)> on_connect_callback_;
 };
 
 // -----------------------------------------------------------------------------
@@ -157,7 +163,8 @@ private:
             // Create a session and add it to our active list
             auto session = std::make_shared<WsSession>(
                 std::move(socket),
-                [this](std::shared_ptr<WsSession> s) { remove_session(s); }
+                [this](std::shared_ptr<WsSession> s) { remove_session(s); },
+                on_connect_callback_
             );
             
             {
@@ -165,11 +172,6 @@ private:
                 sessions_.insert(session);
             }
             session->run();
-
-            // Trigger the callback to send cached data to this specific late-joiner
-            if (on_connect_callback_) {
-                on_connect_callback_(session);
-            }
 
         } else {
             LOG_ERROR("[UiWebSocketServer] WebSocket Accept error: {}", ec.message());

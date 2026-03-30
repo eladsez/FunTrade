@@ -1,6 +1,7 @@
 #include <strategy/BasketState.hpp>
 #include <cmath>
 #include <core/Logger.hpp>
+#include <risk/UiBroadcaster.hpp>
 
 namespace bot {
 
@@ -30,6 +31,8 @@ BasketState::BasketState(int window_size, const std::vector<std::string>& symbol
 // Trigger the EMA update exactly ONCE per tick arrival
 void BasketState::updatePrice(const std::string& symbol, double price, uint64_t timestamp) {
     if (price <= 0.0) return;
+
+    UiBroadcaster::getInstance().broadcastPrice(basket_id_, symbol, price);
 
     for (size_t i = 0; i < num_components_; ++i) {
         if (symbols_[i] == symbol) {

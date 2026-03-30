@@ -259,7 +259,7 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
     }
 
     // 2. Build the cycle and dispatch to the OrderManager
-    current_cycle_ = std::make_unique<ExecutionCycle>();
+    current_cycle_ = std::make_unique<ExecutionCycle>(basket_id_);
 
     // 3. Dispatch the orders to the OrderManager
     for (size_t i = 0; i < num_components; ++i) {
@@ -297,7 +297,7 @@ void BasketMeanReversionStrategy::executeRecoverySweep() {
     auto targets = BasketSizer::calculateExit(client_order_ids_, *portfolio_mngr_);
     
     // Setup immediate replacement flatting cycle
-    current_cycle_ = std::make_unique<ExecutionCycle>();
+    current_cycle_ = std::make_unique<ExecutionCycle>(basket_id_);
     
     size_t num_components = basket_state_->getNumComponents();
     const auto& symbols = basket_state_->getSymbols();
@@ -419,8 +419,9 @@ void BasketMeanReversionStrategy::stop() {
 
 inline void BasketMeanReversionStrategy::logZScoreThrottled(double z_score, uint64_t timestamp) {
     if (timestamp - last_z_log_time_ms_ >= 5000) {
-        LOG_INFO("[{}] Current Z-Score: {:.4f}", basket_id_, z_score);
+        LOG_DEBUG("[{}] Current Z-Score: {:.4f}", basket_id_, z_score);
         last_z_log_time_ms_ = timestamp;
+        UiBroadcaster::getInstance().broadcastZTick(basket_id_, z_score);
     }
 }
 

@@ -10,7 +10,7 @@ void ExecutionCycle::addLeg(const std::string& clientOrderId, const std::string&
         return; 
     }
     
-    legs_.emplace(clientOrderId, LegExecutionState(symbol, clientOrderId, targetQty, side));
+    legs_.emplace(clientOrderId, LegExecutionState(symbol, clientOrderId, targetQty, side, basket_id_));
 }
 
 bool ExecutionCycle::processExecutionReport(const ExecutionReport& report) {
