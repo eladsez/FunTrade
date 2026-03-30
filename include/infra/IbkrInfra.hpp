@@ -87,6 +87,12 @@ public:
     using ReconnectCallback = std::function<void()>;
     void addReconnectCallback(ReconnectCallback cb) { reconnectCallbacks_.push_back(std::move(cb)); }
 
+    using ContractDetailsCallback = std::function<void(int, const ContractDetails&)>;
+    using ContractDetailsEndCallback = std::function<void(int)>;
+
+    void setContractDetailsCallback(ContractDetailsCallback cb) { contractDetailsCb_ = std::move(cb); }
+    void setContractDetailsEndCallback(ContractDetailsEndCallback cb) { contractDetailsEndCb_ = std::move(cb); }
+
     // =========================================================================
     // EWrapper Overrides (Triggered by TWS API background thread)
     // =========================================================================
@@ -120,6 +126,9 @@ public:
     void connectAck() override;
 
     void currentTime(long time) override;
+
+    void contractDetails(int reqId, const ContractDetails& contractDetails) override;
+    void contractDetailsEnd(int reqId) override;
 
 private:
     void readerLoop(); // The background thread processing TWS messages
@@ -175,6 +184,9 @@ private:
 
     ErrorCallback errorCb_;
     CurrentTimeCallback currentTimeCb_;
+
+    ContractDetailsCallback contractDetailsCb_;
+    ContractDetailsEndCallback contractDetailsEndCb_;
 
 };
 

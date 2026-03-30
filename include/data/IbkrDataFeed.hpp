@@ -49,6 +49,14 @@ struct TopOfBookCache {
     }
 };
 
+struct DailyMarketHours {
+    bool isClosedAllDay = false;
+    uint64_t rth_start_ms = 0;
+    uint64_t rth_end_ms = 0;
+    std::string liquidHoursStr; // Cache the full string to re-parse if the day rolls over
+    std::string timeZoneId;     // e.g., "EST5EDT"
+};
+
 class IbkrDataFeed : public IDataFeed {
 public:
     IbkrDataFeed(std::shared_ptr<IbkrInfra> infra, bool useTickByTick = false);
@@ -80,11 +88,19 @@ private:
     void onHistoricalData(TickerId reqId, const Bar& bar);
     void onHistoricalDataEnd(int reqId, const std::string& startDateStr, const std::string& endDateStr);
 
+    // Market hours Callbacks
+    void onContractDetails(int reqId, const ContractDetails& contractDetails);
+    void onContractDetailsEnd(int reqId);
+
     std::string formatIbkrDate(const std::string& iso8601);
     std::string calculateDurationDays(const std::string& start, const std::string& end);
     uint64_t parseIbkrDateToMs(const std::string& ibkrDate);
     std::string getSymbolFromId(int reqId);
     Contract createContract(const std::string& symbol);
+
+    bool isWithinRTH(const std::string& symbol, uint64_t tick_timestamp_ms);
+    DailyMarketHours fetchMarketHours(const std::string& symbol);
+    void updateDailyHoursLimits(DailyMarketHours& hoursInfo, uint64_t current_ts_ms);
 
     void eodTaskLoop();
     void processEodBars();
@@ -118,6 +134,12 @@ private:
     std::atomic<bool> stopEodThread_{false};
     std::atomic<long> ibkrCurrentTime_{0};
     std::unordered_map<std::string, uint64_t> lastEodTimestamp_;
+
+    // State for Contract Details
+    std::atomic<int> nextReqId_{6000}; 
+    std::unordered_map<int, std::promise<DailyMarketHours>> contractPromises_;
+    std::unordered_map<int, DailyMarketHours> tempContractData_;
+    std::unordered_map<std::string, DailyMarketHours> symbolMarketHours_;
 };
 
 } // namespace bot

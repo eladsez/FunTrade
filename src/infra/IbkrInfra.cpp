@@ -202,6 +202,14 @@ void IbkrInfra::openOrderEnd() {
     if (openOrderEndCb_) openOrderEndCb_();
 }
 
+void IbkrInfra::contractDetails(int reqId, const ContractDetails& contractDetails) {
+    if (contractDetailsCb_) contractDetailsCb_(reqId, contractDetails);
+}
+
+void IbkrInfra::contractDetailsEnd(int reqId) {
+    if (contractDetailsEndCb_) contractDetailsEndCb_(reqId);
+}
+
 // --- System & Error Handling ---
 
 void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson) {

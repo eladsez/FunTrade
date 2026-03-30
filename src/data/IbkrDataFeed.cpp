@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
+#include <format>
 
 namespace bot {
 
@@ -57,6 +58,14 @@ bool IbkrDataFeed::connectToInfra() {
         eodCv_.notify_one(); // Wake up the thread if it's waiting for the initial sync
     });
 
+    infra_->setContractDetailsCallback([this](int reqId, const ContractDetails& details) {
+        this->onContractDetails(reqId, details);
+    });
+
+    infra_->setContractDetailsEndCallback([this](int reqId) {
+        this->onContractDetailsEnd(reqId);
+    });
+
     infra_->addReconnectCallback([this]() {
         this->onReconnect(); 
     });
@@ -92,6 +101,7 @@ IbkrDataFeed::~IbkrDataFeed() {
 void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
     if (!infra_->getClient() || !infra_->getClient()->isConnected()) return;
 
+    DailyMarketHours hours = fetchMarketHours(symbol);
     SymbolSubscriptionIds ids;
     {
         std::lock_guard<std::mutex> lock(dataMutex_);
@@ -110,6 +120,7 @@ void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
             mktDataCache_[ids.mktDataId] = TopOfBookCache();
         }
         
+        symbolMarketHours_[symbol] = hours;
         activeSubscriptions_[symbol] = ids;
     }
 
@@ -144,6 +155,7 @@ void IbkrDataFeed::unsubscribeFromSymbol(const std::string& symbol) {
             idToSymbol_.erase(ids.mktDataId);
             mktDataCache_.erase(ids.mktDataId);
         }
+        symbolMarketHours_.erase(symbol);
         activeSubscriptions_.erase(it);
     }
 
@@ -202,9 +214,15 @@ void IbkrDataFeed::onTickByTickBidAsk(int reqId, time_t time, double bidPrice, d
     std::string symbol = getSymbolFromId(reqId);
     if (symbol.empty()) return; 
 
+    uint64_t ts_ms = static_cast<uint64_t>(time) * 1000;
+
+    if (!isWithinRTH(symbol, ts_ms)) {
+        return; // Drop pre/post market tick
+    }
+
     QuoteTick quote;
     quote.symbol = symbol;
-    quote.timestamp_ms = static_cast<uint64_t>(time) * 1000; // True exchange timestamp!
+    quote.timestamp_ms = ts_ms;
     quote.bid_price = bidPrice;
     quote.ask_price = askPrice;
     quote.bid_size = (bidSize == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(bidSize);
@@ -221,9 +239,15 @@ void IbkrDataFeed::onTickByTickAllLast(int reqId, int tickType, time_t time, dou
     std::string symbol = getSymbolFromId(reqId);
     if (symbol.empty()) return;
 
+    uint64_t ts_ms = static_cast<uint64_t>(time) * 1000;
+
+    if (!isWithinRTH(symbol, ts_ms)) {
+        return; // Drop pre/post market tick
+    }
+
     TradeTick trade;
     trade.symbol = symbol;
-    trade.timestamp_ms = static_cast<uint64_t>(time) * 1000; // True exchange timestamp!
+    trade.timestamp_ms = ts_ms;
     trade.price = price;
     trade.volume = (size == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(size);
 
@@ -236,9 +260,15 @@ void IbkrDataFeed::onTickByTickMidPoint(int reqId, time_t time, double midPoint)
     std::string symbol = getSymbolFromId(reqId);
     if (symbol.empty()) return;
 
+    uint64_t ts_ms = static_cast<uint64_t>(time) * 1000;
+
+    if (!isWithinRTH(symbol, ts_ms)) {
+        return; // Drop pre/post market tick
+    }
+
     MidPointTick tick;
     tick.symbol = symbol;
-    tick.timestamp_ms = static_cast<uint64_t>(time) * 1000;
+    tick.timestamp_ms = ts_ms;
     tick.mid_price = midPoint;
 
     if (tick.mid_price > 0 && tickCallback_) {
@@ -250,6 +280,14 @@ void IbkrDataFeed::onTickPrice(TickerId tickerId, TickType field, double price, 
     std::string symbol = getSymbolFromId(tickerId);
     if (symbol.empty() || price <= 0.0) return;
 
+    uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+
+    if (!isWithinRTH(symbol, now_ms)) {
+        return; // Drop pre/post market tick
+    }
+
+
     // We will construct the events inside the lock, but emit them OUTSIDE the lock
     bool emitTrade = false;
     bool emitMidPoint = false;
@@ -257,9 +295,6 @@ void IbkrDataFeed::onTickPrice(TickerId tickerId, TickType field, double price, 
     TradeTick trade;
     MidPointTick midTick;
     QuoteTick quoteTick;
-
-    uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
 
     {
         std::lock_guard<std::mutex> lock(dataMutex_);
@@ -311,6 +346,13 @@ void IbkrDataFeed::onTickSize(TickerId tickerId, TickType field, Decimal size) {
     std::string symbol = getSymbolFromId(tickerId);
     if (symbol.empty()) return;
 
+    uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+
+    if (!isWithinRTH(symbol, now_ms)) {
+        return; // Drop pre/post market tick
+    }
+
     bool emitQuote = false;
     QuoteTick quoteTick;
     {
@@ -348,6 +390,51 @@ void IbkrDataFeed::onTickSize(TickerId tickerId, TickType field, Decimal size) {
     // Note: We don't recalculate the MidPoint here because the midpoint *price* // hasn't changed, only the size at those levels. 
     // If your strategy ever evolves to use Volume Weighted Midprice (VWM), 
     // you would trigger the calculation here as well!
+}
+
+void IbkrDataFeed::onContractDetails(int reqId, const ContractDetails& details) {
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    if (contractPromises_.find(reqId) != contractPromises_.end()) {
+        DailyMarketHours hours;
+        hours.liquidHoursStr = details.liquidHours;
+        hours.timeZoneId = details.timeZoneId;
+        tempContractData_[reqId] = hours;
+    }
+}
+
+void IbkrDataFeed::onContractDetailsEnd(int reqId) {
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    auto it = contractPromises_.find(reqId);
+    if (it != contractPromises_.end()) {
+        it->second.set_value(tempContractData_[reqId]);
+        contractPromises_.erase(it);
+        tempContractData_.erase(reqId);
+    }
+}
+
+DailyMarketHours IbkrDataFeed::fetchMarketHours(const std::string& symbol) {
+    int reqId = nextReqId_++;
+    std::future<DailyMarketHours> future;
+
+    {
+        std::lock_guard<std::mutex> lock(dataMutex_);
+        contractPromises_[reqId] = std::promise<DailyMarketHours>();
+        future = contractPromises_[reqId].get_future();
+    }
+
+    Contract contract = createContract(symbol);
+    LOG_DEBUG("[IbkrDataFeed] Requesting Contract Details for hours: {}", symbol);
+    infra_->getClient()->reqContractDetails(reqId, contract);
+
+    if (future.wait_for(std::chrono::seconds(10)) == std::future_status::ready) {
+        return future.get();
+    } else {
+        LOG_ERROR("[IbkrDataFeed] Contract details timeout for {}", symbol);
+        std::lock_guard<std::mutex> lock(dataMutex_);
+        contractPromises_.erase(reqId);
+        tempContractData_.erase(reqId);
+        return {}; // Returns empty, filter will have to assume 24/7 or fail gracefully
+    }
 }
 
 // =========================================================================
@@ -543,6 +630,15 @@ void IbkrDataFeed::processEodBars() {
             
             tickCallback_(bar_event);
         }
+
+        // Reset the daily market hours bounds so the next morning's tick will re-parse the liquidHoursStr
+        {
+            std::lock_guard<std::mutex> lock(dataMutex_);
+            if (symbolMarketHours_.count(sym)) {
+                symbolMarketHours_[sym].rth_start_ms = 0;
+                symbolMarketHours_[sym].rth_end_ms = 0;
+            }
+        }
     }
 }
 
@@ -623,6 +719,87 @@ uint64_t IbkrDataFeed::parseIbkrDateToMs(const std::string& ibkrDate) {
         return static_cast<uint64_t>(std::mktime(&tm_val)) * 1000;
     }
     return 0;
+}
+
+void IbkrDataFeed::updateDailyHoursLimits(DailyMarketHours& hoursInfo, uint64_t current_ts_ms) {
+    using namespace std::chrono;
+
+    // Convert tick timestamp to a time_point
+    system_clock::time_point tick_time{milliseconds{current_ts_ms}};
+    
+    // Convert to the exchange's local time (e.g., "America/New_York")
+    // Note: IBKR's timeZoneId (like "EST5EDT") sometimes needs mapping to IANA zones, 
+    // but C++20 locate_zone handles standard ones. "America/New_York" is safest for US Equities.
+    auto tz = locate_zone("America/New_York"); 
+    auto local_time = tz->to_local(tick_time);
+    
+    // Extract the date string "yyyyMMdd"
+    auto day = floor<days>(local_time);
+    year_month_day ymd{day};
+    std::string targetDate = std::format("{:04}{:02}{:02}", 
+        static_cast<int>(ymd.year()), static_cast<unsigned>(ymd.month()), static_cast<unsigned>(ymd.day()));
+
+    // Search the liquidHoursStr for this date
+    // Format is "yyyyMMdd:hhmm-hhmm;yyyyMMdd:CLOSED;"
+    std::string searchPrefix = targetDate + ":";
+    size_t pos = hoursInfo.liquidHoursStr.find(searchPrefix);
+    
+    // Calculate midnight of the next day in New York local time.
+    // This gives us a boundary to know when "today" is over.
+    auto end_of_day_local = local_days{ymd} + days{1}; 
+    uint64_t end_of_day_ms = duration_cast<milliseconds>(tz->to_sys(end_of_day_local).time_since_epoch()).count();
+
+    // 1. Handle missing date in string
+    if (pos == std::string::npos) {
+        LOG_WARN("[IbkrDataFeed] Schedule not found for date {}. Assuming CLOSED.", targetDate);
+        hoursInfo.isClosedAllDay = true;
+        hoursInfo.rth_end_ms = end_of_day_ms; // Don't parse again until tomorrow
+        return; 
+    }
+
+    size_t endPos = hoursInfo.liquidHoursStr.find(";", pos);
+    std::string hoursSegment = hoursInfo.liquidHoursStr.substr(pos + searchPrefix.length(), endPos - pos - searchPrefix.length());
+
+    // 2. Handle explicit "CLOSED" from IBKR
+    if (hoursSegment == "CLOSED") {
+        hoursInfo.isClosedAllDay = true;
+        hoursInfo.rth_end_ms = end_of_day_ms; // Don't parse again until tomorrow
+        return;
+    }
+
+    // Parse "0930-1600"
+    if (hoursSegment.length() == 9) {
+        hoursInfo.isClosedAllDay = false;
+        int start_h = std::stoi(hoursSegment.substr(0, 2));
+        int start_m = std::stoi(hoursSegment.substr(2, 2));
+        int end_h = std::stoi(hoursSegment.substr(5, 2));
+        int end_m = std::stoi(hoursSegment.substr(7, 2));
+
+        auto start_local = local_days{ymd} + hours{start_h} + minutes{start_m};
+        auto end_local = local_days{ymd} + hours{end_h} + minutes{end_m};
+
+        // Convert back to UTC epoch ms
+        hoursInfo.rth_start_ms = duration_cast<milliseconds>(tz->to_sys(start_local).time_since_epoch()).count();
+        hoursInfo.rth_end_ms = duration_cast<milliseconds>(tz->to_sys(end_local).time_since_epoch()).count();
+    }
+}
+
+bool IbkrDataFeed::isWithinRTH(const std::string& symbol, uint64_t tick_timestamp_ms) {
+    std::lock_guard<std::mutex> lock(dataMutex_);
+    auto it = symbolMarketHours_.find(symbol);
+    if (it == symbolMarketHours_.end()) return true; // Safety fallback
+
+    auto& hours = it->second;
+
+    // Check if we need to update our daily limits (e.g., tick is from a new day)
+    // Note: rth_end_ms is 0 if it hasn't been parsed yet.
+    if (hours.rth_end_ms == 0 || tick_timestamp_ms > hours.rth_end_ms) {
+        updateDailyHoursLimits(hours, tick_timestamp_ms);
+    }
+
+    if (hours.isClosedAllDay) return false;
+
+    return (tick_timestamp_ms >= hours.rth_start_ms && tick_timestamp_ms <= hours.rth_end_ms);
 }
 
 } // namespace bot
