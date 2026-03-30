@@ -46,14 +46,21 @@ void IbkrInfra::cleanupConnection() {
     if (readerThread_.joinable()) {
         readerThread_.join();
     }
+
+    reader_.reset();
+    client_.reset();
+    osSignal_.reset();
 }
 
 bool IbkrInfra::tryConnect() {
     LOG_INFO("[IbkrInfra] Attempting connection to IB Gateway {}:{}", host_, port_);
     cleanupConnection();
 
+    osSignal_ = std::make_unique<EReaderOSSignal>(2000); 
+    client_ = std::make_unique<EClientSocket>(this, osSignal_.get());
+
     if (client_->eConnect(host_.c_str(), port_, clientId_, false)) {
-        LOG_INFO("[IbkrInfra] Socket connected. Starting reader thread...");
+        LOG_DEBUG("[IbkrInfra] Socket connected. Starting reader thread...");
         reader_ = std::make_unique<EReader>(client_.get(), osSignal_.get());
         reader_->start();
 
@@ -202,7 +209,7 @@ void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string
     LOG_DEBUG("[IbkrInfra] TWS ({}): {}", errorCode, errorString);
 
     // Common disconnect codes: 502, 504, 1100, 2110
-    if (errorCode == 504 || errorCode == 502 || errorCode == 1100 || errorCode == 2110) { 
+    if (errorCode == 504 || errorCode == 502) { 
         LOG_WARN("[IbkrInfra] Connection loss detected (Code {}). Watchdog taking over.", errorCode);
         handleDisconnect();
     }
@@ -234,7 +241,7 @@ void IbkrInfra::handleDisconnect() {
 void IbkrInfra::connectAck() {
     if (client_->asyncEConnect()) {
         client_->startApi();
-        LOG_INFO("[IbkrInfra] Socket connected. Waiting for NextValidId...");
+        LOG_DEBUG("[IbkrInfra] Socket connected. Waiting for NextValidId...");
     }
 }
 
