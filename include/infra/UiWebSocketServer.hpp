@@ -5,7 +5,7 @@
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <spdlog/spdlog.h>
+#include <core/Logger.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -53,10 +53,10 @@ public:
 private:
     void on_accept(beast::error_code ec) {
         if (ec) {
-            spdlog::error("WebSocket Accept error: {}", ec.message());
+            LOG_ERROR("[UiWebSocketServer] WebSocket Accept error: {}", ec.message());
             return;
         }
-        spdlog::info("UI Terminal Connected.");
+        LOG_INFO("[UiWebSocketServer] UI Terminal Connected.");
         do_read(); // Must start reading to detect disconnects
     }
 
@@ -70,12 +70,12 @@ private:
         
         // This indicates the client closed the connection
         if (ec == websocket::error::closed || ec == net::error::eof || ec == net::error::connection_reset) {
-            spdlog::info("UI Terminal Disconnected.");
+            LOG_INFO("[UiWebSocketServer] UI Terminal Disconnected.");
             on_close_callback_(shared_from_this());
             return;
         }
 
-        if (ec) spdlog::error("WebSocket Read error: {}", ec.message());
+        if (ec) LOG_ERROR("[UiWebSocketServer] WebSocket Read error: {}", ec.message());
         
         buffer_.consume(buffer_.size()); // We ignore incoming data for now
         do_read(); // Continue reading
@@ -97,7 +97,7 @@ private:
     void on_write(beast::error_code ec, std::size_t bytes_transferred) {
         boost::ignore_unused(bytes_transferred);
         if (ec) {
-            spdlog::error("WebSocket Write error: {}", ec.message());
+            LOG_ERROR("[UiWebSocketServer] WebSocket Write error: {}", ec.message());
             return;
         }
 
@@ -118,8 +118,9 @@ private:
 // -----------------------------------------------------------------------------
 class UiWebSocketServer : public std::enable_shared_from_this<UiWebSocketServer> {
 public:
-    UiWebSocketServer(net::io_context& ioc, tcp::endpoint endpoint)
-        : ioc_(ioc), acceptor_(ioc) {
+    UiWebSocketServer(net::io_context& ioc, tcp::endpoint endpoint,
+                      std::function<void(std::shared_ptr<WsSession>)> on_connect)
+        : ioc_(ioc), acceptor_(ioc), on_connect_callback_(std::move(on_connect)){
         
         beast::error_code ec;
         acceptor_.open(endpoint.protocol(), ec);
@@ -128,7 +129,7 @@ public:
         acceptor_.listen(net::socket_base::max_listen_connections, ec);
 
         if (ec) {
-            spdlog::error("WebSocket Server Bind Error: {}", ec.message());
+            LOG_ERROR("[UiWebSocketServer] WebSocket Server Bind Error: {}", ec.message());
             return;
         }
     }
@@ -164,8 +165,14 @@ private:
                 sessions_.insert(session);
             }
             session->run();
+
+            // Trigger the callback to send cached data to this specific late-joiner
+            if (on_connect_callback_) {
+                on_connect_callback_(session);
+            }
+
         } else {
-            spdlog::error("WebSocket Accept error: {}", ec.message());
+            LOG_ERROR("[UiWebSocketServer] WebSocket Accept error: {}", ec.message());
         }
 
         do_accept(); // Listen for next connection
@@ -181,6 +188,7 @@ private:
     
     std::mutex sessions_mutex_;
     std::unordered_set<std::shared_ptr<WsSession>> sessions_;
+    std::function<void(std::shared_ptr<WsSession>)> on_connect_callback_;
 };
 
 } // namespace bot
