@@ -61,7 +61,7 @@ public:
         is_running_ = true;
 
         try {
-            auto const address = boost::asio::ip::make_address("127.0.0.1");
+            auto const address = boost::asio::ip::make_address("0.0.0.0");
             
             auto on_connect = [this](std::shared_ptr<WsSession> session) {
                 std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -79,9 +79,9 @@ public:
             // Start the background serialization thread
             serializer_thread_ = std::thread([this]() { processQueue(); });
             
-            spdlog::info("UI WebSocket Server started on ws://127.0.0.1:9000");
+            LOG_INFO("[UiBroadcaster] UI WebSocket Server started on ws://0.0.0.0:9000");
         } catch (const std::exception& e) {
-            spdlog::error("Failed to start UI Server: {}", e.what());
+            LOG_ERROR("[UiBroadcaster] Failed to start UI Server: {}", e.what());
         }
     }
 

@@ -137,7 +137,9 @@ int runBacktestMode(const std::string& csvTickPath, const std::string& csvHistor
 }
 
 int runLiveIbkr() {
-    auto infra = std::make_shared<IbkrInfra>("host.docker.internal", 7497, 1); 
+    // running from my docker
+    // auto infra = std::make_shared<IbkrInfra>("host.docker.internal", 7497, 1); 
+    auto infra = std::make_shared<IbkrInfra>("127.0.0.1", 4002, 1);
 
     auto execEngine = std::make_shared<IbkrExecutionEngine>(infra); 
     auto dataFeed = std::make_shared<IbkrDataFeed>(infra); 
