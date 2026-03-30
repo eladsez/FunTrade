@@ -101,7 +101,6 @@ IbkrDataFeed::~IbkrDataFeed() {
 void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
     if (!infra_->getClient() || !infra_->getClient()->isConnected()) return;
 
-    DailyMarketHours hours = fetchMarketHours(symbol);
     SymbolSubscriptionIds ids;
     {
         std::lock_guard<std::mutex> lock(dataMutex_);
@@ -119,12 +118,15 @@ void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
             idToSymbol_[ids.mktDataId] = symbol;
             mktDataCache_[ids.mktDataId] = TopOfBookCache();
         }
-        
-        symbolMarketHours_[symbol] = hours;
+
+        contractReqToSymbol_[nextHoursReqId_] = symbol;
         activeSubscriptions_[symbol] = ids;
     }
 
     Contract contract = createContract(symbol);
+
+    LOG_DEBUG("[IbkrDataFeed] Requesting Contract Details for hours: {}", symbol);
+    infra_->getClient()->reqContractDetails(nextHoursReqId_++, contract);
 
     if (useTickByTick_) {
         LOG_INFO("[IbkrDataFeed] Requesting TICK-BY-TICK for {}", symbol);
@@ -394,47 +396,20 @@ void IbkrDataFeed::onTickSize(TickerId tickerId, TickType field, Decimal size) {
 
 void IbkrDataFeed::onContractDetails(int reqId, const ContractDetails& details) {
     std::lock_guard<std::mutex> lock(dataMutex_);
-    if (contractPromises_.find(reqId) != contractPromises_.end()) {
+    auto it = contractReqToSymbol_.find(reqId);
+    if (it != contractReqToSymbol_.end()) {
+        std::string symbol = it->second;
         DailyMarketHours hours;
         hours.liquidHoursStr = details.liquidHours;
         hours.timeZoneId = details.timeZoneId;
-        tempContractData_[reqId] = hours;
+        symbolMarketHours_[symbol] = hours;
+        LOG_DEBUG("[IbkrDataFeed] Received Market Hours schedule for {}", symbol);
     }
 }
 
 void IbkrDataFeed::onContractDetailsEnd(int reqId) {
     std::lock_guard<std::mutex> lock(dataMutex_);
-    auto it = contractPromises_.find(reqId);
-    if (it != contractPromises_.end()) {
-        it->second.set_value(tempContractData_[reqId]);
-        contractPromises_.erase(it);
-        tempContractData_.erase(reqId);
-    }
-}
-
-DailyMarketHours IbkrDataFeed::fetchMarketHours(const std::string& symbol) {
-    int reqId = nextReqId_++;
-    std::future<DailyMarketHours> future;
-
-    {
-        std::lock_guard<std::mutex> lock(dataMutex_);
-        contractPromises_[reqId] = std::promise<DailyMarketHours>();
-        future = contractPromises_[reqId].get_future();
-    }
-
-    Contract contract = createContract(symbol);
-    LOG_DEBUG("[IbkrDataFeed] Requesting Contract Details for hours: {}", symbol);
-    infra_->getClient()->reqContractDetails(reqId, contract);
-
-    if (future.wait_for(std::chrono::seconds(10)) == std::future_status::ready) {
-        return future.get();
-    } else {
-        LOG_ERROR("[IbkrDataFeed] Contract details timeout for {}", symbol);
-        std::lock_guard<std::mutex> lock(dataMutex_);
-        contractPromises_.erase(reqId);
-        tempContractData_.erase(reqId);
-        return {}; // Returns empty, filter will have to assume 24/7 or fail gracefully
-    }
+    contractReqToSymbol_.erase(reqId);
 }
 
 // =========================================================================
@@ -787,7 +762,9 @@ void IbkrDataFeed::updateDailyHoursLimits(DailyMarketHours& hoursInfo, uint64_t 
 bool IbkrDataFeed::isWithinRTH(const std::string& symbol, uint64_t tick_timestamp_ms) {
     std::lock_guard<std::mutex> lock(dataMutex_);
     auto it = symbolMarketHours_.find(symbol);
-    if (it == symbolMarketHours_.end()) return true; // Safety fallback
+    
+    // If the hours haven't arrived from IBKR yet, drop the tick to be safe.
+    if (it == symbolMarketHours_.end()) return false; 
 
     auto& hours = it->second;
 

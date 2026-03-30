@@ -99,7 +99,6 @@ private:
     Contract createContract(const std::string& symbol);
 
     bool isWithinRTH(const std::string& symbol, uint64_t tick_timestamp_ms);
-    DailyMarketHours fetchMarketHours(const std::string& symbol);
     void updateDailyHoursLimits(DailyMarketHours& hoursInfo, uint64_t current_ts_ms);
 
     void eodTaskLoop();
@@ -136,9 +135,8 @@ private:
     std::unordered_map<std::string, uint64_t> lastEodTimestamp_;
 
     // State for Contract Details
-    std::atomic<int> nextReqId_{6000}; 
-    std::unordered_map<int, std::promise<DailyMarketHours>> contractPromises_;
-    std::unordered_map<int, DailyMarketHours> tempContractData_;
+    std::atomic<int> nextHoursReqId_{6000}; 
+    std::unordered_map<int, std::string> contractReqToSymbol_; 
     std::unordered_map<std::string, DailyMarketHours> symbolMarketHours_;
 };
 
