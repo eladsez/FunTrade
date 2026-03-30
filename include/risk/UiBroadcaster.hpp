@@ -20,6 +20,10 @@ struct MsgInitBasket {
     std::string basket_id;
     std::vector<std::string> symbols;
     std::vector<double> weights;
+    double entry_long;
+    double exit_long;
+    double exit_short;
+    double entry_short;
 };
 
 struct MsgZTick {
@@ -103,8 +107,12 @@ public:
     // THE HOT PATH APIs: These are now wait-free, O(1), and do zero heap allocation.
     // ------------------------------------------------------------------------
     
-    void broadcastNewBasket(std::string basket_id, std::vector<std::string> symbols, std::vector<double> weights) {
-        msg_queue_.enqueue(MsgInitBasket{std::move(basket_id), std::move(symbols), std::move(weights)});
+    void broadcastNewBasket(std::string basket_id, std::vector<std::string> symbols, std::vector<double> weights,
+                            double entry_long, double exit_long, double exit_short, double entry_short) {
+        msg_queue_.enqueue(MsgInitBasket{
+            std::move(basket_id), std::move(symbols), std::move(weights), 
+            entry_long, exit_long, exit_short, entry_short
+        });
     }
 
     void broadcastZTick(std::string basket_id, double z_score) {
@@ -152,6 +160,11 @@ private:
                     j["master_state"] = "FLAT";
                     j["pos"] = "FLAT";
                     j["z"] = 0.0;
+                    j["entry_long"] = arg.entry_long;
+                    j["exit_long"] = arg.exit_long;
+                    j["exit_short"] = arg.exit_short;
+                    j["entry_short"] = arg.entry_short;
+                    
                     nlohmann::json legs = nlohmann::json::object();
                     for (size_t i = 0; i < arg.symbols.size(); ++i) {
                         legs[arg.symbols[i]] = {{"px", 0.0}, {"wgt", arg.weights[i]}, {"tgt", 0}, {"fill", 0}};

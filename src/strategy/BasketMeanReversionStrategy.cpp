@@ -45,7 +45,8 @@ void BasketMeanReversionStrategy::start() {
     );
 
     // 3. BroadCast to UI
-    UiBroadcaster::getInstance().broadcastNewBasket(basket_id_, symbols, basket_state_->getWeights());
+    UiBroadcaster::getInstance().broadcastNewBasket(basket_id_, symbols, basket_state_->getWeights(),
+        -entry_z_score_, -exit_z_score_, entry_z_score_, exit_z_score_);
 }
 
 void BasketMeanReversionStrategy::loadConfig() {
