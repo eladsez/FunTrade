@@ -699,63 +699,78 @@ uint64_t IbkrDataFeed::parseIbkrDateToMs(const std::string& ibkrDate) {
 void IbkrDataFeed::updateDailyHoursLimits(DailyMarketHours& hoursInfo, uint64_t current_ts_ms) {
     using namespace std::chrono;
 
-    // Convert tick timestamp to a time_point
     system_clock::time_point tick_time{milliseconds{current_ts_ms}};
-    
-    // Convert to the exchange's local time (e.g., "America/New_York")
-    // Note: IBKR's timeZoneId (like "EST5EDT") sometimes needs mapping to IANA zones, 
-    // but C++20 locate_zone handles standard ones. "America/New_York" is safest for US Equities.
-    auto tz = locate_zone("America/New_York"); 
+    auto tz = locate_zone("America/New_York");
     auto local_time = tz->to_local(tick_time);
-    
-    // Extract the date string "yyyyMMdd"
+
     auto day = floor<days>(local_time);
     year_month_day ymd{day};
     std::string targetDate = std::format("{:04}{:02}{:02}", 
         static_cast<int>(ymd.year()), static_cast<unsigned>(ymd.month()), static_cast<unsigned>(ymd.day()));
 
-    // Search the liquidHoursStr for this date
-    // Format is "yyyyMMdd:hhmm-hhmm;yyyyMMdd:CLOSED;"
     std::string searchPrefix = targetDate + ":";
     size_t pos = hoursInfo.liquidHoursStr.find(searchPrefix);
-    
-    // Calculate midnight of the next day in New York local time.
-    // This gives us a boundary to know when "today" is over.
-    auto end_of_day_local = local_days{ymd} + days{1}; 
+
+    auto end_of_day_local = local_days{ymd} + days{1};
     uint64_t end_of_day_ms = duration_cast<milliseconds>(tz->to_sys(end_of_day_local).time_since_epoch()).count();
 
-    // 1. Handle missing date in string
     if (pos == std::string::npos) {
-        LOG_WARN("[IbkrDataFeed] Schedule not found for date {}. Assuming CLOSED.", targetDate);
+        LOG_WARN("[IbkrDataFeed] Schedule not found for {}. Raw string: {}. Assuming CLOSED.", targetDate, hoursInfo.liquidHoursStr);
         hoursInfo.isClosedAllDay = true;
-        hoursInfo.rth_end_ms = end_of_day_ms; // Don't parse again until tomorrow
-        return; 
-    }
-
-    size_t endPos = hoursInfo.liquidHoursStr.find(";", pos);
-    std::string hoursSegment = hoursInfo.liquidHoursStr.substr(pos + searchPrefix.length(), endPos - pos - searchPrefix.length());
-
-    // 2. Handle explicit "CLOSED" from IBKR
-    if (hoursSegment == "CLOSED") {
-        hoursInfo.isClosedAllDay = true;
-        hoursInfo.rth_end_ms = end_of_day_ms; // Don't parse again until tomorrow
+        hoursInfo.rth_end_ms = end_of_day_ms; 
         return;
     }
 
-    // Parse "0930-1600"
-    if (hoursSegment.length() == 9) {
+    // Safely extract the segment, handling the case where there is no trailing semicolon
+    size_t startPos = pos + searchPrefix.length();
+    size_t endPos = hoursInfo.liquidHoursStr.find(";", startPos);
+    
+    std::string hoursSegment;
+    if (endPos == std::string::npos) {
+        hoursSegment = hoursInfo.liquidHoursStr.substr(startPos);
+    } else {
+        hoursSegment = hoursInfo.liquidHoursStr.substr(startPos, endPos - startPos);
+    }
+
+    LOG_DEBUG("[IbkrDataFeed] Parsed Segment for {}: '{}'", targetDate, hoursSegment);
+
+    if (hoursSegment == "CLOSED") {
+        hoursInfo.isClosedAllDay = true;
+        hoursInfo.rth_end_ms = end_of_day_ms;
+        return;
+    }
+
+    // Parse dynamically by finding the '-' instead of enforcing a strict 9-character length
+    size_t dashPos = hoursSegment.find("-");
+    if (dashPos != std::string::npos && hoursSegment.length() >= 9) {
         hoursInfo.isClosedAllDay = false;
-        int start_h = std::stoi(hoursSegment.substr(0, 2));
-        int start_m = std::stoi(hoursSegment.substr(2, 2));
-        int end_h = std::stoi(hoursSegment.substr(5, 2));
-        int end_m = std::stoi(hoursSegment.substr(7, 2));
+        
+        try {
+            std::string start_str = hoursSegment.substr(0, 4);
+            std::string end_str = hoursSegment.substr(hoursSegment.length() - 4, 4);
 
-        auto start_local = local_days{ymd} + hours{start_h} + minutes{start_m};
-        auto end_local = local_days{ymd} + hours{end_h} + minutes{end_m};
+            int start_h = std::stoi(start_str.substr(0, 2));
+            int start_m = std::stoi(start_str.substr(2, 2));
+            int end_h = std::stoi(end_str.substr(0, 2));
+            int end_m = std::stoi(end_str.substr(2, 2));
 
-        // Convert back to UTC epoch ms
-        hoursInfo.rth_start_ms = duration_cast<milliseconds>(tz->to_sys(start_local).time_since_epoch()).count();
-        hoursInfo.rth_end_ms = duration_cast<milliseconds>(tz->to_sys(end_local).time_since_epoch()).count();
+            auto start_local = local_days{ymd} + hours{start_h} + minutes{start_m};
+            auto end_local = local_days{ymd} + hours{end_h} + minutes{end_m};
+
+            hoursInfo.rth_start_ms = duration_cast<milliseconds>(tz->to_sys(start_local).time_since_epoch()).count();
+            hoursInfo.rth_end_ms = duration_cast<milliseconds>(tz->to_sys(end_local).time_since_epoch()).count();
+            
+            LOG_DEBUG("[IbkrDataFeed] Active RTH set for {}: start_ms={}, end_ms={}", 
+                      targetDate, hoursInfo.rth_start_ms, hoursInfo.rth_end_ms);
+        } catch (const std::exception& e) {
+            LOG_ERROR("[IbkrDataFeed] Failed to parse hours: '{}'. Error: {}", hoursSegment, e.what());
+            hoursInfo.isClosedAllDay = true;
+            hoursInfo.rth_end_ms = end_of_day_ms;
+        }
+    } else {
+        LOG_ERROR("[IbkrDataFeed] Unrecognized hours format: '{}'", hoursSegment);
+        hoursInfo.isClosedAllDay = true;
+        hoursInfo.rth_end_ms = end_of_day_ms;
     }
 }
 
