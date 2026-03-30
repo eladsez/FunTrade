@@ -53,6 +53,7 @@ struct DailyMarketHours {
     bool isClosedAllDay = false;
     uint64_t rth_start_ms = 0;
     uint64_t rth_end_ms = 0;
+    uint64_t calendar_day_end_ms = 0; // The physical day rollover
     std::string liquidHoursStr; // Cache the full string to re-parse if the day rolls over
     std::string timeZoneId;     // e.g., "EST5EDT"
 };
