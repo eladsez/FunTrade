@@ -3,9 +3,6 @@
 
 namespace bot {
 
-ExecutionCycle::ExecutionCycle(PositionState targetState) 
-    : target_state_(targetState) {}
-
 void ExecutionCycle::addLeg(const std::string& clientOrderId, const std::string& symbol, double targetQty, Side side) {
     // If target is 0 (e.g., we are flattening a leg we don't hold), it's instantly terminal
     if (targetQty <= 0.0) {
@@ -62,10 +59,6 @@ bool ExecutionCycle::hasAnyFills() const {
         if (leg.getFilledQuantity() > 0.0) return true;
     }
     return false;
-}
-
-PositionState ExecutionCycle::getTargetState() const {
-    return target_state_;
 }
 
 } // namespace bot

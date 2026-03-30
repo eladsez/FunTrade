@@ -11,11 +11,8 @@ namespace bot {
 
 enum class PositionState { 
     FLAT, 
-    PENDING_LONG, 
     LONG, 
-    PENDING_SHORT, 
     SHORT, 
-    PENDING_FLAT 
 };
 
 class BasketState {

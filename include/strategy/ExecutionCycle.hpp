@@ -9,7 +9,7 @@ namespace bot {
 
 class ExecutionCycle {
 public:
-    explicit ExecutionCycle(PositionState targetState);
+    explicit ExecutionCycle() = default;
 
     void addLeg(const std::string& clientOrderId, const std::string& symbol, double targetQty, Side side);
     
@@ -18,13 +18,11 @@ public:
     
     bool isComplete() const;
     bool hasAnyFills() const;
-    PositionState getTargetState() const;
     
     // Calculates the total absolute difference between target and filled quantities across all legs
     double getMissedShares() const;
 
 private:
-    PositionState target_state_;
     std::map<std::string, LegExecutionState> legs_;
     size_t terminal_count_ = 0;
 };

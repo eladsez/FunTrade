@@ -19,6 +19,15 @@
 
 namespace bot {
 
+enum class MasterState { 
+    FLAT,               // Clean inventory, hunting for entry signals
+    ENTRY_PENDING,      // Orders dispatched, waiting for exchange resolution
+    IN_POSITION,        // Fully confirmed, balanced basket
+    EXIT_PENDING,       // Closing orders dispatched, waiting for resolution
+    RECOVERY_PENDING,   // enter recovery to try flaten
+    SYSTEM_HALTED       // Fatal error state
+};
+
 class BasketMeanReversionStrategy : public IStrategy {
 public:
     BasketMeanReversionStrategy(
@@ -37,6 +46,7 @@ private:
     void onMarketEvent(const MarketEvent& event);
     inline void processTick(const std::string& symbol, double price, uint64_t timestamp = 0);
     void executeBasket(PositionState targetState);
+    void executeRecoverySweep(); // Recovery protocol
     void onExecutionReport(const ExecutionReport& report);
     std::map<uint64_t, std::vector<double>> alignHistoricalBars(
         const std::vector<std::vector<HistoricalBar>>& all_bars, 
@@ -56,7 +66,8 @@ private:
     double entry_z_score_ = 2.0;
     double exit_z_score_ = 0.5;
     
-    // for now doesn't need a lock because it being changed and read only from one thread
+    // Strict Deterministic State Flow
+    MasterState master_state_ = MasterState::FLAT;
     PositionState current_position_ = PositionState::FLAT;
     
     // Pre-allocated strings to avoid SSO allocations on the hot path

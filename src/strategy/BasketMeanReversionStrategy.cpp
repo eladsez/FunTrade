@@ -195,31 +195,36 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
     }
 
     double z_score = opt_z_score.value();
-
     logZScoreThrottled(z_score, timestamp);
 
-    if (current_position_ == PositionState::FLAT) {
+    if (master_state_ == MasterState::FLAT) {
         if (z_score > entry_z_score_) {
             LOG_INFO("[{}] Z-Score ({:.4f}) breached SHORT threshold ({:.4f}).", basket_id_, z_score, entry_z_score_);
-            current_position_ = PositionState::PENDING_SHORT;
+            current_position_ = PositionState::SHORT;
+            master_state_ = MasterState::ENTRY_PENDING;
             executeBasket(PositionState::SHORT);
         } else if (z_score < -entry_z_score_) {
             LOG_INFO("[{}] Z-Score ({:.4f}) breached LONG threshold ({:.4f}).", basket_id_, z_score, -entry_z_score_);
-            current_position_ = PositionState::PENDING_LONG;
+            current_position_ = PositionState::LONG;
+            master_state_ = MasterState::ENTRY_PENDING;
             executeBasket(PositionState::LONG);
         }
-    } else if (current_position_ == PositionState::SHORT) {
-        if (z_score < exit_z_score_) {
+    } 
+    else if (master_state_ == MasterState::IN_POSITION) {
+        // We know we are fully filled. What side are we on?
+        if (current_position_ == PositionState::SHORT && z_score < exit_z_score_) {
             LOG_INFO("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting SHORT.", basket_id_, z_score, exit_z_score_);
-            current_position_ = PositionState::PENDING_FLAT;  // Lock it
+            master_state_ = MasterState::EXIT_PENDING;
             executeBasket(PositionState::FLAT);
-        }
-    } else if (current_position_ == PositionState::LONG) {
-        if (z_score > -exit_z_score_) {
+        } else if (current_position_ == PositionState::LONG && z_score > -exit_z_score_) {
             LOG_INFO("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting LONG.", basket_id_, z_score, -exit_z_score_);
-            current_position_ = PositionState::PENDING_FLAT;  // Lock it
+            master_state_ = MasterState::EXIT_PENDING;
             executeBasket(PositionState::FLAT);
         }
+    } 
+    else{
+        // Flying blind: Ignore all market ticks while waiting for exchange to resolve the inflight basket cycle
+        return;
     }
 }
 
@@ -241,14 +246,16 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
             targetState, capital_allocation_, basket_state_->getWeights(), current_prices);
             
         if (!opt_targets) {
-            LOG_WARN("[{}] BasketSizer rejected entry (capital or tracking error constraints).", basket_id_);
+            LOG_WARN("[{}] BasketSizer rejected entry. Reverting state to FLAT.", basket_id_);
+            master_state_ = MasterState::FLAT;
+            current_position_ = PositionState::FLAT;
             return;
         }
         targets = std::move(*opt_targets);
     }
 
     // 2. Build the cycle and dispatch to the OrderManager
-    current_cycle_ = std::make_unique<ExecutionCycle>(targetState);
+    current_cycle_ = std::make_unique<ExecutionCycle>();
 
     // 3. Dispatch the orders to the OrderManager
     for (size_t i = 0; i < num_components; ++i) {
@@ -279,6 +286,46 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
     }
 }
 
+void BasketMeanReversionStrategy::executeRecoverySweep() {
+    LOG_WARN("[{}] Initiating Recovery Protocol: Sweeping residual inventory.", basket_id_);
+    
+    // Retrieve exact mathematical inventory remaining from portfolio manager
+    auto targets = BasketSizer::calculateExit(client_order_ids_, *portfolio_mngr_);
+    
+    // Setup immediate replacement flatting cycle
+    current_cycle_ = std::make_unique<ExecutionCycle>();
+    
+    size_t num_components = basket_state_->getNumComponents();
+    const auto& symbols = basket_state_->getSymbols();
+    
+    for (size_t i = 0; i < num_components; ++i) {
+        current_cycle_->addLeg(client_order_ids_[i], symbols[i], targets[i].quantity, targets[i].side);
+    }
+    
+    for (size_t i = 0; i < num_components; ++i) {
+        if (targets[i].quantity > 0.0) {
+            OrderRequest req;
+            req.client_order_id = client_order_ids_[i];
+            req.symbol = symbols[i];
+            req.side = targets[i].side;
+            req.type = OrderType::MARKET;
+            req.quantity = targets[i].quantity;
+            req.tif = TimeInForce::IOC;
+
+            LOG_INFO("[{}] RECOVERY Routing: {} {} {:.4f} shares (MARKET IOC).", 
+                     basket_id_, (req.side == Side::BUY ? "BUY" : "SELL"), symbols[i], req.quantity);
+
+            order_mngr_->submitOrder(req);
+        }
+    }
+    
+    master_state_ = MasterState::RECOVERY_PENDING;
+    
+    if (current_cycle_ && current_cycle_->isComplete()) {
+        evaluateCompletedCycle();
+    }
+}
+
 void BasketMeanReversionStrategy::onExecutionReport(const ExecutionReport& report) {
     if (!current_cycle_) return; // No active cycle
 
@@ -291,48 +338,52 @@ void BasketMeanReversionStrategy::onExecutionReport(const ExecutionReport& repor
 void BasketMeanReversionStrategy::evaluateCompletedCycle() {
     if (!current_cycle_) return;
 
-    PositionState target = current_cycle_->getTargetState();
+    bool has_fills = current_cycle_->hasAnyFills();
+    double missed_shares = current_cycle_->getMissedShares();
 
-    if (current_cycle_->hasAnyFills()) {
-        // We successfully acquired or disposed of *some* inventory. 
-        // Advance the master state machine to the target.
-        current_position_ = target;
-        LOG_INFO("[{}] Execution cycle complete. Target state {} achieved (fully or partially).", 
-                 basket_id_, static_cast<int>(target));
-        
-        // --- The Partial Flatten Trap ---
-        // If we tried to close the basket, but the timeout hit while we still had 
-        // partial fills pending, we technically still hold residual inventory.
-        if (target == PositionState::FLAT) {
-            // Ask the cycle directly how many shares it failed to fill
-            double missed_shares = current_cycle_->getMissedShares();
-            
-            // Use a small epsilon to avoid floating-point errors on zero
-            if (missed_shares > 1e-6) {
-                LOG_WARN("[{}] FLAT cycle completed, but residual inventory remains. Reverting state to PENDING_FLAT to force cleanup.", basket_id_);
-                // Reverting to PENDING_FLAT ensures the next market tick will immediately
-                // fire another executeBasket(FLAT) to sweep up the remaining shares.
-                current_position_ = PositionState::PENDING_FLAT; 
-            }
+    // Scenario A: Perfect Execution
+    if (has_fills && missed_shares <= 1e-6) {
+        if (master_state_ == MasterState::ENTRY_PENDING) {
+            master_state_ = MasterState::IN_POSITION;
+            LOG_INFO("[{}] Entry cycle perfect. State -> IN_POSITION.", basket_id_);
+        } else if (master_state_ == MasterState::EXIT_PENDING || master_state_ == MasterState::RECOVERY_PENDING) {
+            master_state_ = MasterState::FLAT;
+            current_position_ = PositionState::FLAT;
+            LOG_INFO("[{}] Exit/Recovery cycle perfect. State -> FLAT.", basket_id_);
         }
-    } else {
-        // Zero fills across the entire basket. This is a total timeout or rejection.
-        if (target == PositionState::LONG || target == PositionState::SHORT) {
-            LOG_ERROR("[{}] Entry cycle completely failed with 0 fills. Reverting to FLAT.", basket_id_);
-            current_position_ = PositionState::FLAT; 
-        } else if (target == PositionState::FLAT) {
-            LOG_ERROR("[{}] Exit cycle completely failed with 0 fills. Reverting to PENDING_FLAT to retry.", basket_id_);
-            // If we failed to exit, we still hold the full basket. We must try again.
-            current_position_ = PositionState::PENDING_FLAT;
+        current_cycle_.reset();
+    } 
+    // Scenario B: Complete Whiff
+    else if (!has_fills) {
+        if (master_state_ == MasterState::ENTRY_PENDING) {
+            LOG_WARN("[{}] Entry completely whiffed. Zero fills. Reverting State -> FLAT.", basket_id_);
+            master_state_ = MasterState::FLAT;
+            current_position_ = PositionState::FLAT;
+        } else if (master_state_ == MasterState::EXIT_PENDING) {
+            LOG_WARN("[{}] Exit completely whiffed. Zero fills. Reverting State -> IN_POSITION.", basket_id_);
+            master_state_ = MasterState::IN_POSITION;
+        } else if (master_state_ == MasterState::RECOVERY_PENDING) {
+            LOG_ERROR("[{}] RECOVERY SWEEP WHIFFED! Exchange rejected market orders. Halting basket.", basket_id_);
+            master_state_ = MasterState::SYSTEM_HALTED; // Stop trading forever, require manual human intervention
+        }
+        current_cycle_.reset();
+    } 
+    // Scenario C & D: Toxic Partial Fill (Basket unhedged)
+    else if (has_fills && missed_shares > 1e-6) {
+        if (master_state_ == MasterState::RECOVERY_PENDING) {
+            LOG_ERROR("[{}] RECOVERY SWEEP PARTIALLY FILLED! Liquidity zero. Halting basket.", basket_id_);
+            master_state_ = MasterState::SYSTEM_HALTED;
+            current_cycle_.reset();
+        } else {
+            LOG_ERROR("[{}] Toxic partial fill! Basket broken. Missed shares: {:.4f}. Aborting and initiating Recovery Protocol.", basket_id_, missed_shares);
+            executeRecoverySweep();
         }
     }
-
-    // The cycle has been fully evaluated and recorded. Wipe it.
-    current_cycle_.reset();
 }
 
 void BasketMeanReversionStrategy::stop() {
-    if (current_position_ != PositionState::FLAT) {
+    if (master_state_ != MasterState::FLAT) {
+        master_state_ = MasterState::EXIT_PENDING;
         executeBasket(PositionState::FLAT);
 
         // current_cycle_ will be reset to nullptr by evaluateCompletedCycle() 
@@ -347,7 +398,7 @@ void BasketMeanReversionStrategy::stop() {
 
         if (current_cycle_ != nullptr) {
             LOG_ERROR("[{}] Network timeout! Cycle did not resolve.", basket_id_);
-        } else if (current_position_ != PositionState::FLAT) {
+        } else if (master_state_ != MasterState::FLAT) {
             LOG_WARN("[{}] Shutdown cycle completed, but failed to reach FLAT state. Orphaned inventory may remain in exchange.", basket_id_);
         } else {
             LOG_INFO("[{}] Successfully flattened all positions for shutdown.", basket_id_);
