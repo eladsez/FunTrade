@@ -9,6 +9,7 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <utils/magic_enum.hpp>
 
 namespace bot {
 
@@ -288,6 +289,10 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
     if (current_cycle_ && current_cycle_->isComplete()) {
         evaluateCompletedCycle();
     }
+
+    UiBroadcaster::getInstance().broadcastState(basket_id_, 
+        std::string(magic_enum::enum_name(master_state_)),
+        std::string(magic_enum::enum_name(current_position_)));
 }
 
 void BasketMeanReversionStrategy::executeRecoverySweep() {
@@ -383,6 +388,10 @@ void BasketMeanReversionStrategy::evaluateCompletedCycle() {
             executeRecoverySweep();
         }
     }
+
+    UiBroadcaster::getInstance().broadcastState(basket_id_, 
+        std::string(magic_enum::enum_name(master_state_)),
+        std::string(magic_enum::enum_name(current_position_)));
 }
 
 void BasketMeanReversionStrategy::stop() {
