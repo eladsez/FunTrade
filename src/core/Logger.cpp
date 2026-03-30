@@ -10,10 +10,7 @@ void Logger::init() {
         // Create console sink
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         
-        // Create a rotating file sink (max 5MB per file, max 3 rotated files)
-        auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>("logs/funtrade.log", 1024 * 1024 * 5, 3);
-        
-        std::vector<spdlog::sink_ptr> sinks {console_sink, file_sink};
+        std::vector<spdlog::sink_ptr> sinks {console_sink};
         
         logger_ = std::make_shared<spdlog::logger>("FunTrade", sinks.begin(), sinks.end());
 
