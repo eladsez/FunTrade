@@ -5,7 +5,7 @@ namespace bot {
 
 std::shared_ptr<spdlog::logger> Logger::logger_;
 
-void Logger::init() {
+void Logger::init(bool debugMode) {
     if (!logger_) {
         // Create console sink
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
@@ -18,7 +18,11 @@ void Logger::init() {
         logger_->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%^%l%$] %v");
         
         // Set global log level
-        logger_->set_level(spdlog::level::debug);
+        if (debugMode) {
+            logger_->set_level(spdlog::level::debug);
+        } else {
+            logger_->set_level(spdlog::level::info);
+        }
         
         // Setup SPDLOG macros to use our logger level
         spdlog::set_default_logger(logger_);

@@ -65,7 +65,7 @@ std::optional<std::vector<LegTarget>> BasketSizer::calculateEntry(
         double error = std::abs(actual_ratio - ratios[i]) / ratios[i];
         
         if (error > max_error) {
-            LOG_WARN("[BasketSizer] Integer rounding tracking error ({:.2f}%) exceeds threshold for leg {}.", error * 100, i);
+            LOG_DEBUG("[BasketSizer] Integer rounding tracking error ({:.2f}%) exceeds threshold for leg {}.", error * 100, i);
             return std::nullopt;
         }
     }

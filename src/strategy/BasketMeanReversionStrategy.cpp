@@ -429,7 +429,7 @@ void BasketMeanReversionStrategy::stop() {
 
 inline void BasketMeanReversionStrategy::logZScoreThrottled(double z_score, uint64_t timestamp) {
     if (timestamp - last_z_log_time_ms_ >= 500) {
-        // LOG_DEBUG("[{}] Current Z-Score: {:.4f}", basket_id_, z_score);
+        LOG_DEBUG("[{}] Current Z-Score: {:.4f}", basket_id_, z_score);
         last_z_log_time_ms_ = timestamp;
         UiBroadcaster::getInstance().broadcastZTick(basket_id_, z_score);
     }

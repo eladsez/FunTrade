@@ -152,7 +152,7 @@ int runLiveIbkr() {
     auto orderManager = std::make_shared<OrderManager>(eventBus, execEngine);
     auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, execEngine);
 
-    double percentPerStrategy = 0.05; // Representing 5% of available cash
+    double percentPerStrategy = 0.10; // Representing 5% of available cash
 
     // Initialize the Orchestrator
     LOG_INFO("[LIVE] Booting up Strategy Orchestrator...");
@@ -174,6 +174,8 @@ int runLiveIbkr() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+    orchestrator.stopAll();
+
     LOG_INFO("[LIVE] Shutting down...");
     return 0;
 }
@@ -182,12 +184,24 @@ int runLiveIbkr() {
 // MAIN ROUTER
 // ============================================================================
 int main(int argc, char* argv[]) {
-    bot::Logger::init();
+
+    bool debugMode = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--debug") {
+            debugMode = true;
+            break;
+        }
+    }
+
+    bot::Logger::init(debugMode);
     setupSignalHandlers();
 
     LOG_INFO("==================================================");
     LOG_INFO("          Algorithmic Trading Bot                 ");
     LOG_INFO("==================================================");
+    if (debugMode) {
+        LOG_DEBUG("Debug mode is ENABLED.");
+    }
 
     std::string configPath = "config/basket_configs/amzn_cmg_expe.json";
     std::string csvTickPath = "data/testing_ticks.csv";
