@@ -9,7 +9,7 @@ namespace bot {
 
 class ExecutionCycle {
 public:
-    explicit ExecutionCycle() = default;
+    explicit ExecutionCycle(std::string basket_id): basket_id_(std::move(basket_id)) { }
 
     void addLeg(const std::string& clientOrderId, const std::string& symbol, double targetQty, Side side);
     
@@ -25,6 +25,7 @@ public:
 private:
     std::map<std::string, LegExecutionState> legs_;
     size_t terminal_count_ = 0;
+    std::string basket_id_;
 };
 
 } // namespace bot

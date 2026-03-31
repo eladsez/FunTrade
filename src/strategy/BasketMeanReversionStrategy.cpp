@@ -1,4 +1,5 @@
 #include <strategy/BasketMeanReversionStrategy.hpp>
+#include <risk/UiBroadcaster.hpp>
 #include <utils/TimeUtils.hpp>
 #include <core/Logger.hpp>
 #include <fstream>
@@ -8,6 +9,7 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <utils/magic_enum.hpp>
 
 namespace bot {
 
@@ -41,6 +43,10 @@ void BasketMeanReversionStrategy::start() {
     report_subid_ = event_bus_->subscribeToExecution(
         [this](const ExecutionReport& report) { this->onExecutionReport(report); }
     );
+
+    // 3. BroadCast to UI
+    UiBroadcaster::getInstance().broadcastNewBasket(basket_id_, symbols, basket_state_->getWeights(),
+        -entry_z_score_, -exit_z_score_, exit_z_score_, entry_z_score_);
 }
 
 void BasketMeanReversionStrategy::loadConfig() {
@@ -199,12 +205,12 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 
     if (master_state_ == MasterState::FLAT) {
         if (z_score > entry_z_score_) {
-            LOG_INFO("[{}] Z-Score ({:.4f}) breached SHORT threshold ({:.4f}).", basket_id_, z_score, entry_z_score_);
+            LOG_DEBUG("[{}] Z-Score ({:.4f}) breached SHORT threshold ({:.4f}).", basket_id_, z_score, entry_z_score_);
             current_position_ = PositionState::SHORT;
             master_state_ = MasterState::ENTRY_PENDING;
             executeBasket(PositionState::SHORT);
         } else if (z_score < -entry_z_score_) {
-            LOG_INFO("[{}] Z-Score ({:.4f}) breached LONG threshold ({:.4f}).", basket_id_, z_score, -entry_z_score_);
+            LOG_DEBUG("[{}] Z-Score ({:.4f}) breached LONG threshold ({:.4f}).", basket_id_, z_score, -entry_z_score_);
             current_position_ = PositionState::LONG;
             master_state_ = MasterState::ENTRY_PENDING;
             executeBasket(PositionState::LONG);
@@ -213,11 +219,11 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
     else if (master_state_ == MasterState::IN_POSITION) {
         // We know we are fully filled. What side are we on?
         if (current_position_ == PositionState::SHORT && z_score < exit_z_score_) {
-            LOG_INFO("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting SHORT.", basket_id_, z_score, exit_z_score_);
+            LOG_DEBUG("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting SHORT.", basket_id_, z_score, exit_z_score_);
             master_state_ = MasterState::EXIT_PENDING;
             executeBasket(PositionState::FLAT);
         } else if (current_position_ == PositionState::LONG && z_score > -exit_z_score_) {
-            LOG_INFO("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting LONG.", basket_id_, z_score, -exit_z_score_);
+            LOG_DEBUG("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting LONG.", basket_id_, z_score, -exit_z_score_);
             master_state_ = MasterState::EXIT_PENDING;
             executeBasket(PositionState::FLAT);
         }
@@ -246,7 +252,7 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
             targetState, capital_allocation_, basket_state_->getWeights(), current_prices);
             
         if (!opt_targets) {
-            LOG_WARN("[{}] BasketSizer rejected entry. Reverting state to FLAT.", basket_id_);
+            LOG_DEBUG("[{}] BasketSizer rejected entry. Reverting state to FLAT.", basket_id_);
             master_state_ = MasterState::FLAT;
             current_position_ = PositionState::FLAT;
             return;
@@ -255,7 +261,7 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
     }
 
     // 2. Build the cycle and dispatch to the OrderManager
-    current_cycle_ = std::make_unique<ExecutionCycle>();
+    current_cycle_ = std::make_unique<ExecutionCycle>(basket_id_);
 
     // 3. Dispatch the orders to the OrderManager
     for (size_t i = 0; i < num_components; ++i) {
@@ -284,6 +290,10 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
     if (current_cycle_ && current_cycle_->isComplete()) {
         evaluateCompletedCycle();
     }
+
+    UiBroadcaster::getInstance().broadcastState(basket_id_, 
+        std::string(magic_enum::enum_name(master_state_)),
+        std::string(magic_enum::enum_name(current_position_)));
 }
 
 void BasketMeanReversionStrategy::executeRecoverySweep() {
@@ -293,7 +303,7 @@ void BasketMeanReversionStrategy::executeRecoverySweep() {
     auto targets = BasketSizer::calculateExit(client_order_ids_, *portfolio_mngr_);
     
     // Setup immediate replacement flatting cycle
-    current_cycle_ = std::make_unique<ExecutionCycle>();
+    current_cycle_ = std::make_unique<ExecutionCycle>(basket_id_);
     
     size_t num_components = basket_state_->getNumComponents();
     const auto& symbols = basket_state_->getSymbols();
@@ -379,6 +389,10 @@ void BasketMeanReversionStrategy::evaluateCompletedCycle() {
             executeRecoverySweep();
         }
     }
+
+    UiBroadcaster::getInstance().broadcastState(basket_id_, 
+        std::string(magic_enum::enum_name(master_state_)),
+        std::string(magic_enum::enum_name(current_position_)));
 }
 
 void BasketMeanReversionStrategy::stop() {
@@ -414,9 +428,10 @@ void BasketMeanReversionStrategy::stop() {
 }
 
 inline void BasketMeanReversionStrategy::logZScoreThrottled(double z_score, uint64_t timestamp) {
-    if (timestamp - last_z_log_time_ms_ >= 5000) {
-        LOG_INFO("[{}] Current Z-Score: {:.4f}", basket_id_, z_score);
+    if (timestamp - last_z_log_time_ms_ >= 500) {
+        LOG_DEBUG("[{}] Current Z-Score: {:.4f}", basket_id_, z_score);
         last_z_log_time_ms_ = timestamp;
+        UiBroadcaster::getInstance().broadcastZTick(basket_id_, z_score);
     }
 }
 

@@ -1,5 +1,6 @@
 #include <execution/OrderManager.hpp>
 #include <core/Logger.hpp>
+#include <utils/magic_enum.hpp>
 
 namespace bot {
 
@@ -80,9 +81,10 @@ void OrderManager::onExecution(const ExecutionReport& report) {
     }
     
     exchangeToClientId_[report.order_id] = clientOrderId;
-    
-    LOG_DEBUG("[OrderManager] Updated Order: ClientID={}, Status={}, TargetQty={:.4f}, Filled={:.4f}", 
-              clientOrderId, (int)report.status, state.quantity, state.filled_quantity);
+
+    LOG_INFO("[OrderManager] Updated Order: ClientID: {} | ExchID: {} | Symbol: {} | Side: {} | Status={} | Qty: {:.4f} | Price: {:.2f}", 
+                 clientOrderId, state.order_id, state.symbol, std::string(magic_enum::enum_name(state.side)), 
+                 std::string(magic_enum::enum_name(state.status)), state.quantity, state.price);
 }
 
 void OrderManager::syncWithExchange() {
@@ -107,7 +109,7 @@ void OrderManager::syncWithExchange() {
         std::string exchangeIdKey = state.order_id;
         
         LOG_DEBUG("[OrderManager] Synced Order: ClientID={}, ExchangeID={}, Status={}", 
-                  state.client_order_id, state.order_id, static_cast<int>(state.status));
+                  state.client_order_id, state.order_id, std::string(magic_enum::enum_name(state.status)));
 
         // Efficient insertions using std::move
         // We copy clientIdKey for the second map, but move it for the first
@@ -120,9 +122,9 @@ void OrderManager::syncWithExchange() {
     LOG_INFO("[OrderManager] Total tracked orders: {}", new_ordersByClientId.size());
     
     for (const auto& [clientId, state] : new_ordersByClientId) {
-        std::string sideLog = (state.side == Side::BUY) ? "BUY" : "SELL";
-        LOG_INFO("  -> ClientID: {} | ExchID: {} | Symbol: {} | Side: {} | Qty: {:.4f} | Price: {:.2f}", 
-                 clientId, state.order_id, state.symbol, sideLog, state.quantity, state.price);
+        LOG_INFO("  -> ClientID: {} | ExchID: {} | Symbol: {} | Side: {} | Status={} | Qty: {:.4f} | Price: {:.2f}", 
+                 clientId, state.order_id, state.symbol, std::string(magic_enum::enum_name(state.side)), 
+                 std::string(magic_enum::enum_name(state.status)), state.quantity, state.price);
     }
     LOG_INFO("[OrderManager] ============================================");
 

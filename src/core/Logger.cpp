@@ -5,15 +5,12 @@ namespace bot {
 
 std::shared_ptr<spdlog::logger> Logger::logger_;
 
-void Logger::init() {
+void Logger::init(bool debugMode) {
     if (!logger_) {
         // Create console sink
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         
-        // Create a rotating file sink (max 5MB per file, max 3 rotated files)
-        auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>("logs/funtrade.log", 1024 * 1024 * 5, 3);
-        
-        std::vector<spdlog::sink_ptr> sinks {console_sink, file_sink};
+        std::vector<spdlog::sink_ptr> sinks {console_sink};
         
         logger_ = std::make_shared<spdlog::logger>("FunTrade", sinks.begin(), sinks.end());
 
@@ -21,7 +18,11 @@ void Logger::init() {
         logger_->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%^%l%$] %v");
         
         // Set global log level
-        logger_->set_level(spdlog::level::debug);
+        if (debugMode) {
+            logger_->set_level(spdlog::level::debug);
+        } else {
+            logger_->set_level(spdlog::level::info);
+        }
         
         // Setup SPDLOG macros to use our logger level
         spdlog::set_default_logger(logger_);

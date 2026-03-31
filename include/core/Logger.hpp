@@ -20,7 +20,7 @@ namespace bot {
 
 class Logger {
 public:
-    static void init();
+    static void init(bool debugMode = false);
     static std::shared_ptr<spdlog::logger>& getLogger();
 
 private:

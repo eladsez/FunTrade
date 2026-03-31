@@ -7,7 +7,7 @@ namespace bot {
 class LegExecutionState {
 public:
     LegExecutionState() = default;
-    LegExecutionState(std::string symbol, std::string clientOrderId, double targetQty, Side side);
+    LegExecutionState(std::string symbol, std::string clientOrderId, double targetQty, Side side, std::string basket_id);
 
     // Updates internal state and returns true if the status changed to terminal
     bool updateFromReport(const ExecutionReport& report);
@@ -23,6 +23,7 @@ public:
 private:
     std::string symbol_;
     std::string client_order_id_;
+    std::string basket_id_;
     double target_qty_ = 0.0;
     double filled_qty_ = 0.0;
     Side side_;
