@@ -69,8 +69,9 @@ public:
             
             auto on_connect = [this](std::shared_ptr<WsSession> session) {
                 std::lock_guard<std::mutex> lock(cache_mutex_);
-                for (const auto& [id, msg] : init_cache_) {
-                    session->send(msg);
+                for (const auto& [id, cached_json] : init_cache_) {
+                    // Dump the LIVE, fully-updated JSON state to the new connection
+                    session->send(cached_json.dump());
                 }
             };
 
@@ -104,7 +105,7 @@ public:
     }
 
     // ------------------------------------------------------------------------
-    // THE HOT PATH APIs: These are now wait-free, O(1), and do zero heap allocation.
+    // THE HOT PATH APIs: Wait-free, O(1), zero heap allocation.
     // ------------------------------------------------------------------------
     
     void broadcastNewBasket(std::string basket_id, std::vector<std::string> symbols, std::vector<double> weights,
@@ -146,11 +147,9 @@ private:
             if (!is_running_) break;
 
             std::string json_str;
-            bool is_init = false;
-            std::string current_basket;
 
-            // Use std::visit to figure out what type of message we just pulled
-            std::visit([&json_str, &is_init, &current_basket](auto&& arg) {
+            // Capture 'this' so we can access init_cache_ and cache_mutex_
+            std::visit([this, &json_str](auto&& arg) {
                 using T = std::decay_t<decltype(arg)>;
                 nlohmann::json j;
 
@@ -170,32 +169,58 @@ private:
                         legs[arg.symbols[i]] = {{"px", 0.0}, {"wgt", arg.weights[i]}, {"tgt", 0}, {"fill", 0}};
                     }
                     j["legs"] = legs;
-                    is_init = true;
-                    current_basket = arg.basket_id;
+                    
+                    json_str = j.dump();
+
+                    std::lock_guard<std::mutex> lock(cache_mutex_);
+                    init_cache_[arg.basket_id] = j; 
                 }
                 else if constexpr (std::is_same_v<T, MsgZTick>) {
                     j = {{"type", "z_tick"}, {"basket", arg.basket_id}, {"z", arg.z_score}};
+                    json_str = j.dump();
+
+                    // Update the cached Z-score
+                    std::lock_guard<std::mutex> lock(cache_mutex_);
+                    if (init_cache_.count(arg.basket_id)) {
+                        init_cache_[arg.basket_id]["z"] = arg.z_score;
+                    }
                 }
                 else if constexpr (std::is_same_v<T, MsgPrice>) {
                     j = {{"type", "price"}, {"basket", arg.basket_id}, {"sym", arg.symbol}, {"p", arg.price}};
+                    json_str = j.dump();
+
+                    // Update the cached Price
+                    std::lock_guard<std::mutex> lock(cache_mutex_);
+                    if (init_cache_.count(arg.basket_id)) {
+                        init_cache_[arg.basket_id]["legs"][arg.symbol]["px"] = arg.price;
+                    }
                 }
                 else if constexpr (std::is_same_v<T, MsgState>) {
                     j = {{"type", "state"}, {"basket", arg.basket_id}, {"master", arg.master_state}, {"pos", arg.pos_state}};
+                    json_str = j.dump();
+
+                    // Update the cached Master State and Position
+                    std::lock_guard<std::mutex> lock(cache_mutex_);
+                    if (init_cache_.count(arg.basket_id)) {
+                        init_cache_[arg.basket_id]["master_state"] = arg.master_state;
+                        init_cache_[arg.basket_id]["pos"] = arg.pos_state;
+                    }
                 }
                 else if constexpr (std::is_same_v<T, MsgFill>) {
                     j = {{"type", "fill"}, {"basket", arg.basket_id}, {"sym", arg.symbol}, {"tgt", arg.tgt_qty}, {"fill", arg.fill_qty}};
+                    json_str = j.dump();
+
+                    // Update the cached Target and Fill Quantities
+                    std::lock_guard<std::mutex> lock(cache_mutex_);
+                    if (init_cache_.count(arg.basket_id)) {
+                        init_cache_[arg.basket_id]["legs"][arg.symbol]["tgt"] = arg.tgt_qty;
+                        init_cache_[arg.basket_id]["legs"][arg.symbol]["fill"] = arg.fill_qty;
+                    }
                 }
-                
-                json_str = j.dump();
             }, msg);
 
-            if (is_init) {
-                std::lock_guard<std::mutex> lock(cache_mutex_);
-                init_cache_[current_basket] = json_str;
-            }
-
             // Now that the heavy lifting is done, hand it off to the ASIO server
-            if (server_) {
+            if (server_ && !json_str.empty()) {
                 server_->broadcast(json_str);
             }
         }
@@ -205,13 +230,12 @@ private:
     std::shared_ptr<UiWebSocketServer> server_;
     
     std::thread network_thread_;
-    std::thread serializer_thread_; // NEW: Dedicated thread for JSON
+    std::thread serializer_thread_; 
     std::atomic<bool> is_running_;
 
-    // NEW: Lock-free queue separating the hot path from the JSON construction
     moodycamel::BlockingConcurrentQueue<UiMessage> msg_queue_;
 
-    std::unordered_map<std::string, std::string> init_cache_;
+    std::unordered_map<std::string, nlohmann::json> init_cache_;
     std::mutex cache_mutex_;
 };
 
