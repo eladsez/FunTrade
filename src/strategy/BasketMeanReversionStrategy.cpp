@@ -205,12 +205,12 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 
     if (master_state_ == MasterState::FLAT) {
         if (z_score > entry_z_score_) {
-            LOG_INFO("[{}] Z-Score ({:.4f}) breached SHORT threshold ({:.4f}).", basket_id_, z_score, entry_z_score_);
+            LOG_DEBUG("[{}] Z-Score ({:.4f}) breached SHORT threshold ({:.4f}).", basket_id_, z_score, entry_z_score_);
             current_position_ = PositionState::SHORT;
             master_state_ = MasterState::ENTRY_PENDING;
             executeBasket(PositionState::SHORT);
         } else if (z_score < -entry_z_score_) {
-            LOG_INFO("[{}] Z-Score ({:.4f}) breached LONG threshold ({:.4f}).", basket_id_, z_score, -entry_z_score_);
+            LOG_DEBUG("[{}] Z-Score ({:.4f}) breached LONG threshold ({:.4f}).", basket_id_, z_score, -entry_z_score_);
             current_position_ = PositionState::LONG;
             master_state_ = MasterState::ENTRY_PENDING;
             executeBasket(PositionState::LONG);
@@ -219,11 +219,11 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
     else if (master_state_ == MasterState::IN_POSITION) {
         // We know we are fully filled. What side are we on?
         if (current_position_ == PositionState::SHORT && z_score < exit_z_score_) {
-            LOG_INFO("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting SHORT.", basket_id_, z_score, exit_z_score_);
+            LOG_DEBUG("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting SHORT.", basket_id_, z_score, exit_z_score_);
             master_state_ = MasterState::EXIT_PENDING;
             executeBasket(PositionState::FLAT);
         } else if (current_position_ == PositionState::LONG && z_score > -exit_z_score_) {
-            LOG_INFO("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting LONG.", basket_id_, z_score, -exit_z_score_);
+            LOG_DEBUG("[{}] Z-Score ({:.4f}) breached FLAT threshold ({:.4f}). Exiting LONG.", basket_id_, z_score, -exit_z_score_);
             master_state_ = MasterState::EXIT_PENDING;
             executeBasket(PositionState::FLAT);
         }
@@ -252,7 +252,7 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
             targetState, capital_allocation_, basket_state_->getWeights(), current_prices);
             
         if (!opt_targets) {
-            LOG_WARN("[{}] BasketSizer rejected entry. Reverting state to FLAT.", basket_id_);
+            LOG_DEBUG("[{}] BasketSizer rejected entry. Reverting state to FLAT.", basket_id_);
             master_state_ = MasterState::FLAT;
             current_position_ = PositionState::FLAT;
             return;
