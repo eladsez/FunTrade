@@ -687,7 +687,7 @@ uint64_t IbkrDataFeed::parseIbkrDateToMs(const std::string& ibkrDate) {
     return 0;
 }
 
-void IbkrDataFeed::updateDailyHoursLimits(DailyMarketHours& hoursInfo, uint64_t current_ts_ms) {
+void IbkrDataFeed::updateDailyHoursLimits(const std::string& symbol, DailyMarketHours& hoursInfo, uint64_t current_ts_ms) {
     using namespace std::chrono;
 
     system_clock::time_point tick_time{milliseconds{current_ts_ms}};
@@ -725,7 +725,7 @@ void IbkrDataFeed::updateDailyHoursLimits(DailyMarketHours& hoursInfo, uint64_t 
         hoursSegment = hoursInfo.liquidHoursStr.substr(startPos, endPos - startPos);
     }
 
-    LOG_DEBUG("[IbkrDataFeed] Parsed Segment for {}: '{}'", targetDate, hoursSegment);
+    LOG_DEBUG("[IbkrDataFeed] Parsed Segment for {} ({}): '{}'", symbol, targetDate, hoursSegment);
 
     if (hoursSegment == "CLOSED") {
         hoursInfo.isClosedAllDay = true;
@@ -779,7 +779,7 @@ bool IbkrDataFeed::isWithinRTH(const std::string& symbol, uint64_t tick_timestam
     // Check if we need to update our daily limits (e.g., tick is from a new day)
     // Note: rth_end_ms is 0 if it hasn't been parsed yet.
     if (hours.calendar_day_end_ms == 0 || tick_timestamp_ms > hours.calendar_day_end_ms) {
-        updateDailyHoursLimits(hours, tick_timestamp_ms);
+        updateDailyHoursLimits(symbol, hours, tick_timestamp_ms);
     }
 
     if (hours.isClosedAllDay) return false;

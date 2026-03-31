@@ -100,7 +100,7 @@ private:
     Contract createContract(const std::string& symbol);
 
     bool isWithinRTH(const std::string& symbol, uint64_t tick_timestamp_ms);
-    void updateDailyHoursLimits(DailyMarketHours& hoursInfo, uint64_t current_ts_ms);
+    void updateDailyHoursLimits(const std::string& symbol, DailyMarketHours& hoursInfo, uint64_t current_ts_ms);
 
     void eodTaskLoop();
     void processEodBars();
