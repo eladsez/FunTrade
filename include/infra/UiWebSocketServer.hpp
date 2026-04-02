@@ -73,17 +73,22 @@ private:
     void on_read(beast::error_code ec, std::size_t bytes_transferred) {
         boost::ignore_unused(bytes_transferred);
         
-        // This indicates the client closed the connection
-        if (ec == websocket::error::closed || ec == net::error::eof || ec == net::error::connection_reset) {
-            LOG_INFO("[UiWebSocketServer] UI Terminal Disconnected.");
-            on_close_callback_(shared_from_this());
-            return;
-        }
+        if (ec) {
+            // Check for expected disconnects
+            if (ec == websocket::error::closed || ec == net::error::eof || ec == net::error::connection_reset) {
+                LOG_INFO("[UiWebSocketServer] UI Terminal Disconnected.");
+            } else {
+                // Log other errors like operation_aborted (Operation canceled)
+                LOG_ERROR("[UiWebSocketServer] WebSocket Read error: {}", ec.message());
+            }
 
-        if (ec) LOG_ERROR("[UiWebSocketServer] WebSocket Read error: {}", ec.message());
+            // Unregister the session and stop reading
+            on_close_callback_(shared_from_this());
+            return; 
+        }
         
-        buffer_.consume(buffer_.size()); // We ignore incoming data for now
-        do_read(); // Continue reading
+        buffer_.consume(buffer_.size());
+        do_read();
     }
 
     void queue_write(std::string msg) {

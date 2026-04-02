@@ -84,7 +84,7 @@ void BasketState::updateDailyClose(const std::string& symbol, double close_price
 
             // If all components have reported their daily close, advance the math
             if (checkAndResetBarrier()) {
-                LOG_DEBUG("[BasketState] All closing price of {} arrived, advancing window...", basket_id_);
+                LOG_INFO("[BasketState] All closing price of {} arrived, advancing window...", basket_id_);
                 advanceWindow();
             }
             return;
