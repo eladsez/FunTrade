@@ -1,6 +1,7 @@
 #include <risk/PortfolioManager.hpp>
 #include <execution/IExecutionEngine.hpp>
 #include <core/Logger.hpp>
+#include <risk/UiBroadcaster.hpp>
 #include <nlohmann/json.hpp>
 #include <cmath>
 
@@ -50,7 +51,9 @@ void PortfolioManager::onMarketEvent(const MarketEvent& event) {
             auto it = symbol_to_vkeys_.find(symbol);
             if (it != symbol_to_vkeys_.end()) {
                 for (const std::string& v_key : it->second) {
-                    positions_[v_key].current_price = updatedPrice;
+                    Position &pos = positions_[v_key];
+                    pos.current_price = updatedPrice;
+                    UiBroadcaster::getInstance().broadcastBasketPnL(v_key, pos.realized_pnl, pos.unrealized_pnl());
                 }
             }
         }
@@ -149,6 +152,9 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
     double realized_this_trade = applyFill(pos, signed_fill_qty, report.last_price);
     pos.realized_pnl += realized_this_trade;
     total_realized_pnl_ += realized_this_trade;
+
+    // we must broadcast it here because updatePositionIndex might erase it
+    UiBroadcaster::getInstance().broadcastBasketPnL(virtual_key, pos.realized_pnl, pos.unrealized_pnl());
 
     bool is_flat_now = (std::abs(pos.quantity) < 1e-9);
 

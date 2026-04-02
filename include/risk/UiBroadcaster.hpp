@@ -9,7 +9,9 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <boost/asio/io_context.hpp>
-#include <blockingconcurrentqueue.h> // The moodycamel queue you already have
+#include <boost/asio/steady_timer.hpp>
+#include <blockingconcurrentqueue.h>
+#include <chrono>
 #include <infra/UiWebSocketServer.hpp>
 #include <core/Logger.hpp>
 
@@ -50,8 +52,14 @@ struct MsgFill {
     int fill_qty;
 };
 
+struct MsgPnL {
+    std::string pos_virtual_id;
+    double realized_pnl;
+    double unrealized_pnl;
+};
+
 // A variant holding any of the possible messages
-using UiMessage = std::variant<MsgInitBasket, MsgZTick, MsgPrice, MsgState, MsgFill>;
+using UiMessage = std::variant<MsgInitBasket, MsgZTick, MsgPrice, MsgState, MsgFill, MsgPnL>;
 
 class UiBroadcaster {
 public:
@@ -88,6 +96,18 @@ public:
         } catch (const std::exception& e) {
             LOG_ERROR("[UiBroadcaster] Failed to start UI Server: {}", e.what());
         }
+
+        startThrottleTimer();
+    }
+
+    void startThrottleTimer() {
+        throttle_timer_.expires_after(throttle_interval_);
+        throttle_timer_.async_wait([this](const boost::system::error_code& ec) {
+            if (!ec && is_running_) {
+                flushPendingUpdates();
+                startThrottleTimer(); // Re-arm the timer
+            }
+        });
     }
 
     void stopServer() {
@@ -132,9 +152,72 @@ public:
         msg_queue_.enqueue(MsgFill{std::move(basket_id), std::move(symbol), tgt_qty, fill_qty});
     }
 
+    void broadcastBasketPnL(std::string pos_virtual_id, double realized_pnl, double unrealized_pnl) {
+        msg_queue_.enqueue(MsgPnL{std::move(pos_virtual_id), realized_pnl, unrealized_pnl});
+    }
+
 private:
-    UiBroadcaster() : ioc_(), is_running_(false) {}
+    UiBroadcaster() : ioc_(), throttle_timer_(ioc_), is_running_(false) {}
     ~UiBroadcaster() { stopServer(); }
+
+    void flushPendingUpdates() {
+
+        std::unordered_map<std::string, MsgPnL> local_pnl;
+        std::unordered_map<std::string, MsgPrice> local_prices;
+        std::unordered_map<std::string, MsgZTick> local_z;
+
+        {
+            std::lock_guard<std::mutex> lock(pending_mutex_);
+            local_pnl.swap(pending_pnl_);
+            local_prices.swap(pending_prices_);
+            local_z.swap(pending_z_);
+        }
+
+        nlohmann::json j;
+
+        // 1. Flush PnL
+        for (const auto& [v_id, pnl_msg] : local_pnl) {
+            // 1. Extract basket_id and symbol from "basketid_symbol" on the background thread
+            std::string basket_id = "";
+            std::string symbol = "";
+            size_t last_underscore = pnl_msg.pos_virtual_id.find_last_of('_');
+
+            if (last_underscore != std::string::npos) {
+                basket_id = pnl_msg.pos_virtual_id.substr(0, last_underscore);
+                symbol = pnl_msg.pos_virtual_id.substr(last_underscore + 1);
+            }
+            else {
+                continue;
+            }
+
+            // Update the initial cache for new connections
+            {
+                std::lock_guard<std::mutex> lock(cache_mutex_);
+                
+                auto it = init_cache_.find(basket_id);
+                if (it != init_cache_.end() && it->second["legs"].contains(symbol)) {
+                    it->second["legs"][symbol]["rpnl"] = pnl_msg.realized_pnl;
+                    it->second["legs"][symbol]["upnl"] = pnl_msg.unrealized_pnl;
+                }
+            }
+                    
+            j = {{"type", "pnl"}, {"basket", basket_id}, {"sym", symbol}, {"rpnl", pnl_msg.realized_pnl}, {"upnl", pnl_msg.unrealized_pnl}};
+            server_->broadcast(j.dump());
+        }
+
+        // 2. Flush Prices
+        for (const auto& [symbol, price_msg] : local_prices) {
+            j = {{"type", "price"}, {"basket", price_msg.basket_id}, {"sym", symbol}, {"p", price_msg.price}};
+            server_->broadcast(j.dump());
+        }
+
+        // 2. Flush Z-Score
+        for (const auto& [baske_id, z_score_msg] : local_z){
+            j = {{"type", "z_tick"}, {"basket", baske_id}, {"z", z_score_msg.z_score}};
+            server_->broadcast(j.dump());
+        }
+        
+    }
 
     // ------------------------------------------------------------------------
     // BACKGROUND THREAD: Takes the hit for JSON serialization and Mutex locks
@@ -166,7 +249,9 @@ private:
                     
                     nlohmann::json legs = nlohmann::json::object();
                     for (size_t i = 0; i < arg.symbols.size(); ++i) {
-                        legs[arg.symbols[i]] = {{"px", 0.0}, {"wgt", arg.weights[i]}, {"tgt", 0}, {"fill", 0}};
+                        legs[arg.symbols[i]] = {
+                            {"px", 0.0}, {"wgt", arg.weights[i]}, {"tgt", 0}, {"fill", 0}, {"rpnl", 0.0}, {"upnl", 0.0}
+                        };
                     }
                     j["legs"] = legs;
                     
@@ -176,9 +261,10 @@ private:
                     init_cache_[arg.basket_id] = j; 
                 }
                 else if constexpr (std::is_same_v<T, MsgZTick>) {
-                    j = {{"type", "z_tick"}, {"basket", arg.basket_id}, {"z", arg.z_score}};
-                    json_str = j.dump();
-
+                    {
+                        std::lock_guard<std::mutex> lock(pending_mutex_);
+                        pending_z_[arg.basket_id] = arg;
+                    }
                     // Update the cached Z-score
                     std::lock_guard<std::mutex> lock(cache_mutex_);
                     if (init_cache_.count(arg.basket_id)) {
@@ -186,8 +272,10 @@ private:
                     }
                 }
                 else if constexpr (std::is_same_v<T, MsgPrice>) {
-                    j = {{"type", "price"}, {"basket", arg.basket_id}, {"sym", arg.symbol}, {"p", arg.price}};
-                    json_str = j.dump();
+                    {
+                        std::lock_guard<std::mutex> lock(pending_mutex_);
+                        pending_prices_[arg.symbol] = arg;
+                    }
 
                     // Update the cached Price
                     std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -217,6 +305,10 @@ private:
                         init_cache_[arg.basket_id]["legs"][arg.symbol]["fill"] = arg.fill_qty;
                     }
                 }
+                else if constexpr (std::is_same_v<T, MsgPnL>) {
+                    std::lock_guard<std::mutex> lock(pending_mutex_);
+                    pending_pnl_[arg.pos_virtual_id] = arg;
+                }
             }, msg);
 
             // Now that the heavy lifting is done, hand it off to the ASIO server
@@ -237,6 +329,16 @@ private:
 
     std::unordered_map<std::string, nlohmann::json> init_cache_;
     std::mutex cache_mutex_;
+
+    // Throttling mechanisms
+    boost::asio::steady_timer throttle_timer_;
+    std::chrono::milliseconds throttle_interval_{50}; // 20 updates per second
+    
+    // Caches to hold the latest state before flushing
+    std::unordered_map<std::string, MsgPnL> pending_pnl_;
+    std::unordered_map<std::string, MsgPrice> pending_prices_;
+    std::unordered_map<std::string, MsgZTick> pending_z_;
+    std::mutex pending_mutex_; // Protects the pending_* maps
 };
 
 } // namespace bot
