@@ -177,6 +177,7 @@ void PortfolioManager::syncWithExchange() {
     
     // 1. Build the new map completely offline (no locks)
     std::unordered_map<std::string, Position> new_positions;
+    std::unordered_map<std::string, std::vector<std::string>> new_symbol_to_vkeys;
     new_positions.reserve(openPos.size());
      
     for (auto& pos : openPos) {
