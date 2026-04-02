@@ -40,24 +40,89 @@ void PortfolioManager::onMarketEvent(const MarketEvent& event) {
             }
         }
         else if constexpr (std::is_same_v<T, BarUpdate>) {
-            // NEW: Make sure we capture EOD Bar updates too for backtesting!
+            // Make sure we capture EOD Bar updates too for backtesting!
             updatedPrice = tick.close;
         } 
 
         // Only update if we derived a valid price
         if (updatedPrice > 0.0) {
             std::lock_guard<std::mutex> lock(mtx_);
-            
-            // Iterate through positions to find matching symbols.
-            // We cannot use positions_.count(symbol) because the map key is a virtual_key!
-            // MUST fix this shit somehow
-            for (auto& [v_key, pos] : positions_) {
-                if (pos.symbol == symbol) {
-                    pos.current_price = updatedPrice;
+            auto it = symbol_to_vkeys_.find(symbol);
+            if (it != symbol_to_vkeys_.end()) {
+                for (const std::string& v_key : it->second) {
+                    positions_[v_key].current_price = updatedPrice;
                 }
             }
         }
     }, event);
+}
+
+// Handles VWAP, quantity updates, and returns the realized PnL of the fill
+double PortfolioManager::applyFill(Position& pos, double signed_fill_qty, double fill_price) {
+    if (std::abs(pos.quantity) < 1e-9) {
+        // Opening new position
+        pos.quantity = signed_fill_qty;
+        pos.avg_price = fill_price;
+        return 0.0;
+    } 
+    
+    if ((pos.quantity > 0 && signed_fill_qty > 0) || (pos.quantity < 0 && signed_fill_qty < 0)) {
+        // Increasing existing position
+        double total_qty = pos.quantity + signed_fill_qty;
+        pos.avg_price = (pos.quantity * pos.avg_price + signed_fill_qty * fill_price) / total_qty;
+        pos.quantity = total_qty;
+        return 0.0;
+    } 
+    
+    // Reducing or flipping position
+    double reduction = std::min(std::abs(pos.quantity), std::abs(signed_fill_qty));
+    double realized = (pos.quantity > 0) 
+        ? reduction * (fill_price - pos.avg_price)
+        : reduction * (pos.avg_price - fill_price);
+        
+    double remaining_qty = pos.quantity + signed_fill_qty;
+    
+    if ((pos.quantity > 0 && remaining_qty < -1e-9) || (pos.quantity < 0 && remaining_qty > 1e-9)) {
+        // Position flipped
+        pos.quantity = remaining_qty;
+        pos.avg_price = fill_price;
+    } else {
+        // Position reduced
+        pos.quantity = remaining_qty;
+        if (std::abs(pos.quantity) < 1e-9) {
+            pos.quantity = 0.0;
+            pos.avg_price = 0.0;
+        }
+    }
+    
+    return realized;
+}
+
+// Manages the O(1) index and purges closed positions. Returns true if purged.
+bool PortfolioManager::updatePositionIndex(const std::string& symbol, const std::string& virtual_key, bool was_flat, bool is_flat_now) {
+    if (was_flat && !is_flat_now) {
+        // Position Opened: Add to O(1) index
+        auto& vkeys = symbol_to_vkeys_[symbol];
+        if (std::find(vkeys.begin(), vkeys.end(), virtual_key) == vkeys.end()) {
+            vkeys.push_back(virtual_key);
+        }
+        return false;
+    } 
+    
+    if (!was_flat && is_flat_now) {
+        // Position Closed: Purge from memory
+        auto& vkeys = symbol_to_vkeys_[symbol];
+        vkeys.erase(std::remove(vkeys.begin(), vkeys.end(), virtual_key), vkeys.end());
+        
+        if (vkeys.empty()) {
+            symbol_to_vkeys_.erase(symbol);
+        }
+        
+        positions_.erase(virtual_key);
+        return true;
+    }
+    
+    return false; // Position merely modified in size, not closed
 }
 
 void PortfolioManager::onExecution(const ExecutionReport& report) {
@@ -67,64 +132,33 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
         return;
     }
 
-    if (report.status == OrderStatus::FILLED)
+    if (report.status == OrderStatus::FILLED) {
         total_trades_++;
+    }
 
-    // the point of the virtualkey here is to be able to track per strategy positions
-    // when there is more the one strategy sharing the same symbol 
-    // the straregy must handle the client_id order and know that the same report.client_order_id means the same position
     std::string virtual_key = report.client_order_id.empty() ? report.symbol : report.client_order_id;
-
+    
     Position& pos = positions_[virtual_key];
     pos.symbol = report.symbol;
-    pos.current_price = report.last_price; // Update price on fill
+    pos.current_price = report.last_price;
 
-    double fill_qty = report.last_quantity;
-    double fill_price = report.last_price;
-    
-    // Convert Side to signed quantity for easier calculation
-    double signed_fill_qty = (report.side == Side::BUY) ? fill_qty : -fill_qty;
+    double signed_fill_qty = (report.side == Side::BUY) ? report.last_quantity : -report.last_quantity;
+    bool was_flat = (std::abs(pos.quantity) < 1e-9);
 
-    if (std::abs(pos.quantity) < 1e-9) {
-        // Opening new position
-        pos.quantity = signed_fill_qty;
-        pos.avg_price = fill_price;
-    } else if ((pos.quantity > 0 && signed_fill_qty > 0) || (pos.quantity < 0 && signed_fill_qty < 0)) {
-        // Increasing existing position (same side)
-        double total_qty = pos.quantity + signed_fill_qty;
-        pos.avg_price = (pos.quantity * pos.avg_price + signed_fill_qty * fill_price) / total_qty;
-        pos.quantity = total_qty;
-    } else {
-        // Reducing or flipping position (opposite side)
-        double reduction = std::min(std::abs(pos.quantity), std::abs(signed_fill_qty));
-        double realized = 0.0;
-        
-        if (pos.quantity > 0) {
-            // Long position being reduced/closed by a SELL
-            realized = reduction * (fill_price - pos.avg_price);
-        } else {
-            // Short position being reduced/closed by a BUY
-            realized = reduction * (pos.avg_price - fill_price);
-        }
-        
-        pos.realized_pnl += realized;
-        total_realized_pnl_ += realized;
-        
-        double remaining_qty = pos.quantity + signed_fill_qty;
-        
-        if ((pos.quantity > 0 && remaining_qty < -1e-9) || (pos.quantity < 0 && remaining_qty > 1e-9)) {
-            // Position flipped
-            pos.quantity = remaining_qty;
-            pos.avg_price = fill_price;
-        } else {
-            // Position reduced but not flipped
-            pos.quantity = remaining_qty;
-            // avg_price remains the same for the remaining part
-            if (std::abs(pos.quantity) < 1e-9) {
-                pos.quantity = 0.0;
-                pos.avg_price = 0.0;
-            }
-        }
+    // 1. Calculate and apply the math
+    double realized_this_trade = applyFill(pos, signed_fill_qty, report.last_price);
+    pos.realized_pnl += realized_this_trade;
+    total_realized_pnl_ += realized_this_trade;
+
+    bool is_flat_now = (std::abs(pos.quantity) < 1e-9);
+
+    // 2. Synchronize memory and indices
+    bool was_purged = updatePositionIndex(report.symbol, virtual_key, was_flat, is_flat_now);
+
+    // 3. Log results safely
+    if (was_purged) {
+        LOG_INFO("[PortfolioManager] Position closed and purged for: {}", virtual_key);
+        return; 
     }
 
     LOG_INFO("[PortfolioManager] Updated {} position: Symbol={} Qty={}, AvgPrice={}, RealizedPnL={}", 
@@ -147,7 +181,9 @@ void PortfolioManager::syncWithExchange() {
         LOG_DEBUG("[PortfolioManager] Synced {} | Qty: {} | AvgPrice: {}", 
                   pos.symbol, pos.quantity, pos.avg_price);
 
-        // Move the struct into the map to avoid copying
+        // Build the secondary index. When pulling raw from the broker,
+        // we don't have the client_order_id, so the v_key is just the symbol.
+        new_symbol_to_vkeys[pos.symbol].push_back(key);
         new_positions.emplace(std::move(key), std::move(pos));
     }
 
@@ -164,7 +200,8 @@ void PortfolioManager::syncWithExchange() {
     // 2. Lock the mutex ONLY for the swap. This is an O(1) operation.
     {
         std::lock_guard<std::mutex> lock(mtx_);
-        positions_.swap(new_positions); 
+        positions_.swap(new_positions);
+        symbol_to_vkeys_.swap(new_symbol_to_vkeys);
     }
 }
 
