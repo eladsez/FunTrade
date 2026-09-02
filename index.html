@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FunTrade Terminal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-300 font-mono p-4 h-screen overflow-hidden">
+
+    <div x-data="tradingDashboard()" class="h-full flex flex-col">
+        <div class="flex justify-between items-center mb-6 shrink-0">
+            <h1 class="text-2xl font-bold text-white tracking-wider">FUNTRADE <span class="text-blue-500">TERMINAL</span></h1>
+            
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full" 
+                     :class="wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'"></div>
+                <span class="text-sm" x-text="wsConnected ? 'WS Connected' : 'Disconnected (Reconnecting...)'"></span>
+            </div>
+        </div>
+
+        <div class="flex flex-col gap-4 pb-10 overflow-y-auto pr-2">
+            
+            <div x-show="Object.keys(baskets).length === 0" class="flex flex-col items-center justify-center h-64 text-slate-500 border border-slate-800 rounded-lg border-dashed">
+                <svg class="w-12 h-12 mb-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <p>Waiting for StrategyOrchestrator to initialize baskets...</p>
+            </div>
+
+            <template x-for="[id, basket] in sortedBaskets" :key="id">
+                <div class="bg-slate-800 rounded-lg border border-slate-700 flex flex-col h-[400px] shrink-0 overflow-hidden">
+                    
+                    <div class="bg-slate-950 px-4 py-3 flex justify-between items-center border-b border-slate-700">
+                        <div class="flex items-center gap-4">
+                            <span class="font-bold text-lg text-white" x-text="id"></span>
+                            
+                            <div class="flex items-center gap-2 bg-slate-900 border border-slate-700 px-3 py-1 rounded-md font-mono text-sm shadow-inner">
+                                <span class="text-slate-400 text-xs">NET PNL:</span>
+                                <span class="font-bold" 
+                                    :class="getBasketTotalPnL(basket).total > 0 ? 'text-green-400' : (getBasketTotalPnL(basket).total < 0 ? 'text-red-400' : 'text-slate-300')"
+                                    x-text="(getBasketTotalPnL(basket).total >= 0 ? '+' : '') + getBasketTotalPnL(basket).total.toFixed(2)"></span>
+                                
+                                <span class="text-[10px] text-slate-500 ml-1" 
+                                    x-text="`(R: ${getBasketTotalPnL(basket).rpnl.toFixed(2)} | U: ${getBasketTotalPnL(basket).upnl.toFixed(2)})`"></span>
+                            </div>
+                            
+                            <span class="px-2 py-1 rounded text-xs font-bold"
+                                :class="{
+                                    'bg-slate-700 text-slate-300': basket.master_state === 'FLAT',
+                                    'bg-blue-900 text-blue-300': basket.master_state === 'IN_POSITION',
+                                    'bg-yellow-900 text-yellow-300': basket.master_state.includes('PENDING')
+                                }"
+                                x-text="basket.master_state"></span>
+                        </div>
+                        <div class="text-sm">
+                            Pos: <span class="font-bold" 
+                                       :class="{'text-green-400': basket.pos === 'LONG', 'text-red-400': basket.pos === 'SHORT'}"
+                                       x-text="basket.pos"></span>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-1 p-4 gap-4 overflow-hidden">
+                        
+                        <div class="w-2/5 overflow-y-auto pr-2">
+                            <table class="w-full text-left text-sm">
+                                <thead>
+                                    <tr class="text-slate-500 border-b border-slate-700">
+                                        <th class="pb-2">SYM</th>
+                                        <th class="pb-2 text-right">PX</th>
+                                        <th class="pb-2 text-right">WGT</th>
+                                        <th class="pb-2 text-right">RPNL</th>
+                                        <th class="pb-2 text-right">UPNL</th>
+                                        <th class="pb-2 text-right" x-show="basket.master_state !== 'FLAT'">TGT</th>
+                                        <th class="pb-2 text-right" x-show="basket.master_state !== 'FLAT'">FIL</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="(leg, sym) in basket.legs" :key="sym">
+                                        <tr class="border-b border-slate-700/50 hover:bg-slate-700/20 transition-colors">
+                                            <td class="py-2 font-bold text-white" x-text="sym"></td>
+                                            <td class="py-2 text-right font-mono" x-text="leg.px.toFixed(2)"></td>
+                                            <td class="py-2 text-right text-slate-400" x-text="leg.wgt.toFixed(2)"></td>
+                                            
+                                            <td class="py-2 text-right font-mono" 
+                                                :class="leg.rpnl > 0 ? 'text-green-400' : (leg.rpnl < 0 ? 'text-red-400' : 'text-slate-400')"
+                                                x-text="leg.rpnl.toFixed(2)"></td>
+                                                
+                                            <td class="py-2 text-right font-mono" 
+                                                :class="leg.upnl > 0 ? 'text-green-400' : (leg.upnl < 0 ? 'text-red-400' : 'text-slate-400')"
+                                                x-text="leg.upnl.toFixed(2)"></td>
+
+                                            <td class="py-2 text-right text-yellow-500" 
+                                                x-show="basket.master_state !== 'FLAT'" 
+                                                x-text="leg.tgt"></td>
+                                                
+                                            <td class="py-2 text-right" 
+                                                x-show="basket.master_state !== 'FLAT'"
+                                                :class="leg.fill === leg.tgt && leg.tgt !== 0 ? 'text-green-500' : 'text-slate-300'"
+                                                x-text="leg.fill"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="w-3/5 relative flex flex-col items-center justify-center">
+                            <div class="absolute top-0 right-0 font-mono text-2xl font-bold"
+                                 :class="basket.z > 2.0 || basket.z < -2.0 ? 'text-blue-400' : 'text-slate-400'">
+                                Z: <span x-text="basket.z.toFixed(3)"></span>
+                            </div>
+                            <div class="w-full h-full mt-6">
+                                <canvas :id="'chart-'+id" @dblclick="resetChartZoom(id)" class="cursor-crosshair"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <script>
+        const WS_URL = 'ws://192.168.10.14:9000'; 
+
+        function tradingDashboard() {
+            const chartRegistry = {};
+
+            return {
+                wsConnected: false,
+                ws: null,
+                baskets: {}, // Starts completely empty
+
+                get sortedBaskets() {
+                    // Convert object to array of [id, basket] pairs and sort
+                    return Object.entries(this.baskets).sort((a, b) => {
+                        const stateA = a[1].master_state;
+                        const stateB = b[1].master_state;
+                        
+                        // If A is FLAT but B is not, push A to the bottom
+                        if (stateA === 'FLAT' && stateB !== 'FLAT') return 1;
+                        // If B is FLAT but A is not, pull A to the top
+                        if (stateB === 'FLAT' && stateA !== 'FLAT') return -1;
+                        
+                        // If both are FLAT or both are active, sort alphabetically by Basket ID
+                        return a[0].localeCompare(b[0]);
+                    });
+                },
+
+                getBasketTotalPnL(basket) {
+                    let rpnl = 0;
+                    let upnl = 0;
+                    // Sum up the PnL from all legs in this basket
+                    if (basket.legs) {
+                        for (const sym in basket.legs) {
+                            rpnl += basket.legs[sym].rpnl || 0;
+                            upnl += basket.legs[sym].upnl || 0;
+                        }
+                    }
+                    return { 
+                        rpnl: rpnl, 
+                        upnl: upnl, 
+                        total: rpnl + upnl 
+                    };
+                },
+
+                init() {
+                    this.connectWebSocket();
+                },
+
+                connectWebSocket() {
+                    if (this.ws) {
+                        this.ws.close();
+                    }
+
+                    this.ws = new WebSocket(WS_URL);
+
+                    this.ws.onopen = () => {
+                        console.log(`[WS] Connected to ${WS_URL}`);
+                        this.wsConnected = true;
+                    };
+
+                    this.ws.onmessage = (event) => {
+                        this.handleDeltaEvent(event.data);
+                    };
+
+                    this.ws.onclose = () => {
+                        console.log('[WS] Disconnected. Attempting to reconnect in 3s...');
+                        this.wsConnected = false;
+                        setTimeout(() => this.connectWebSocket(), 3000);
+                    };
+
+                    this.ws.onerror = (error) => {
+                        console.error('[WS] Error:', error);
+                        this.ws.close(); // Force close to trigger the reconnect logic
+                    };
+                },
+
+                handleDeltaEvent(jsonStr) {
+                    try {
+                        const event = JSON.parse(jsonStr);
+
+                        // 1. Handle New Basket Initialization
+                        if (event.type === "init_basket") {
+                            this.baskets[event.basket] = {
+                                master_state: event.master_state,
+                                pos: event.pos,
+                                z: event.z,
+                                legs: event.legs,
+                                entry_long: event.entry_long,
+                                exit_long: event.exit_long,
+                                exit_short: event.exit_short,
+                                entry_short: event.entry_short
+                            };
+                            
+                            // Let Alpine render the DOM for the new basket, then inject the chart
+                            this.$nextTick(() => {
+                                this.initChart(event.basket);
+                            });
+                            return;
+                        }
+
+                        // 2. Handle Delta Updates for existing baskets
+                        const b = this.baskets[event.basket];
+                        if (!b) return; // Drop messages for baskets we haven't seen initialized yet
+
+                        switch (event.type) {
+                            case "z_tick":
+                                b.z = event.z;
+                                const chart = chartRegistry[event.basket];
+                                if (chart) {
+                                    const dataArr = chart.data.datasets[0].data;
+                                    const pnlArr = chart.data.datasets[0].customPnl; // Get our custom array
+                                    
+                                    // Snapshot the PNL at the exact moment this Z-Tick arrives
+                                    const currentPnlSnapshot = this.getBasketTotalPnL(b).total;
+                                    
+                                    dataArr.push(event.z);
+                                    pnlArr.push(currentPnlSnapshot); // Store the snapshot
+                                    
+                                    if (dataArr.length > 600) {
+                                        dataArr.shift(); 
+                                        pnlArr.shift();  // Keep the arrays synchronized
+                                    }
+                                    chart.update('none'); 
+                                }
+                                break;
+                            case "price":
+                                b.legs[event.sym].px = event.p;
+                                break;
+                            case "state":
+                                b.master_state = event.master;
+                                b.pos = event.pos;
+                                break;
+                            case "fill":
+                                b.legs[event.sym].tgt = event.tgt;
+                                b.legs[event.sym].fill = event.fill;
+                                break;
+                            case "pnl":
+                                if (b.legs[event.sym]) { // Safety check to ensure the leg exists
+                                    b.legs[event.sym].rpnl = event.rpnl;
+                                    b.legs[event.sym].upnl = event.upnl;
+                                }
+                                break;
+                        }
+                    } catch (e) {
+                        console.error("[WS] Failed to parse message:", jsonStr, e);
+                    }
+                },
+
+                initChart(basketId) {
+                    const canvas = document.getElementById('chart-' + basketId);
+                    if (!canvas) return;
+                    
+                    const ctx = canvas.getContext('2d');
+                    const b = this.baskets[basketId];
+                    
+                    const createLine = (val, color, text) => ({
+                        type: 'line', yMin: val, yMax: val, borderColor: color, borderWidth: 1, borderDash: [5, 5],
+                        label: { display: true, content: text, position: 'end', backgroundColor: 'transparent', color: color, font: {size: 10} }
+                    });
+
+                    chartRegistry[basketId] = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: Array(600).fill(''),
+                            datasets: [{
+                                data: [],
+                                customPnl: [],
+                                borderColor: '#3b82f6',
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                tension: 0.2
+                            }]
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            animation: false, 
+                            interaction: {
+                                mode: 'index',
+                                intersect: false,
+                            },
+                            scales: {
+                                x: { display: false },
+                                y: { min: -4, max: 4, grid: { color: '#334155' } }
+                            },
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    enabled: true,
+                                    displayColors: false,
+                                    callbacks: {
+                                        title: () => null, // Hide the empty X-axis label
+                                        label: (context) => {
+                                            // Fetch the historical PNL snapshot stored for this specific point
+                                            const histPnl = context.dataset.customPnl[context.dataIndex] || 0;
+                                            
+                                            return [
+                                                'Z-Score: ' + context.parsed.y.toFixed(3),
+                                                'Tick Net PNL: ' + (histPnl >= 0 ? '+' : '') + histPnl.toFixed(2)
+                                            ];
+                                        }
+                                    }
+                                },
+                                zoom: {
+                                    pan: {
+                                        enabled: true,
+                                        mode: 'y', // Only pan up and down
+                                    },
+                                    zoom: {
+                                        wheel: { enabled: true },
+                                        pinch: { enabled: true },
+                                        mode: 'y', // Only zoom the Y axis (keeps the rolling window stable)
+                                    }
+                                },
+                                annotation: {
+                                    annotations: {
+                                        entryShort: createLine(b.entry_short, '#f87171', '+' + b.entry_short + ' Entry S'),
+                                        exitShort: createLine(b.exit_short, '#4ade80', '+' + b.exit_short + ' Exit S'),
+                                        exitLong: createLine(b.exit_long, '#4ade80', b.exit_long + ' Exit L'),
+                                        entryLong: createLine(b.entry_long, '#f87171', b.entry_long + ' Entry L')
+                                    }
+                                }
+                            }
+                        }
+                    });
+                },
+                resetChartZoom(basketId) {
+                    const chart = chartRegistry[basketId];
+                    if (chart) {
+                        chart.resetZoom(); // Native Chart.js Zoom Plugin method
+                    }
+                },
+            }
+        }
+    </script>
+</body>
+</html>
