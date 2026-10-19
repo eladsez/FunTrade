@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <chrono>
 #include <unordered_map>
 
 namespace bot {
@@ -47,6 +48,9 @@ private:
     inline void processTick(const std::string& symbol, double price, uint64_t timestamp = 0);
     void executeBasket(PositionState targetState);
     void executeRecoverySweep(); // Recovery protocol
+    void dispatchCycle(const std::vector<LegTarget>& targets, const char* label);
+    bool hasInventory() const;
+    void waitForCycle(std::chrono::milliseconds timeout) const;
     void onExecutionReport(const ExecutionReport& report);
     std::map<uint64_t, std::vector<double>> alignHistoricalBars(
         const std::vector<std::vector<HistoricalBar>>& all_bars, 
@@ -70,8 +74,11 @@ private:
     MasterState master_state_ = MasterState::FLAT;
     PositionState current_position_ = PositionState::FLAT;
     
-    // Pre-allocated strings to avoid SSO allocations on the hot path
-    std::vector<std::string> client_order_ids_;
+    // Virtual position key per leg ("<basket_id>_<SYMBOL>"). Orders get unique client IDs
+    // derived from these (OrderIdUtils::newClientOrderId); positions are tracked under them.
+    std::vector<std::string> position_keys_;
+
+    static constexpr std::chrono::milliseconds kShutdownTimeout{10000};
 
     uint64_t report_subid_;
     std::unordered_map<std::string, uint64_t> market_subid_;

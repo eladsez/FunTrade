@@ -2,6 +2,7 @@
 #include <map>
 #include <string>
 #include <memory>
+#include <vector>
 #include <strategy/LegExecutionState.hpp>
 #include <strategy/BasketState.hpp>
 
@@ -16,15 +17,19 @@ public:
     // Processes the report. Returns true if the ENTIRE cycle is now complete.
     bool processExecutionReport(const ExecutionReport& report);
     
+    // True once every leg is terminal. A cycle with no legs to trade (all targets 0) is complete.
     bool isComplete() const;
     bool hasAnyFills() const;
+    bool hasLegs() const { return !legs_.empty(); }
+
+    // Client order IDs of legs that are still working (not terminal).
+    std::vector<std::string> workingClientOrderIds() const;
     
     // Calculates the total absolute difference between target and filled quantities across all legs
     double getMissedShares() const;
 
 private:
     std::map<std::string, LegExecutionState> legs_;
-    size_t terminal_count_ = 0;
     std::string basket_id_;
 };
 

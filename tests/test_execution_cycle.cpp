@@ -55,22 +55,21 @@ TEST(ExecutionCycle, ZeroTargetLegsDoNotBlockCompletion) {
     EXPECT_TRUE(c.processExecutionReport(rep("bk_B", OrderStatus::FILLED, 5)));
 }
 
-// ---------------------------------------------------------------------------
-// Known bugs (see docs/ROADMAP.md). Enable when the owning phase fixes them.
-// ---------------------------------------------------------------------------
+// Fixed in Phase 2 (were known bugs).
 
-// Phase 2: an exit with nothing to trade must complete immediately, or the basket
+// An exit with nothing to trade must complete immediately, or the basket
 // sits in EXIT_PENDING forever.
-TEST(ExecutionCycleKnownBugs, DISABLED_Phase2_AllZeroTargetsCompleteImmediately) {
+TEST(ExecutionCycle, AllZeroTargetsCompleteImmediately) {
     ExecutionCycle c("bk");
     c.addLeg("bk_A", "A", 0, Side::BUY);
     c.addLeg("bk_B", "B", 0, Side::SELL);
     EXPECT_TRUE(c.isComplete());
+    EXPECT_FALSE(c.hasLegs());
 }
 
-// Phase 2: IBKR's error-202 cancel report carries cumulative_quantity = 0. A later report
+// IBKR's error-202 cancel report carries cumulative_quantity = 0. A later report
 // must never erase shares that were already filled.
-TEST(ExecutionCycleKnownBugs, DISABLED_Phase2_CancelReportDoesNotEraseEarlierFills) {
+TEST(ExecutionCycle, CancelReportDoesNotEraseEarlierFills) {
     ExecutionCycle c("bk");
     c.addLeg("bk_A", "A", 100, Side::BUY);
     c.processExecutionReport(rep("bk_A", OrderStatus::PARTIALLY_FILLED, 60));
@@ -79,12 +78,20 @@ TEST(ExecutionCycleKnownBugs, DISABLED_Phase2_CancelReportDoesNotEraseEarlierFil
     EXPECT_DOUBLE_EQ(c.getMissedShares(), 40.0);
 }
 
-// Phase 2: once a leg is terminal, a late/duplicate report must not reopen it.
-TEST(ExecutionCycleKnownBugs, DISABLED_Phase2_TerminalLegIgnoresLateReports) {
+// Once a leg is terminal, a late/duplicate report must not reopen it.
+TEST(ExecutionCycle, TerminalLegIgnoresLateReports) {
     ExecutionCycle c("bk");
     c.addLeg("bk_A", "A", 10, Side::BUY);
     c.processExecutionReport(rep("bk_A", OrderStatus::FILLED, 10));
     c.processExecutionReport(rep("bk_A", OrderStatus::NEW, 0));
     EXPECT_TRUE(c.isComplete());
     EXPECT_DOUBLE_EQ(c.getMissedShares(), 0.0);
+}
+
+TEST(ExecutionCycle, WorkingIdsListOnlyNonTerminalLegs) {
+    ExecutionCycle c("bk");
+    c.addLeg("bk_A", "A", 10, Side::BUY);
+    c.addLeg("bk_B", "B", 10, Side::SELL);
+    c.processExecutionReport(rep("bk_A", OrderStatus::FILLED, 10));
+    EXPECT_EQ(c.workingClientOrderIds(), std::vector<std::string>{"bk_B"});
 }

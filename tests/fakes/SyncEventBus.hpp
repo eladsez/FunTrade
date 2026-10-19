@@ -1,6 +1,7 @@
 #pragma once
 #include <core/IEventBus.hpp>
 #include <unordered_map>
+#include <map>
 #include <vector>
 #include <string>
 
@@ -55,8 +56,8 @@ public:
 
 private:
     uint64_t nextId_ = 1;
-    std::unordered_map<std::string, std::unordered_map<uint64_t, MarketEventCallback>> marketSubs_;
-    std::unordered_map<uint64_t, ExecutionCallback> execSubs_;
+    std::unordered_map<std::string, std::map<uint64_t, MarketEventCallback>> marketSubs_;  // ordered, like EventBus
+    std::map<uint64_t, ExecutionCallback> execSubs_;
     std::unordered_map<std::string, std::vector<HistoricalBar>> history_;
 };
 

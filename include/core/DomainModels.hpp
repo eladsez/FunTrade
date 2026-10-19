@@ -110,12 +110,12 @@ enum class TimeInForce {
 
 // Represents an order we want to send to the exchange.
 struct OrderRequest {
-    std::string client_order_id; 
+    std::string client_order_id; // Unique per order: OrderIdUtils::newClientOrderId(position_key)
     std::string symbol;
-    Side side;
-    OrderType type;
+    Side side = Side::UNKNOWN;
+    OrderType type = OrderType::MARKET;
     TimeInForce tif = TimeInForce::GTC; // Default to GTC to match your current logic
-    double quantity;
+    double quantity = 0.0;
     double price = 0.0;       // For LIMIT and STOP_LIMIT
     double stop_price = 0.0;  // For STOP and STOP_LIMIT
     double trail_price = 0.0;  // For TRAILING_STOP (absolute distance)
@@ -123,18 +123,27 @@ struct OrderRequest {
 };
 
 // Represents a notification from the exchange about an order's status change.
+// A report is a FILL when last_quantity > 0; it then carries exec_id, which is unique per
+// execution so a redelivered fill can be recognised. Status-only reports have last_quantity == 0.
+// Engines must report client_order_id exactly as it was sent in the OrderRequest.
 struct ExecutionReport {
     std::string order_id;        // ID assigned by the exchange
     std::string client_order_id; // ID assigned by the client
+    std::string exec_id;         // Unique execution ID (fills only)
     std::string symbol;
-    Side side;
-    OrderStatus status;
-    double last_quantity; // Quantity filled in this specific update
-    double cumulative_quantity; // Total quantity filled so far
-    double last_price;    // Price of the last fill
-    double avg_price;     // Average price of all fills for this order
-    uint64_t timestamp_ms;
+    Side side = Side::UNKNOWN;
+    OrderStatus status = OrderStatus::NEW;
+    double last_quantity = 0.0;       // Quantity filled in this specific update
+    double cumulative_quantity = 0.0; // Total quantity filled so far
+    double last_price = 0.0;          // Price of the last fill
+    double avg_price = 0.0;           // Average price of all fills for this order
+    uint64_t timestamp_ms = 0;
 };
+
+inline bool isTerminal(OrderStatus s) {
+    return s == OrderStatus::FILLED || s == OrderStatus::CANCELED ||
+           s == OrderStatus::REJECTED || s == OrderStatus::EXPIRED;
+}
 
 struct HistoricalBar {
     std::string symbol;
@@ -166,9 +175,9 @@ struct OrderState {
     std::string order_id;
     std::string client_order_id;
     std::string symbol;
-    Side side;
-    OrderType type;
-    OrderStatus status;
+    Side side = Side::UNKNOWN;
+    OrderType type = OrderType::MARKET;
+    OrderStatus status = OrderStatus::NEW;
 
     double price = 0.0;              // Requested limit/stop price
     double quantity = 0.0;           // Target total quantity
@@ -178,44 +187,25 @@ struct OrderState {
 
 namespace OrderIdUtils {
 
-    // Generates a unique, Alpaca-compliant client_order_id (max 48 chars).
-    // Thread-safe and guarantees uniqueness even for sub-microsecond calls.
-    inline std::string generateClientOrderId(const std::string& prefix) {
-        static std::atomic<uint32_t> order_counter{0};
-        
-        std::string base_prefix = prefix.empty() ? "bot" : prefix;
-        
-        uint64_t timestamp = std::chrono::system_clock::now().time_since_epoch().count();
-        uint32_t current_count = ++order_counter;
-        
-        std::string generated_id = base_prefix + "_" + std::to_string(timestamp) + "_" + std::to_string(current_count);
-        
-        // Alpaca restricts client_order_id to a maximum of 48 characters
-        if (generated_id.length() > 48) {
-            generated_id = generated_id.substr(0, 48);
-        }
-        
-        return generated_id;
+    // Client order IDs have the form "<position_key>#<unique suffix>". The position key
+    // (e.g. "hban_mco_schw_HBAN") names the virtual position a fill belongs to; the suffix
+    // makes every order unique, so a late report from an earlier cycle can never be
+    // mistaken for the current one. Basket IDs never contain '#'.
+    inline constexpr char kSeparator = '#';
+
+    // Thread-safe; unique across restarts (epoch ms) and within a millisecond (counter).
+    inline std::string newClientOrderId(const std::string& positionKey) {
+        static std::atomic<uint32_t> counter{0};
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::system_clock::now().time_since_epoch()).count();
+        return positionKey + kSeparator + std::to_string(ms) + "-" + std::to_string(++counter);
     }
 
-    // Safely extracts the original base prefix from a generated execution ID
-    // E.g., "given_client_id_1710543210000_1" -> "given_client_id"
-    inline std::string extractBaseClientId(const std::string& fullId) {
-        if (fullId.empty()) return "";
-        
-        auto last_underscore = fullId.find_last_of('_');
-        if (last_underscore == std::string::npos || last_underscore == 0) return fullId;
-        
-        auto second_last_underscore = fullId.find_last_of('_', last_underscore - 1);
-        if (second_last_underscore == std::string::npos) return fullId;
-        
-        return fullId.substr(0, second_last_underscore);
-    }
-
-    // Checks if a full broker ID belongs to a specific base ID
-    inline bool isMatchingId(const std::string& baseId, const std::string& fullId) {
-        // The safest way is to extract and compare exactly
-        return extractBaseClientId(fullId) == baseId;
+    // "hban_mco_schw_HBAN#1792436188331-7" -> "hban_mco_schw_HBAN". IDs without a suffix
+    // (e.g. orders placed outside the bot) are their own position key.
+    inline std::string positionKeyOf(const std::string& clientOrderId) {
+        auto pos = clientOrderId.find(kSeparator);
+        return pos == std::string::npos ? clientOrderId : clientOrderId.substr(0, pos);
     }
 
 } // namespace OrderIdUtils

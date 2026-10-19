@@ -66,29 +66,53 @@ TEST_F(OrderManagerTest, LoadsBrokerOpenOrdersOnStartup) {
     EXPECT_TRUE(om2.getOrder("bk_Z").has_value());
 }
 
-// ---------------------------------------------------------------------------
-// Known bugs (see docs/ROADMAP.md). Enable when the owning phase fixes them.
-// ---------------------------------------------------------------------------
+// Fixed in Phase 2 (were known bugs).
 
-// Phase 2: a fill that arrives before submitOrder() records the order (fast exchange, or
-// the mock engine) must not be overwritten back to NEW / 0 filled.
-TEST_F(OrderManagerTest, DISABLED_Phase2_FillBeforeSubmitReturnsIsNotClobbered) {
+// A fill that arrives before submitOrder() returns (fast exchange, or the mock engine)
+// must not be overwritten back to NEW / 0 filled.
+TEST_F(OrderManagerTest, FillBeforeSubmitReturnsIsNotClobbered) {
     engine->onPlace = [this](const OrderRequest& r) {
         engine->emit(FakeExecutionEngine::report(r, OrderStatus::FILLED, r.quantity, r.quantity, 50.0));
     };
     std::string id = om->submitOrder(req("bk_A"));
     EXPECT_EQ(om->getOrder(id)->status, OrderStatus::FILLED);
+    EXPECT_DOUBLE_EQ(om->getOrder(id)->filled_quantity, 10);
     EXPECT_TRUE(om->getOpenOrders().empty());
 }
 
-// Phase 2: the id an engine returns from placeOrder() must be the id its reports carry
-// (Alpaca returns the full generated id but reports the stripped base id).
-TEST_F(OrderManagerTest, DISABLED_Phase2_ReturnedIdMatchesReportedId) {
-    engine->onPlace = [this](const OrderRequest& r) {
-        auto rep = FakeExecutionEngine::report(r, OrderStatus::FILLED, r.quantity, r.quantity, 50.0);
-        rep.client_order_id = r.client_order_id + "_1792436188331276305_1";  // what Alpaca would key
-        engine->emit(rep);
+// An engine that fails to place (returns a different/empty id) yields a REJECTED order and "".
+TEST_F(OrderManagerTest, FailedPlacementIsRejected) {
+    struct FailingEngine : FakeExecutionEngine {
+        std::string placeOrder(const OrderRequest& r) override { placed.push_back(r); return ""; }
     };
+    auto failing = std::make_shared<FailingEngine>();
+    OrderManager om2(bus, failing);
+    EXPECT_EQ(om2.submitOrder(req("bk_A")), "");
+    EXPECT_EQ(om2.getOrder("bk_A")->status, OrderStatus::REJECTED);
+    EXPECT_TRUE(om2.getOpenOrders().empty());
+}
+
+TEST_F(OrderManagerTest, TerminalStatusIsFinalAndFillsOnlyGrow) {
+    auto r = req("bk_A");
+    std::string id = om->submitOrder(r);
+    engine->emit(FakeExecutionEngine::report(r, OrderStatus::PARTIALLY_FILLED, 6, 6, 50.0));
+    engine->emit(FakeExecutionEngine::report(r, OrderStatus::CANCELED, 0, 0, 0.0));
+    engine->emit(FakeExecutionEngine::report(r, OrderStatus::NEW, 0, 0, 0.0));  // late
+    EXPECT_EQ(om->getOrder(id)->status, OrderStatus::CANCELED);
+    EXPECT_DOUBLE_EQ(om->getOrder(id)->filled_quantity, 6);
+}
+
+TEST_F(OrderManagerTest, CancelBeforeFirstReportUsesClientId) {
     std::string id = om->submitOrder(req("bk_A"));
-    EXPECT_EQ(om->getOrder(id)->status, OrderStatus::FILLED);
+    om->cancelOrder(id);
+    ASSERT_EQ(engine->canceled.size(), 1u);
+    EXPECT_EQ(engine->canceled[0], id);
+}
+
+TEST_F(OrderManagerTest, CancelOfTerminalOrderIsNoop) {
+    auto r = req("bk_A");
+    std::string id = om->submitOrder(r);
+    engine->emit(FakeExecutionEngine::report(r, OrderStatus::FILLED, 10, 10, 50.0));
+    om->cancelOrder(id);
+    EXPECT_TRUE(engine->canceled.empty());
 }

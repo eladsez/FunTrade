@@ -73,11 +73,26 @@ TEST_F(PortfolioManagerTest, VirtualKeysSharingASymbolAreIndependent) {
     EXPECT_DOUBLE_EQ(pm->getTotalUnrealizedPnL(), 40.0);
 }
 
-TEST_F(PortfolioManagerTest, IgnoresNonFillStatuses) {
-    fill("bk_A", "A", Side::BUY, 10, 50.0, OrderStatus::NEW);
-    fill("bk_A", "A", Side::BUY, 10, 50.0, OrderStatus::CANCELED);
-    fill("bk_A", "A", Side::BUY, 10, 50.0, OrderStatus::REJECTED);
+TEST_F(PortfolioManagerTest, StatusOnlyReportsNeverMoveInventory) {
+    // IBKR orderStatus says "Filled, cumulative 10" but carries no execution.
+    OrderRequest r{};
+    r.client_order_id = "bk_A"; r.symbol = "A"; r.side = Side::BUY; r.quantity = 10;
+    for (auto st : {OrderStatus::NEW, OrderStatus::PARTIALLY_FILLED, OrderStatus::FILLED,
+                    OrderStatus::CANCELED, OrderStatus::REJECTED}) {
+        bus->publishExecution(FakeExecutionEngine::report(r, st, 0, 10, 50.0));
+    }
     EXPECT_DOUBLE_EQ(pm->getNetPosition("bk_A"), 0);
+}
+
+TEST_F(PortfolioManagerTest, LateFillAfterCancelIsStillBooked) {
+    fill("bk_A", "A", Side::BUY, 10, 50.0, OrderStatus::CANCELED);
+    EXPECT_DOUBLE_EQ(pm->getNetPosition("bk_A"), 10);
+}
+
+TEST_F(PortfolioManagerTest, BooksUnderPositionKeyOfUniqueOrderId) {
+    fill(OrderIdUtils::newClientOrderId("bk_A"), "A", Side::BUY, 10, 50.0);
+    fill(OrderIdUtils::newClientOrderId("bk_A"), "A", Side::BUY, 5, 50.0);
+    EXPECT_DOUBLE_EQ(pm->getNetPosition("bk_A"), 15);
 }
 
 TEST_F(PortfolioManagerTest, SyncsBrokerPositionsOnStartup) {
@@ -87,17 +102,20 @@ TEST_F(PortfolioManagerTest, SyncsBrokerPositionsOnStartup) {
     EXPECT_DOUBLE_EQ(pm2.getNetPosition("AAPL"), 5);
 }
 
+// The same execution delivered twice must be counted once (fixed in Phase 2).
+TEST_F(PortfolioManagerTest, DuplicateExecutionCountedOnce) {
+    OrderRequest r{};
+    r.client_order_id = "bk_A"; r.symbol = "A"; r.side = Side::BUY; r.quantity = 10;
+    auto rep = FakeExecutionEngine::report(r, OrderStatus::FILLED, 10, 10, 50.0);
+    bus->publishExecution(rep);
+    bus->publishExecution(rep);  // same exec_id, redelivered
+    EXPECT_DOUBLE_EQ(pm->getNetPosition("bk_A"), 10);
+    EXPECT_EQ(pm->getTotalTrades(), 1u);
+}
+
 // ---------------------------------------------------------------------------
 // Known bugs (see docs/ROADMAP.md). Enable when the owning phase fixes them.
 // ---------------------------------------------------------------------------
-
-// Phase 2: the same execution delivered twice (IBKR sends orderStatus + execDetails, and
-// repeats orderStatus) must be counted once. Needs an execution id on ExecutionReport.
-TEST_F(PortfolioManagerTest, DISABLED_Phase2_DuplicateExecutionCountedOnce) {
-    fill("bk_A", "A", Side::BUY, 10, 50.0);
-    fill("bk_A", "A", Side::BUY, 10, 50.0);  // same execution, redelivered
-    EXPECT_DOUBLE_EQ(pm->getNetPosition("bk_A"), 10);
-}
 
 // Phase 3: inventory restored from the broker must be attributed back to the basket that
 // owns it, otherwise every basket restarts FLAT and orphans its hedge.

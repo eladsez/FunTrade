@@ -2,6 +2,7 @@
 
 #include <execution/IExecutionEngine.hpp>
 #include <infra/IbkrInfra.hpp>
+#include <execution/IbkrOrderTracker.hpp>
 #include <core/IEventBus.hpp>
 #include <core/DomainModels.hpp>
 
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <optional>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 namespace bot {
@@ -28,7 +30,8 @@ public:
 
     [[nodiscard]] std::string placeOrder(const OrderRequest& request) override;
     
-    bool cancelOrder(const std::string& order_id);
+    // Accepts the IBKR order id or our client order id.
+    bool cancelOrder(const std::string& order_id) override;
     bool cancelAllOrders() override;
 
     // Synchronous Account/Portfolio Methods
@@ -40,9 +43,7 @@ public:
 private:
     // Callbacks from IbkrInfra
     void onNextValidId(int orderId);
-    void onOrderStatus(int orderId, const std::string& status, Decimal filled, Decimal remaining, 
-                       double avgFillPrice, int permId, int parentId, double lastFillPrice, 
-                       int clientId, const std::string& whyHeld, double mktCapPrice);
+    void onOrderStatus(int orderId, const std::string& status, Decimal filled, double avgFillPrice);
     void onExecDetails(int reqId, const Contract& contract, const Execution& execution);
     void onUpdateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName);
     void onPosition(const std::string& account, const Contract& contract, Decimal pos, double avgCost);
@@ -56,7 +57,6 @@ private:
     // Helpers
     Contract createContract(const std::string& symbol);
     std::string translateTimeInForce(TimeInForce tif);
-    OrderStatus parseIbkrStatus(const std::string& status);
 
     std::shared_ptr<IbkrInfra> infra_;
 
@@ -65,15 +65,18 @@ private:
     bool validIdReceived_{false};
     std::condition_variable idCv_; 
 
-    std::unordered_map<std::string, int> clientRefToOrderId_;
-    std::unordered_map<int, std::string> orderIdToClientRef_;
+    static constexpr std::chrono::seconds kOrderIdTimeout{5};
 
-    // Account State
-    std::atomic<double> cachedCash_{0.0};
-    std::atomic<bool> cashHasValue_{false};
-    
-    std::atomic<double> cachedPortfolioValue_{0.0};
-    std::atomic<bool> portHasValue_{false};
+    IbkrOrderTracker tracker_;
+
+    // Account state. IBKR reports AvailableFunds / NetLiquidation in the account's BASE
+    // currency (ILS on this account) and an "ExchangeRate" per currency (1 unit = rate base).
+    // We trade USD stocks, so values are converted: usd = base / ExchangeRate[USD].
+    std::mutex accountMutex_;
+    std::optional<double> baseAvailableFunds_;
+    std::optional<double> baseNetLiquidation_;
+    std::optional<double> usdRate_;
+    std::optional<double> toUsd(const std::optional<double>& baseValue);
 
     // Initialization Sync Barrier
     std::mutex syncMutex_;
@@ -86,8 +89,10 @@ private:
     std::mutex positionMutex_;
     std::unordered_map<std::string, Position> openPositions_; // Map by symbol
 
+    void emit(const std::optional<ExecutionReport>& report);
+
     std::mutex orderMutex_;
-    std::unordered_map<int, OrderState> openOrders_; // Map by integer orderId
+    std::unordered_map<int, OrderState> openOrders_; // Map by integer orderId (from openOrder)
 };
 
 } // namespace bot

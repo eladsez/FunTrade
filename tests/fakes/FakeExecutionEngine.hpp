@@ -16,11 +16,23 @@ public:
 
     std::string placeOrder(const OrderRequest& request) override {
         placed.push_back(request);
+        if (failPlacements) return "";  // never reached the exchange
         if (onPlace) onPlace(request);
         return request.client_order_id;
     }
 
-    bool cancelOrder(const std::string& orderId) override { canceled.push_back(orderId); return true; }
+    bool cancelOrder(const std::string& orderId) override {
+        canceled.push_back(orderId);
+        if (onCancel) onCancel(orderId);
+        return true;
+    }
+
+    // The placed order a cancel id refers to (client id, or the fake exchange id "X-<cid>").
+    const OrderRequest* findPlaced(const std::string& id) const {
+        for (const auto& r : placed)
+            if (r.client_order_id == id || "X-" + r.client_order_id == id) return &r;
+        return nullptr;
+    }
     bool cancelAllOrders() override { cancelAllCalls++; return true; }
 
     std::optional<double> getPortfolioValue() override { return portfolioValue; }
@@ -34,10 +46,14 @@ public:
         else if (bus) bus->publishExecution(report);
     }
 
-    // Builds a fully initialised report for a previously placed order.
+    // Builds a fully initialised report for a previously placed order. A report with
+    // lastQty > 0 is a fill and gets a fresh exec_id unless one is given.
     static ExecutionReport report(const OrderRequest& req, OrderStatus status, double lastQty,
-                                  double cumQty, double price, const std::string& exchId = "") {
+                                  double cumQty, double price, const std::string& exchId = "",
+                                  const std::string& execId = "") {
+        static int execCounter = 0;
         ExecutionReport r{};
+        if (lastQty > 0) r.exec_id = execId.empty() ? "E" + std::to_string(++execCounter) : execId;
         r.order_id = exchId.empty() ? "X-" + req.client_order_id : exchId;
         r.client_order_id = req.client_order_id;
         r.symbol = req.symbol;
@@ -61,9 +77,11 @@ public:
 
     IEventBus* bus = nullptr;
     std::function<void(const OrderRequest&)> onPlace;
+    std::function<void(const std::string&)> onCancel;
     std::vector<OrderRequest> placed;
     std::vector<std::string> canceled;
     int cancelAllCalls = 0;
+    bool failPlacements = false;
 
     std::optional<double> portfolioValue = 100000.0;
     std::optional<double> availableCash = 100000.0;

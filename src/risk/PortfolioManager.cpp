@@ -130,16 +130,24 @@ bool PortfolioManager::updatePositionIndex(const std::string& symbol, const std:
 
 void PortfolioManager::onExecution(const ExecutionReport& report) {
     std::lock_guard<std::mutex> lock(mtx_);
-    
-    if (report.status != OrderStatus::FILLED && report.status != OrderStatus::PARTIALLY_FILLED) {
+
+    // Only fills move inventory. Status-only reports (NEW, CANCELED, REJECTED, and IBKR's
+    // orderStatus updates) carry last_quantity == 0, whatever their cumulative quantity says.
+    if (report.last_quantity <= 0.0) {
         return;
     }
 
-    if (report.status == OrderStatus::FILLED) {
-        total_trades_++;
+    // The same execution can be delivered more than once (IBKR re-sends after reconnects).
+    if (!report.exec_id.empty() && !seen_exec_ids_.insert(report.exec_id).second) {
+        LOG_DEBUG("[PortfolioManager] Ignoring duplicate execution {}", report.exec_id);
+        return;
     }
 
-    std::string virtual_key = report.client_order_id.empty() ? report.symbol : report.client_order_id;
+    total_trades_++;
+
+    std::string virtual_key = report.client_order_id.empty()
+        ? report.symbol
+        : OrderIdUtils::positionKeyOf(report.client_order_id);
     
     Position& pos = positions_[virtual_key];
     pos.symbol = report.symbol;

@@ -86,7 +86,8 @@ const char* AlpacaExecutionEngine::timeInForceToString(TimeInForce tif) {
 
 std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
 
-    std::string clientOrderId = OrderIdUtils::generateClientOrderId(request.client_order_id);
+    // IExecutionEngine contract: send and report the request's id unchanged (unique per order).
+    const std::string& clientOrderId = request.client_order_id;
     
     nlohmann::json orderPayload = {
         {"symbol", request.symbol},
@@ -126,11 +127,25 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
     LOG_DEBUG("[AlpacaExecutionEngine] Async Placing Order: {} | ClientID: {}", payloadStr, clientOrderId);
 
     // Detach a thread to perform the HTTP request without blocking the Strategy
-    std::thread([this, payloadStr, clientOrderId]() {
+    std::thread([this, payloadStr, clientOrderId, symbol = request.symbol, side = request.side]() {
+        // An HTTP-level rejection (buying power, market closed, ...) never shows up on the
+        // trade_updates stream, so report it here or the order would look pending forever.
+        auto reportRejected = [&](const std::string& why) {
+            LOG_ERROR("[AlpacaExecutionEngine] Order {} rejected: {}", clientOrderId, why);
+            ExecutionReport r;
+            r.client_order_id = clientOrderId;
+            r.symbol = symbol;
+            r.side = side;
+            r.status = OrderStatus::REJECTED;
+            r.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            if (reportCb_) reportCb_(r);
+        };
+
         std::string response = infra_->sendRestRequest("POST", baseHost_, "/v2/orders", payloadStr);
         
         if (response.empty()) {
-            LOG_ERROR("[AlpacaExecutionEngine] Async placeOrder failed for ClientID: {}", clientOrderId);
+            reportRejected("no response from REST API");
             return;
         }
         try {
@@ -138,10 +153,10 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
             if (res.contains("id")) {
                 LOG_DEBUG("[AlpacaExecutionEngine] Order Accepted: ExchangeID={}, ClientID={}", res["id"].get<std::string>(), clientOrderId);
             } else {
-                LOG_ERROR("[AlpacaExecutionEngine] Order Rejected: {}", res.dump());
+                reportRejected(res.dump());
             }
         } catch (const std::exception& e) {
-            LOG_ERROR("[AlpacaExecutionEngine] JSON Error on Async response: {}", e.what());
+            reportRejected(std::string("unparseable response: ") + e.what());
         }
     }).detach();
 
@@ -322,9 +337,9 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
             std::string statusStr = event; 
             if (statusStr == "fill") report.status = OrderStatus::FILLED;
             else if (statusStr == "partial_fill") report.status = OrderStatus::PARTIALLY_FILLED;
-            else if (statusStr == "canceled" || statusStr == "pending_cancel") report.status = OrderStatus::CANCELED;
+            else if (statusStr == "canceled" || statusStr == "expired" || statusStr == "done_for_day") report.status = OrderStatus::CANCELED;
             else if (statusStr == "rejected") report.status = OrderStatus::REJECTED;
-            else if (statusStr == "new" || statusStr == "accepted" || statusStr == "pending_new") report.status = OrderStatus::NEW;
+            else if (statusStr == "new" || statusStr == "accepted" || statusStr == "pending_new" || statusStr == "pending_cancel") report.status = OrderStatus::NEW;  // pending_cancel can still fill
             else return; // Ignore other events for now
 
             // Helper lambda to safely parse floats/doubles that might be null or strings
@@ -344,7 +359,11 @@ void AlpacaExecutionEngine::onWebSocketMessage(const std::string& payload) {
             report.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
             report.client_order_id = order.value("client_order_id", "");
-            report.client_order_id = OrderIdUtils::extractBaseClientId(report.client_order_id);
+            if (statusStr == "fill" || statusStr == "partial_fill") {
+                report.exec_id = data.value("execution_id", "");
+            } else {
+                report.last_quantity = 0.0;  // status-only event; only fills carry quantity
+            }
 
             LOG_DEBUG("[AlpacaExecutionEngine] Execution Report: Symbol={}, Event={}, Status={}, Qty={}, Price={}", 
                      report.symbol, event, static_cast<int>(report.status), report.last_quantity, report.last_price);

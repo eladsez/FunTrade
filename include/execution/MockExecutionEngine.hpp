@@ -72,7 +72,8 @@ private:
 
         ExecutionReport report;
         // Mocking an exchange-assigned ID
-        report.order_id = order_counter++;
+        uint32_t n = ++order_counter;
+        report.order_id = "mock-" + std::to_string(n);
         report.client_order_id = req.client_order_id;
         report.symbol = req.symbol;
         report.side = req.side;
@@ -88,19 +89,20 @@ private:
         if (fill_price == 0.0) {
             LOG_ERROR("[MOCK EXECUTION] FAILED to fill {}. No price data available in cache!", req.symbol);
             report.status = OrderStatus::REJECTED;
-            report.last_price = 0.0;
-            report.avg_price = 0.0;
+            report.last_quantity = 0.0;
+            report.cumulative_quantity = 0.0;
         } else {
+            report.exec_id = report.order_id + "-1";
             report.last_price = fill_price;
             report.avg_price = fill_price;
         }
 
-        // Apply the exact Virtual Time, not wall-clock
-        report.timestamp_ms = std::chrono::system_clock::now().time_since_epoch().count();
+        report.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
 
         LOG_INFO("[MOCK EXECUTION] Simulating instant FILL for {} at ${:.2f}...", req.symbol, fill_price);
         event_bus_->publishExecution(report); 
-        return report.order_id;
+        return req.client_order_id;  // IExecutionEngine contract: return the request's id
     }
 };
 

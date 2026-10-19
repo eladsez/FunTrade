@@ -103,8 +103,8 @@ void EventBus::dispatchEvent(const Event& event) {
             // Safely extract the symbol from the variant
             std::string symbol = std::visit([](auto&& e) { return e.symbol; }, arg);
             // I need to evaluate if this copy is realy needed  
-            std::unordered_map<uint64_t, MarketEventCallback> localCallbacks;
-            std::unordered_map<uint64_t, MarketEventCallback> wildcardCallbacks;
+            std::map<uint64_t, MarketEventCallback> localCallbacks;
+            std::map<uint64_t, MarketEventCallback> wildcardCallbacks;
             {
                 std::lock_guard<std::mutex> lock(subMtx);
                 // Get wildcard listeners (like the MockExecutionEngine)
@@ -125,7 +125,7 @@ void EventBus::dispatchEvent(const Event& event) {
             
         } 
         else if constexpr (std::is_same_v<T, ExecutionReport>) {
-            std::unordered_map<uint64_t, ExecutionCallback> localExecSubs;
+            std::map<uint64_t, ExecutionCallback> localExecSubs;
             {
                 std::lock_guard<std::mutex> lock(subMtx);
                 localExecSubs = executionSubscribers;

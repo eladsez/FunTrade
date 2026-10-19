@@ -1,5 +1,6 @@
 #include <strategy/LegExecutionState.hpp>
 #include <risk/UiBroadcaster.hpp>
+#include <algorithm>
 
 namespace bot {
 
@@ -10,8 +11,14 @@ LegExecutionState::LegExecutionState(std::string symbol, std::string clientOrder
 bool LegExecutionState::updateFromReport(const ExecutionReport& report) {
     if (report.client_order_id != client_order_id_) return false;
 
-    current_status_ = report.status;
-    filled_qty_ = report.cumulative_quantity;
+    // Filled quantity only ever grows: cancel/reject reports may carry 0 (or a stale value),
+    // and reports can arrive out of order.
+    filled_qty_ = std::max(filled_qty_, report.cumulative_quantity);
+
+    // Once terminal, a leg stays terminal: late or duplicate reports must not reopen it.
+    if (!isTerminal()) {
+        current_status_ = report.status;
+    }
 
     UiBroadcaster::getInstance().broadcastFill(basket_id_, symbol_, target_qty_, filled_qty_);
 
@@ -20,10 +27,7 @@ bool LegExecutionState::updateFromReport(const ExecutionReport& report) {
 }
 
 bool LegExecutionState::isTerminal() const {
-    return current_status_ == OrderStatus::FILLED || 
-           current_status_ == OrderStatus::CANCELED || 
-           current_status_ == OrderStatus::REJECTED ||
-           current_status_ == OrderStatus::EXPIRED;
+    return bot::isTerminal(current_status_);
 }
 
 double LegExecutionState::getFilledQuantity() const { return filled_qty_; }

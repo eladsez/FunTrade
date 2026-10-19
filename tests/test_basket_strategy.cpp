@@ -58,6 +58,9 @@ protected:
         engine->onPlace = [this](const OrderRequest& r) {
             engine->emit(FakeExecutionEngine::report(r, OrderStatus::FILLED, r.quantity, r.quantity, 100.0));
         };
+        engine->onCancel = [this](const std::string& id) {
+            if (auto* r = engine->findPlaced(id)) engine->emit(FakeExecutionEngine::report(*r, OrderStatus::CANCELED, 0, 0, 0));
+        };
         strat->stop();
         fs::remove(cfgPath);
     }
@@ -145,6 +148,77 @@ TEST_F(BasketStrategyTest, PartialEntryTriggersRecoverySweepOfFilledInventory) {
     EXPECT_DOUBLE_EQ(engine->placed[2].quantity, r0.quantity);
 }
 
+// Fixed in Phase 2 (were known bugs).
+
+// Stopping while entry orders are still working cancels them and finishes promptly.
+TEST_F(BasketStrategyTest, StopWhileEntryPendingCancelsAndReturnsPromptly) {
+    tickSpread(0.04, 30);
+    ASSERT_EQ(engine->placed.size(), 2u);
+    engine->onCancel = [this](const std::string& id) {
+        if (auto* r = engine->findPlaced(id)) engine->emit(FakeExecutionEngine::report(*r, OrderStatus::CANCELED, 0, 0, 0));
+    };
+    auto t0 = std::chrono::steady_clock::now();
+    strat->stop();
+    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::seconds(1));
+    EXPECT_EQ(engine->canceled.size(), 2u) << "both working entry orders canceled";
+    EXPECT_EQ(engine->placed.size(), 2u) << "nothing filled, so nothing to flatten";
+}
+
+// Stopping with a partially filled entry cancels the rest and unwinds what did fill.
+TEST_F(BasketStrategyTest, StopWithPartialEntryUnwindsFilledLeg) {
+    tickSpread(0.04, 30);
+    ASSERT_EQ(engine->placed.size(), 2u);
+    const auto r0 = engine->placed[0];
+    engine->emit(FakeExecutionEngine::report(r0, OrderStatus::FILLED, r0.quantity, r0.quantity, px(r0.symbol)));
+    engine->onCancel = [this](const std::string& id) {
+        if (auto* r = engine->findPlaced(id)) engine->emit(FakeExecutionEngine::report(*r, OrderStatus::CANCELED, 0, 0, 0));
+    };
+    engine->onPlace = [this](const OrderRequest& r) {
+        engine->emit(FakeExecutionEngine::report(r, OrderStatus::FILLED, r.quantity, r.quantity, 100.0));
+    };
+    strat->stop();
+    ASSERT_EQ(engine->placed.size(), 3u);
+    EXPECT_EQ(engine->placed[2].symbol, r0.symbol);
+    EXPECT_NE(engine->placed[2].side, r0.side);
+    EXPECT_DOUBLE_EQ(pm->getNetPosition("tb_" + r0.symbol), 0.0);
+}
+
+// Every order gets a fresh client id, so a late report from a finished cycle is ignored.
+TEST_F(BasketStrategyTest, LateReportFromPreviousCycleDoesNotAffectNewCycle) {
+    tickSpread(0.04, 30);
+    ASSERT_EQ(engine->placed.size(), 2u);
+    const auto oldA = engine->placed[0];
+    for (const auto& r : engine->placed)
+        engine->emit(FakeExecutionEngine::report(r, OrderStatus::CANCELED, 0, 0, 0));  // whiff -> FLAT
+
+    tickSpread(0.04, 3);  // re-enters
+    ASSERT_EQ(engine->placed.size(), 4u);
+    EXPECT_NE(engine->placed[2].client_order_id, oldA.client_order_id);
+    EXPECT_EQ(OrderIdUtils::positionKeyOf(engine->placed[2].client_order_id), "tb_A");
+
+    // A stale "filled" for the old order must not complete the new cycle's leg.
+    engine->emit(FakeExecutionEngine::report(oldA, OrderStatus::FILLED, 0, oldA.quantity, px("A")));
+    engine->emit(FakeExecutionEngine::report(engine->placed[3], OrderStatus::FILLED,
+                                             engine->placed[3].quantity, engine->placed[3].quantity, px("B")));
+    tickSpread(-0.03, 40);
+    EXPECT_EQ(engine->placed.size(), 4u) << "still ENTRY_PENDING on leg A: no exit orders";
+    const auto& newA = engine->placed[2];
+    engine->emit(FakeExecutionEngine::report(newA, OrderStatus::FILLED, newA.quantity, newA.quantity, px("A")));
+    EXPECT_DOUBLE_EQ(pm->getNetPosition("tb_A"), -newA.quantity) << "only the real fill moved inventory";
+}
+
+// A placement that never reaches the exchange counts as a rejection, not a hang.
+TEST_F(BasketStrategyTest, FailedPlacementResolvesCycle) {
+    engine->failPlacements = true;
+    tickSpread(0.04, 30);
+    // Each round: both placements fail -> whiff -> FLAT -> next tick tries again. With the
+    // old code the first cycle waited forever for reports that could never come.
+    EXPECT_GT(engine->placed.size(), 2u);
+    EXPECT_EQ(engine->placed.size() % 2, 0u);
+    EXPECT_DOUBLE_EQ(pm->getNetPosition("tb_A"), 0.0);
+    engine->failPlacements = false;
+}
+
 // ---------------------------------------------------------------------------
 // Known bugs (see docs/ROADMAP.md). Enable when the owning phase fixes them.
 // ---------------------------------------------------------------------------
@@ -161,15 +235,4 @@ TEST_F(BasketStrategyTest, DISABLED_Phase4_TradesOnQuoteStream) {
     EXPECT_EQ(engine->placed.size(), 2u);
 }
 
-// Phase 2: stopping while entry orders are still working must cancel them and finish
-// promptly. Today stop() builds an all-zero exit cycle (no inventory yet), never cancels the
-// working entry orders, and blocks for its full 10 s timeout.
-TEST_F(BasketStrategyTest, DISABLED_Phase2_StopWhileEntryPendingCancelsAndReturnsPromptly) {
-    tickSpread(0.04, 30);
-    ASSERT_EQ(engine->placed.size(), 2u);
-    engine->onPlace = nullptr;
-    auto t0 = std::chrono::steady_clock::now();
-    strat->stop();
-    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::seconds(1));
-    EXPECT_FALSE(engine->canceled.empty() && engine->cancelAllCalls == 0) << "working entry orders must be canceled";
-}
+

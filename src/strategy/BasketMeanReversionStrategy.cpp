@@ -73,7 +73,7 @@ void BasketMeanReversionStrategy::loadConfig() {
         symbols.push_back(sym);
         weights.push_back(config["weights"][sym].get<double>());
         
-        client_order_ids_.push_back(config["basket_id"].get<std::string>() + "_" + sym);
+        position_keys_.push_back(config["basket_id"].get<std::string>() + "_" + sym);
     }
 
     basket_state_ = std::make_unique<BasketState>(window_size, symbols, weights, basket_id_);
@@ -236,12 +236,11 @@ inline void BasketMeanReversionStrategy::processTick(const std::string& symbol, 
 
 void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
     size_t num_components = basket_state_->getNumComponents();
-    const auto& symbols = basket_state_->getSymbols();
     std::vector<LegTarget> targets;
 
     // 1. Ask the Sizer for the exact mathematical execution targets
     if (targetState == PositionState::FLAT) {
-        targets = BasketSizer::calculateExit(client_order_ids_, *portfolio_mngr_);
+        targets = BasketSizer::calculateExit(position_keys_, *portfolio_mngr_);
     } else {
         std::vector<double> current_prices(num_components);
         for (size_t i = 0; i < num_components; ++i) {
@@ -260,80 +259,65 @@ void BasketMeanReversionStrategy::executeBasket(PositionState targetState) {
         targets = std::move(*opt_targets);
     }
 
-    // 2. Build the cycle and dispatch to the OrderManager
-    current_cycle_ = std::make_unique<ExecutionCycle>(basket_id_);
-
-    // 3. Dispatch the orders to the OrderManager
-    for (size_t i = 0; i < num_components; ++i) {
-        current_cycle_->addLeg(client_order_ids_[i], symbols[i], targets[i].quantity, targets[i].side);
-    }
-
-    // add leg and submit must be serial
-    for (size_t i = 0; i < num_components; ++i) {
-        if (targets[i].quantity > 0.0) {
-            OrderRequest req;
-            req.client_order_id = client_order_ids_[i]; 
-            req.symbol = symbols[i];
-            req.side = targets[i].side;
-            req.type = OrderType::MARKET;
-            req.quantity = targets[i].quantity;
-            req.tif = TimeInForce::IOC;
-
-            LOG_INFO("[{}] Routing: {} {} {:.4f} shares (IOC).", 
-                     basket_id_, (req.side == Side::BUY ? "BUY" : "SELL"), symbols[i], req.quantity);
-
-            order_mngr_->submitOrder(req);
-        }
-    }
-
-    // 4. Safety net for instant resolution (e.g., if target quantities were all 0)
-    if (current_cycle_ && current_cycle_->isComplete()) {
-        evaluateCompletedCycle();
-    }
+    // 2. Build the cycle and route the orders
+    dispatchCycle(targets, targetState == PositionState::FLAT ? "EXIT" : "ENTRY");
 
     UiBroadcaster::getInstance().broadcastState(basket_id_, 
         std::string(magic_enum::enum_name(master_state_)),
         std::string(magic_enum::enum_name(current_position_)));
 }
 
-void BasketMeanReversionStrategy::executeRecoverySweep() {
-    LOG_WARN("[{}] Initiating Recovery Protocol: Sweeping residual inventory.", basket_id_);
-    
-    // Retrieve exact mathematical inventory remaining from portfolio manager
-    auto targets = BasketSizer::calculateExit(client_order_ids_, *portfolio_mngr_);
-    
-    // Setup immediate replacement flatting cycle
-    current_cycle_ = std::make_unique<ExecutionCycle>(basket_id_);
-    
-    size_t num_components = basket_state_->getNumComponents();
+// Starts a new execution cycle: one MARKET IOC order per non-zero leg, each with a fresh
+// client order id so late reports from earlier cycles can never be attributed to this one.
+void BasketMeanReversionStrategy::dispatchCycle(const std::vector<LegTarget>& targets, const char* label) {
     const auto& symbols = basket_state_->getSymbols();
-    
-    for (size_t i = 0; i < num_components; ++i) {
-        current_cycle_->addLeg(client_order_ids_[i], symbols[i], targets[i].quantity, targets[i].side);
+    current_cycle_ = std::make_unique<ExecutionCycle>(basket_id_);
+
+    std::vector<OrderRequest> orders;
+    for (size_t i = 0; i < targets.size(); ++i) {
+        if (targets[i].quantity <= 0.0) continue;
+        OrderRequest req;
+        req.client_order_id = OrderIdUtils::newClientOrderId(position_keys_[i]);
+        req.symbol = symbols[i];
+        req.side = targets[i].side;
+        req.type = OrderType::MARKET;
+        req.quantity = targets[i].quantity;
+        req.tif = TimeInForce::IOC;
+        current_cycle_->addLeg(req.client_order_id, req.symbol, req.quantity, req.side);
+        orders.push_back(std::move(req));
     }
-    
-    for (size_t i = 0; i < num_components; ++i) {
-        if (targets[i].quantity > 0.0) {
-            OrderRequest req;
-            req.client_order_id = client_order_ids_[i];
-            req.symbol = symbols[i];
-            req.side = targets[i].side;
-            req.type = OrderType::MARKET;
-            req.quantity = targets[i].quantity;
-            req.tif = TimeInForce::IOC;
 
-            LOG_INFO("[{}] RECOVERY Routing: {} {} {:.4f} shares (MARKET IOC).", 
-                     basket_id_, (req.side == Side::BUY ? "BUY" : "SELL"), symbols[i], req.quantity);
+    // Every leg is registered before the first order goes out, so a fast fill can't
+    // complete the cycle early.
+    for (const auto& req : orders) {
+        LOG_INFO("[{}] {} Routing: {} {} {:.4f} shares (MARKET IOC).", basket_id_, label,
+                 (req.side == Side::BUY ? "BUY" : "SELL"), req.symbol, req.quantity);
 
-            order_mngr_->submitOrder(req);
+        if (order_mngr_->submitOrder(req).empty() && current_cycle_) {
+            // Never reached the exchange: no report will ever come, so resolve the leg now.
+            ExecutionReport rejected;
+            rejected.client_order_id = req.client_order_id;
+            rejected.symbol = req.symbol;
+            rejected.side = req.side;
+            rejected.status = OrderStatus::REJECTED;
+            if (current_cycle_->processExecutionReport(rejected)) {
+                evaluateCompletedCycle();
+            }
         }
     }
-    
-    master_state_ = MasterState::RECOVERY_PENDING;
-    
+
+    // Nothing to trade (e.g. exit with no inventory) resolves immediately.
     if (current_cycle_ && current_cycle_->isComplete()) {
         evaluateCompletedCycle();
     }
+}
+
+void BasketMeanReversionStrategy::executeRecoverySweep() {
+    LOG_WARN("[{}] Initiating Recovery Protocol: Sweeping residual inventory.", basket_id_);
+    
+    // State first: dispatchCycle may resolve the sweep synchronously.
+    master_state_ = MasterState::RECOVERY_PENDING;
+    dispatchCycle(BasketSizer::calculateExit(position_keys_, *portfolio_mngr_), "RECOVERY");
 }
 
 void BasketMeanReversionStrategy::onExecutionReport(const ExecutionReport& report) {
@@ -347,6 +331,20 @@ void BasketMeanReversionStrategy::onExecutionReport(const ExecutionReport& repor
 
 void BasketMeanReversionStrategy::evaluateCompletedCycle() {
     if (!current_cycle_) return;
+
+    // Scenario 0: the cycle had nothing to trade (all targets 0, e.g. exit with no inventory).
+    if (!current_cycle_->hasLegs()) {
+        if (master_state_ == MasterState::EXIT_PENDING || master_state_ == MasterState::RECOVERY_PENDING) {
+            LOG_WARN("[{}] No inventory left to trade. State -> FLAT.", basket_id_);
+        }
+        master_state_ = MasterState::FLAT;
+        current_position_ = PositionState::FLAT;
+        current_cycle_.reset();
+        UiBroadcaster::getInstance().broadcastState(basket_id_, 
+            std::string(magic_enum::enum_name(master_state_)),
+            std::string(magic_enum::enum_name(current_position_)));
+        return;
+    }
 
     bool has_fills = current_cycle_->hasAnyFills();
     double missed_shares = current_cycle_->getMissedShares();
@@ -395,28 +393,46 @@ void BasketMeanReversionStrategy::evaluateCompletedCycle() {
         std::string(magic_enum::enum_name(current_position_)));
 }
 
+bool BasketMeanReversionStrategy::hasInventory() const {
+    for (const auto& key : position_keys_) {
+        if (std::abs(portfolio_mngr_->getNetPosition(key)) > 1e-9) return true;
+    }
+    return false;
+}
+
+// Polls until the in-flight cycle resolves. NOTE: reports are processed on the event
+// dispatcher thread while this runs on the caller's; Phase 5 moves shutdown onto the
+// dispatcher to remove that race.
+void BasketMeanReversionStrategy::waitForCycle(std::chrono::milliseconds timeout) const {
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (current_cycle_ != nullptr && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+}
+
 void BasketMeanReversionStrategy::stop() {
-    if (master_state_ != MasterState::FLAT) {
+    // 1. Orders still working: cancel them and let the cycle resolve. A partially filled
+    //    entry resolves into a recovery sweep, which this also waits for.
+    if (current_cycle_) {
+        for (const auto& cid : current_cycle_->workingClientOrderIds()) {
+            order_mngr_->cancelOrder(cid);
+        }
+        waitForCycle(kShutdownTimeout);
+    }
+
+    // 2. Flatten whatever inventory is still held.
+    if (!current_cycle_ && hasInventory()) {
         master_state_ = MasterState::EXIT_PENDING;
         executeBasket(PositionState::FLAT);
+        waitForCycle(kShutdownTimeout);
+    }
 
-        // current_cycle_ will be reset to nullptr by evaluateCompletedCycle() 
-        // once all execution reports are received.
-        int timeout_ms = 10000; // Give exchange 10 seconds maximum to fill the orders
-        int elapsed = 0;
-        
-        while (current_cycle_ != nullptr && elapsed < timeout_ms) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            elapsed += 100;
-        }
-
-        if (current_cycle_ != nullptr) {
-            LOG_ERROR("[{}] Network timeout! Cycle did not resolve.", basket_id_);
-        } else if (master_state_ != MasterState::FLAT) {
-            LOG_WARN("[{}] Shutdown cycle completed, but failed to reach FLAT state. Orphaned inventory may remain in exchange.", basket_id_);
-        } else {
-            LOG_INFO("[{}] Successfully flattened all positions for shutdown.", basket_id_);
-        }
+    if (current_cycle_ != nullptr) {
+        LOG_ERROR("[{}] Network timeout! Cycle did not resolve.", basket_id_);
+    } else if (hasInventory()) {
+        LOG_WARN("[{}] Shutdown finished but inventory remains. Orphaned positions may remain at the broker.", basket_id_);
+    } else {
+        LOG_INFO("[{}] Flat at shutdown.", basket_id_);
     }
 
     const auto& symbols = basket_state_->getSymbols();
@@ -424,7 +440,6 @@ void BasketMeanReversionStrategy::stop() {
         event_bus_->unsubscribeFromMarketEvents(sym, market_subid_[sym]);
     }
     event_bus_->unsubscribeFromExecution(report_subid_);
-    
 }
 
 inline void BasketMeanReversionStrategy::logZScoreThrottled(double z_score, uint64_t timestamp) {

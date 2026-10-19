@@ -9,6 +9,7 @@
 #include <blockingconcurrentqueue.h>
 #include <variant>
 #include <unordered_map>
+#include <map>
 #include <memory>
 
 namespace bot {
@@ -45,9 +46,11 @@ private:
     std::shared_ptr<IDataFeed> dataFeed_;
     std::shared_ptr<IExecutionEngine> executionEngine_;
 
-    // Outer map: Symbol -> Inner map: (SubID -> Callback)
-    std::unordered_map<std::string, std::unordered_map<uint64_t, MarketEventCallback>> marketEventSubscribers;
-    std::unordered_map<uint64_t, ExecutionCallback> executionSubscribers;
+    // Outer map: Symbol -> Inner map: (SubID -> Callback).
+    // Inner maps are ordered so callbacks run in subscription order: the PortfolioManager
+    // (subscribed first) books a fill before any strategy reacts to the same report.
+    std::unordered_map<std::string, std::map<uint64_t, MarketEventCallback>> marketEventSubscribers;
+    std::map<uint64_t, ExecutionCallback> executionSubscribers;
 
     // Atomic counters for generating unique subscription IDs
     std::atomic<uint64_t> nextMarketSubId{1};

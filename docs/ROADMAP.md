@@ -44,16 +44,24 @@ Gate passed: keep the baskets. Re-run `holdout_check.py` monthly to watch for de
 
 ## Phase 2 — Order lifecycle correctness (IBKR)
 
-- [ ] One ID scheme: unique client ID per order per cycle; engine returns it; reports carry it
-- [ ] IBKR: single source of fills (`execDetails`), dedupe by `execId`; `orderStatus` for status only
-- [ ] Fully initialise every `ExecutionReport`; never overwrite filled qty with 0
-- [ ] Terminal states only from real terminal events (Filled / Cancelled / ApiCancelled / Inactive / rejects)
-- [ ] Timeouts on order-ID wait; rejections always produce a terminal report
-- [ ] Empty exit cycle completes immediately
-- [ ] `stop()` while entry is pending: cancel working orders, don't block 10 s
-- [ ] Fix `AvailableFunds` / `NetLiquidation` swap; use USD values
+- [x] One ID scheme: `<position_key>#<suffix>`, unique per order; engines send and report it unchanged
+- [x] IBKR: single source of fills (`execDetails`), dedupe by `execId`; `orderStatus` for status only
+      (`IbkrOrderTracker`: pure logic, unit tested with IBKR-shaped callback sequences)
+- [x] Fully initialise every `ExecutionReport` (default member initialisers) and add `exec_id`
+- [x] Never overwrite filled qty with 0; terminal states are sticky in leg, OrderManager and tracker
+- [x] Terminal states only from real terminal events; `PendingCancel` is no longer terminal
+- [x] Terminal status held back until its executions arrive (positions complete before strategy reacts)
+- [x] Subscribers dispatched in subscription order (PortfolioManager books fills before strategies)
+- [x] Bounded order-ID wait (5 s); failed placements and Alpaca HTTP rejections resolve as REJECTED
+- [x] Empty exit cycle completes immediately (→ FLAT); recovery state set before dispatch
+- [x] `stop()` while pending: cancels working orders, unwinds partial fills, returns promptly
+- [x] OrderManager: registers before sending (no clobber), never calls the engine under its lock
+- [x] Mock engine IDs fixed; account values converted from base currency (ILS) to USD
+- [ ] Verify tracker assumptions against a real IB paper gateway (`-DFUNTRADE_LIVE_TESTS=ON`) — needs the owner's gateway
 
 **Gate:** fake-engine tests for every fill/cancel/reject sequence pass; positions always match.
+✅ 77 tests (0.23 s), clean under ASan/UBSan. Remaining risk: IBKR callback orderings seen
+live that the tests don't model, and error codes outside the handled set (Phase 5 watchdog).
 
 ## Phase 3 — State persistence and reconciliation
 
@@ -79,6 +87,7 @@ Gate passed: keep the baskets. Re-run `holdout_check.py` monthly to watch for de
 - [ ] Thread-safety: all strategy state mutated on the dispatcher thread only (incl. shutdown)
 - [ ] Global risk layer: gross exposure cap, per-basket loss limit, per-symbol concentration cap
 - [ ] Market-hours guard, kill switch, halt-on-anomaly; alerts
+- [ ] Order watchdog: legs unresolved after N seconds are cancelled/queried (covers unhandled IBKR error codes)
 
 **Gate:** chaos tests (drop connection mid-cycle, rejects, stale data) end in a correct or safely halted state.
 

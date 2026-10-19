@@ -2,6 +2,7 @@
 #include <core/IEventBus.hpp>
 #include <core/DomainModels.hpp>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <set>
 #include <string>
@@ -25,7 +26,7 @@ public:
     double getTotalRealizedPnL() const;
     double getTotalUnrealizedPnL() const;
     double getNetPosition(const std::string& virtual_key) const;
-    size_t getTotalTrades() const;
+    size_t getTotalTrades() const; // number of executions (fills, incl. partials)
     std::optional<Position> getPosition(const std::string& virtual_key) const;
 
     std::optional<double> getPortfolioValue() const;
@@ -41,6 +42,7 @@ private:
     std::unordered_map<std::string, Position> positions_;
     std::unordered_map<std::string, std::vector<std::string>> symbol_to_vkeys_;
     mutable std::mutex mtx_;
+    std::unordered_set<std::string> seen_exec_ids_;
     double total_realized_pnl_ = 0.0;
     size_t total_trades_{0};
 };
