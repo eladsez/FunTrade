@@ -15,3 +15,4 @@ CMakeFiles/
 logs/
 .venv/
 data/*.csv
+__pycache__/

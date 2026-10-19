@@ -4,7 +4,6 @@
 #include <execution/IExecutionEngine.hpp>
 #include <risk/PortfolioManager.hpp>
 #include <memory>
-#include <Eigen/Dense>
 
 namespace bot {
 

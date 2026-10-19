@@ -23,9 +23,8 @@ The system is built around a central Publisher/Subscriber messaging system to pr
 *   **Build System:** CMake (Pitchfork project layout)
 *   **Concurrency:** `std::thread`, `std::atomic`, `std::mutex`, and `moodycamel::ConcurrentQueue`.
 *   **Networking:** `Boost.Asio`, `Boost.Beast`, and `OpenSSL` for blazing-fast WebSocket and REST connectivity.
-*   **Mathematics:** `Eigen3` (Highly optimized, SIMD-vectorized C++ template library for linear algebra).
 *   **Data Parsing/Logging:** `nlohmann/json` (Modern C++ JSON) and `spdlog`.
-*   **Testing:** Google Test (GTest) with dedicated mock sub-classes to safely isolate network code.
+*   **Testing:** Google Test, with a synchronous event bus and a scriptable execution engine (`tests/fakes/`) for deterministic offline tests.
 
 ## Security (Live Trading)
 
@@ -39,13 +38,29 @@ export APCA_API_SECRET_KEY="your_real_paper_secret_here"
 
 ## Building and Running
 
-The project utilizes CMake's `FetchContent` to automatically download and link dependencies (GTest, Eigen, ConcurrentQueue, JSON, Boost, spdlog).  
+CMake's `FetchContent` downloads GTest, ConcurrentQueue, nlohmann/json and spdlog.
+These must be installed on the system:
+
+* **Boost** >= 1.75 (`system`, `thread`, plus header-only Asio/Beast)
+* **OpenSSL**
+* **Protobuf** (required by the `external/twsapi` submodule)
+
+On Ubuntu: `sudo apt install libboost-system-dev libboost-thread-dev libssl-dev libprotobuf-dev protobuf-compiler`.
+Fetch the TWS API submodule first: `git submodule update --init`.
 
 ```bash
 # Build the project
 bash scripts/build.sh
 
-# Run the LIVE Paper Trading Bot
-source .env
+# Run the offline unit tests (no network or broker needed)
+cd build && ctest
+
+# Broker integration tests place real paper orders and are opt-in:
+#   cmake -DFUNTRADE_LIVE_TESTS=ON .. && make && ./tests/test_ibkr_execution
+
+# Run the bot against IB Gateway (paper, 127.0.0.1:4002)
 ./build/FunTrade
 ```
+
+Tests named `DISABLED_PhaseN_*` describe known bugs; each is enabled when the
+corresponding phase in `docs/ROADMAP.md` fixes it.

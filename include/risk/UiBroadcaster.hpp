@@ -157,7 +157,7 @@ public:
     }
 
 private:
-    UiBroadcaster() : ioc_(), throttle_timer_(ioc_), is_running_(false) {}
+    UiBroadcaster() : ioc_(), is_running_(false), throttle_timer_(ioc_) {}
     ~UiBroadcaster() { stopServer(); }
 
     void flushPendingUpdates() {

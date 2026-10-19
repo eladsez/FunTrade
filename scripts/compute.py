@@ -286,7 +286,8 @@ def test_basket(df, combo, benchmark_returns, cost_per_trade=0.002):
         
         # Run Johansen on the log prices
         joh_res = coint_johansen(log_df.values, 0, 1)
-        raw_weights = joh_res.evec[:, 0]
+        # Newer statsmodels returns complex eigenvectors (imaginary part is 0); round() fails on complex.
+        raw_weights = np.real(joh_res.evec[:, 0])
 
         # Normalize weights against the largest absolute weight to prevent explosion
         max_idx = np.argmax(np.abs(raw_weights))

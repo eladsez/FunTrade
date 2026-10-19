@@ -25,14 +25,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(concurrentqueue)
 
-# Fetch Eigen3 for high-performance matrix/vector math
-FetchContent_Declare(
-    eigen
-    GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-    GIT_TAG 3.4.0
-)
-FetchContent_MakeAvailable(eigen)
-
 # Fetch spdlog for high-performance logging
 FetchContent_Declare(
     spdlog
@@ -53,7 +45,8 @@ file(GLOB_RECURSE LIB_SRC_FILES
     "src/infra/*.cpp"
 )
 
-# Find Boost and OpenSSL
+# System dependencies (not fetched): Boost >= 1.75 (system, thread), OpenSSL,
+# and Protobuf (required by external/twsapi). See README "Building".
 find_package(Boost REQUIRED COMPONENTS system thread)
 find_package(OpenSSL REQUIRED)
 
@@ -63,7 +56,6 @@ target_include_directories(FunTradeLib PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(FunTradeLib PUBLIC 
     nlohmann_json::nlohmann_json 
     concurrentqueue 
-    Eigen3::Eigen 
     spdlog::spdlog
     pthread
     Boost::system
