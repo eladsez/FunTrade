@@ -31,8 +31,11 @@ public:
     std::optional<OrderState> getOrder(const std::string& clientOrderId) const;
     std::vector<OrderState> getOpenOrders() const;
 
-private:
+    // Merges the broker's open orders into the book (orders from a previous run). Safe to
+    // call again after connecting; never drops orders already tracked.
     void syncWithExchange();
+
+private:
     
     std::shared_ptr<IEventBus> eventBus_;
     std::shared_ptr<IExecutionEngine> engine_;

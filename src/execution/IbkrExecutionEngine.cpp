@@ -8,6 +8,7 @@
 #include <Execution.h>
 #include <Decimal.h> 
 #include <OrderState.h>
+#include <Execution.h>
 
 #include <chrono>
 
@@ -61,6 +62,14 @@ bool IbkrExecutionEngine::connectToInfra() {
         }
     );
 
+    infra_->setExecDetailsEndCallback(
+        [this](int /*reqId*/) {
+            std::lock_guard<std::mutex> lock(syncMutex_);
+            isExecutionsSynced_ = true;
+            syncCv_.notify_all();
+        }
+    );
+
     infra_->setAccountDownloadEndCallback(
         [this](const std::string& accountName) { 
             this->onAccountDownloadEnd(accountName); 
@@ -85,11 +94,13 @@ bool IbkrExecutionEngine::connectToInfra() {
         }
     );
 
-    if (infra_->getClient() && infra_->getClient()->isConnected()) {
-        infra_->getClient()->reqIds(-1); 
-        infra_->getClient()->reqAccountUpdates(true, ""); 
-        infra_->getClient()->reqPositions();
-        infra_->getClient()->reqAllOpenOrders();
+    if (infra_->client().connected()) {
+        infra_->client()->reqIds(-1); 
+        infra_->client()->reqAccountUpdates(true, ""); 
+        infra_->client()->reqPositions();
+        infra_->client()->reqAllOpenOrders();
+        // Today's executions: books fills that happened while the bot was down (deduped by execId).
+        infra_->client()->reqExecutions(kExecutionsReqId, ExecutionFilter());
     }
     else {
         LOG_ERROR("[IbkrExecutionEngine] Failed to connect to IbkrInfra");
@@ -101,7 +112,7 @@ bool IbkrExecutionEngine::connectToInfra() {
     
     // Wait up to 10 seconds for the sync to complete
     bool synced = syncCv_.wait_for(lock, std::chrono::seconds(10), [this] {
-        return isAccountSynced_ && isPositionsSynced_ && isOrdersSynced_;
+        return isAccountSynced_ && isPositionsSynced_ && isOrdersSynced_ && isExecutionsSynced_;
     });
 
     if (!synced) {
@@ -121,10 +132,11 @@ void IbkrExecutionEngine::disconnectFromInfra() {
 void IbkrExecutionEngine::onReconnect() {
     LOG_INFO("[IbkrExecutionEngine] Re-requesting account, positions, and open orders after reconnect...");
     
-    if (infra_->getClient() && infra_->getClient()->isConnected()) {
-        infra_->getClient()->reqAccountUpdates(true, ""); 
-        infra_->getClient()->reqPositions();
-        infra_->getClient()->reqAllOpenOrders();
+    if (infra_->client().connected()) {
+        infra_->client()->reqAccountUpdates(true, ""); 
+        infra_->client()->reqPositions();
+        infra_->client()->reqAllOpenOrders();
+        infra_->client()->reqExecutions(kExecutionsReqId, ExecutionFilter());  // fills missed while down
     }
 }
 
@@ -133,7 +145,7 @@ void IbkrExecutionEngine::onReconnect() {
 // =========================================================================
 
 std::string IbkrExecutionEngine::placeOrder(const OrderRequest& request) {
-    if (!infra_->getClient() || !infra_->getClient()->isConnected()) {
+    if (!infra_->client().connected()) {
         LOG_ERROR("[IbkrExecutionEngine] Cannot place order. Not connected to TWS.");
         return "";
     }
@@ -192,13 +204,18 @@ std::string IbkrExecutionEngine::placeOrder(const OrderRequest& request) {
                 order.auxPrice = request.trail_price; 
             }
             break;
+        case OrderType::MARKET_ON_CLOSE:
+            // Fills in the closing auction. NYSE/Nasdaq stop accepting MOC orders ~15:50 ET.
+            order.orderType = "MOC";
+            order.tif = "DAY";
+            break;
     }
 
     LOG_DEBUG("[IbkrExecutionEngine] Placing {} Order {} for {} {} (ID: {}, Ref: {})", 
              order.orderType, order.action, DecimalFunctions::decimalToDouble(order.totalQuantity), 
              request.symbol, order.orderId, order.orderRef);
 
-    infra_->getClient()->placeOrder(ibkrOrderId, contract, order);
+    infra_->client()->placeOrder(ibkrOrderId, contract, order);
     return request.client_order_id;
 }
 
@@ -215,22 +232,22 @@ bool IbkrExecutionEngine::cancelOrder(const std::string& order_id) {
         ibkrOrderId = parsed;
     }
 
-    if (!infra_->getClient() || !infra_->getClient()->isConnected()) {
+    if (!infra_->client().connected()) {
         LOG_ERROR("[IbkrExecutionEngine] Cannot cancel order {}. Not connected to TWS.", *ibkrOrderId);
         return false;
     }
     LOG_INFO("[IbkrExecutionEngine] Requesting cancellation for IBKR Order ID: {}", *ibkrOrderId);
     ::OrderCancel cancelReq; // Required struct for newer TWS API
-    infra_->getClient()->cancelOrder(*ibkrOrderId, cancelReq);
+    infra_->client()->cancelOrder(*ibkrOrderId, cancelReq);
     return true;
 }
 
 bool IbkrExecutionEngine::cancelAllOrders() {
-    if (infra_->getClient() && infra_->getClient()->isConnected()) {
+    if (infra_->client().connected()) {
         LOG_INFO("[IbkrExecutionEngine] Requesting Global Cancel.");
         
         ::OrderCancel cancelReq; // Instantiate the required struct
-        infra_->getClient()->reqGlobalCancel(cancelReq); 
+        infra_->client()->reqGlobalCancel(cancelReq); 
         
         return true;
     }
@@ -322,6 +339,7 @@ void IbkrExecutionEngine::onOpenOrder(OrderId orderId, const Contract& contract,
     else if (order.orderType == "STP") state.type = OrderType::STOP;
     else if (order.orderType == "STP LMT") state.type = OrderType::STOP_LIMIT;
     else if (order.orderType == "TRAIL") state.type = OrderType::TRAILING_STOP;
+    else if (order.orderType == "MOC") state.type = OrderType::MARKET_ON_CLOSE;
     else state.type = OrderType::MARKET; 
 
     state.quantity = (order.totalQuantity == UNSET_DECIMAL) ? 0.0 : DecimalFunctions::decimalToDouble(order.totalQuantity);

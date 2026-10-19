@@ -35,6 +35,13 @@ public:
     // Publishes an execution report to all registered subscribers.
     virtual void publishExecution(const ExecutionReport& report) = 0;
 
+    // Runs a task on the dispatcher thread, ordered with events. Strategies use this so all
+    // of their state is touched by one thread only (including shutdown).
+    virtual void post(std::function<void()> task) = 0;
+
+    // Blocks until every event and task published before this call has been dispatched.
+    virtual void flush() = 0;
+
     // Synchronous call to fetch historical bars from the underlying data feed
     virtual std::vector<HistoricalBar> fetchHistoricalBars(
         const std::string& symbol, 

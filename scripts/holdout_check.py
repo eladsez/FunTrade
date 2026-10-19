@@ -39,7 +39,7 @@ def download_closes(tickers, start, end):
     return data
 
 
-def run_basket(cfg, closes, holdout_start, cost_per_trade, max_capital):
+def run_basket(cfg, closes, holdout_start, cost_per_trade, max_capital, size_with_prev_close=True):
     tickers = cfg["tickers"]
     weights = cfg["weights"]
     params = cfg["trading_params"]
@@ -58,6 +58,7 @@ def run_basket(cfg, closes, holdout_start, cost_per_trade, max_capital):
         z_spread=z, prices=prices, weights=weights,
         entry_z=params["entry_z"], exit_z=params["exit_z"],
         cost_per_trade=cost_per_trade, max_capital=max_capital,
+        size_with_prev_close=size_with_prev_close,
     )
     pct_returns.index = z.index[1:]
 
@@ -85,6 +86,8 @@ def main():
     ap.add_argument("--cost", type=float, default=0.002, help="cost per entry/exit as fraction of capital (compute.py default)")
     ap.add_argument("--capital", type=float, default=5000.0)
     ap.add_argument("--csv", default=None)
+    ap.add_argument("--fill-day-sizing", action="store_true",
+                    help="size entries with the fill day's close (original research; not achievable live)")
     args = ap.parse_args()
 
     configs = load_configs(args.configs)
@@ -97,7 +100,8 @@ def main():
     print(f"[*] {len(configs)} baskets, {len(tickers)} tickers. Holdout {args.start} -> {args.end}. Downloading from {dl_start}...")
     closes = download_closes(tickers, dl_start, args.end)
 
-    results = [r for r in (run_basket(c, closes, holdout_start, args.cost, args.capital) for c in configs) if r]
+    results = [r for r in (run_basket(c, closes, holdout_start, args.cost, args.capital, not args.fill_day_sizing)
+                           for c in configs) if r]
     if not results:
         print("[!] No baskets had enough holdout data.")
         return

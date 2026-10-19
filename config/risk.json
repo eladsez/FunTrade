@@ -1,0 +1,9 @@
+{
+    "_doc": "Live risk limits. Fractions are of account equity (USD net liquidation) at startup, except max_basket_loss which is a fraction of one basket's allocation.",
+    "allocation_per_basket": 0.05,
+    "max_gross_exposure": 1.0,
+    "max_symbol_net": 0.10,
+    "max_basket_loss": 0.15,
+    "kill_switch_file": "state/KILL",
+    "flatten_file": "state/FLATTEN"
+}

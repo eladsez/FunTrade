@@ -4,6 +4,7 @@
 #include <functional>
 #include <vector>
 #include <string>
+#include <algorithm>
 
 namespace bot::test {
 
@@ -41,7 +42,15 @@ public:
     std::vector<OrderState> getOpenOrders() override { return openOrders; }
 
     // Emits a report through the callback the event bus registered (if any), else via the bus.
+    // Fills also move the fake broker's positions, like a real account.
     void emit(const ExecutionReport& report) {
+        if (report.last_quantity > 0 && trackPositions) {
+            double signed_qty = report.side == Side::BUY ? report.last_quantity : -report.last_quantity;
+            auto it = std::find_if(openPositions.begin(), openPositions.end(),
+                                   [&](const Position& p) { return p.symbol == report.symbol; });
+            if (it == openPositions.end()) openPositions.push_back(Position{report.symbol, signed_qty, report.last_price, report.last_price, 0.0});
+            else it->quantity += signed_qty;
+        }
         if (reportCb_) reportCb_(report);
         else if (bus) bus->publishExecution(report);
     }
@@ -82,6 +91,7 @@ public:
     std::vector<std::string> canceled;
     int cancelAllCalls = 0;
     bool failPlacements = false;
+    bool trackPositions = true;
 
     std::optional<double> portfolioValue = 100000.0;
     std::optional<double> availableCash = 100000.0;

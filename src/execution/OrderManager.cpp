@@ -107,53 +107,21 @@ void OrderManager::onExecution(const ExecutionReport& report) {
 }
 
 void OrderManager::syncWithExchange() {
-    LOG_INFO("[OrderManager] Syncing open orders with exchange...");
-    std::vector<OrderState> currentOrders = engine_->getOpenOrders();
-    
-    // 1. Build the new maps offline without any locks
-    std::unordered_map<std::string, OrderState> new_ordersByClientId;
-    std::unordered_map<std::string, std::string> new_exchangeToClientId;
-    
-    // Pre-allocate buckets to prevent rehashing during insertion
-    new_ordersByClientId.reserve(currentOrders.size());
-    new_exchangeToClientId.reserve(currentOrders.size());
-    
-    for (auto& state : currentOrders) {
-        if (state.client_order_id.empty()) {
-            continue;
-        }
-        
-        // Extract keys before moving the state object
-        std::string clientIdKey = state.client_order_id;
-        std::string exchangeIdKey = state.order_id;
-        
-        LOG_DEBUG("[OrderManager] Synced Order: ClientID={}, ExchangeID={}, Status={}", 
-                  state.client_order_id, state.order_id, std::string(magic_enum::enum_name(state.status)));
+    std::vector<OrderState> brokerOrders = engine_->getOpenOrders();
 
-        // Efficient insertions using std::move
-        // We copy clientIdKey for the second map, but move it for the first
-        new_exchangeToClientId.emplace(std::move(exchangeIdKey), clientIdKey);
-        new_ordersByClientId.emplace(std::move(clientIdKey), std::move(state));
+    std::lock_guard<std::mutex> lock(mtx_);
+    size_t added = 0;
+    for (auto& state : brokerOrders) {
+        if (state.client_order_id.empty()) continue;
+        if (!state.order_id.empty()) exchangeToClientId_[state.order_id] = state.client_order_id;
+        auto [it, inserted] = ordersByClientId_.try_emplace(state.client_order_id, state);
+        if (inserted) added++;
     }
-
-    // --- LOG THE FINAL STATE BEFORE LOCKING ---
-    LOG_INFO("[OrderManager] === Sync Complete. Current State Summary ===");
-    LOG_INFO("[OrderManager] Total tracked orders: {}", new_ordersByClientId.size());
-    
-    for (const auto& [clientId, state] : new_ordersByClientId) {
-        LOG_INFO("  -> ClientID: {} | ExchID: {} | Symbol: {} | Side: {} | Status={} | Qty: {:.4f} | Price: {:.2f}", 
-                 clientId, state.order_id, state.symbol, std::string(magic_enum::enum_name(state.side)), 
-                 std::string(magic_enum::enum_name(state.status)), state.quantity, state.price);
+    LOG_INFO("[OrderManager] Synced with exchange: {} open orders at broker, {} new to the book.", brokerOrders.size(), added);
+    for (const auto& s : brokerOrders) {
+        LOG_INFO("  -> ClientID: {} | ExchID: {} | {} {} {:.4f} | Status={}", s.client_order_id, s.order_id,
+                 std::string(magic_enum::enum_name(s.side)), s.symbol, s.quantity, std::string(magic_enum::enum_name(s.status)));
     }
-    LOG_INFO("[OrderManager] ============================================");
-
-    // 2. Lock the mutex strictly for the double pointer swap (O(1))
-    {
-        std::lock_guard<std::mutex> lock(mtx_);
-        ordersByClientId_.swap(new_ordersByClientId);
-        exchangeToClientId_.swap(new_exchangeToClientId);
-    }
-    // The lock is released instantly. The old map data is destroyed here.
 }
 
 std::optional<OrderState> OrderManager::getOrder(const std::string& clientOrderId) const {

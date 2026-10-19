@@ -22,9 +22,20 @@ None of that data was used to select them, so it is a genuine holdout.
 | 61 selected baskets (EQR missing data) | 43/60 traded (72%) | 0.73 (research OOS: 1.16) | 2.92, t-stat 2.17 |
 | 496 random baskets, no selection filters | 55% | 0.11 | median 0.35, 95th pct 1.62, never ≥ 2.92 in 2000 draws |
 
-Caveats: one 7-month period; simulator is daily-close (not the C++ signal); baskets
-share symbols; only 3/61 spreads still pass ADF on 140 days (low test power, but watch it).
-Gate passed: keep the baskets. Re-run `holdout_check.py` monthly to watch for decay.
+Caveats: one 7-month period; baskets share symbols; only 3/61 spreads still pass ADF on
+140 days (low test power, but watch it). Gate passed: keep the baskets.
+
+**Update (Phase 4):** the research simulator sized entries with the fill day's close, which
+no live system can know. With sizing on the previous close (what the bot does; now the
+default in `compute.py`), on one complete download of all 91 tickers:
+
+| Holdout 2026-03-30 → 2026-10-19 | Positive | Median Sharpe | Portfolio Sharpe | t-stat |
+|---|---|---|---|---|
+| Original (fill-day sizing) | 43/61 | 0.60 | 2.73 | 2.04 |
+| Achievable (previous-close sizing) | 40/60 | 0.58 | 2.50 | 1.86 |
+
+The edge survives realistic execution but is borderline significant (p ≈ 0.06). The 2.92
+above came from a download missing EQR. Re-run `holdout_check.py` monthly to watch for decay.
 
 **Gate:** decides the strategy track.
 - Clear edge (most baskets positive after costs) → keep the baskets, continue.
@@ -65,36 +76,58 @@ live that the tests don't model, and error codes outside the handled set (Phase 
 
 ## Phase 3 — State persistence and reconciliation
 
-- [ ] Persist per-basket state (master state, side, leg quantities) to disk on every transition
-- [ ] On startup: load state, reconcile against broker positions, refuse to trade on mismatch
-- [ ] Shared-symbol netting: per-basket virtual positions must sum to the broker position
+- [x] Atomic JSON state (`utils/StateStore.hpp`: temp file, fsync, rename); corrupt state refuses to start
+- [x] PortfolioManager persists per-basket books and booked execution ids after every fill
+- [x] Broker positions kept separate from virtual books; per-symbol reconciliation at startup and daily
+- [x] Strategies persist state, pending action, decision day and in-flight legs on every transition
+- [x] Startup: replay today's executions (`reqExecutions`), reconcile, halt on mismatch, reattach
+      in-flight cycles (fills derived from book movement; working orders keep reporting)
+- [x] Halts persist across restarts and need a human (see `docs/OPERATIONS.md`)
+- [x] Graceful stop no longer flattens: cancels working orders, saves state, positions resume on restart
 
-**Gate:** kill -9 mid-cycle, restart, and the bot resumes or halts safely with no orphaned legs.
+**Gate:** kill mid-cycle, restart, resume or halt safely. ✅ `tests/test_restart.cpp` (8 scenarios:
+graceful restart in position, pending decision runs once, crash with a working order, crash after a
+partial, broker mismatch, persistent halt, redelivered execution, corrupt state).
 
 ## Phase 4 — Signal parity
 
-- [ ] Decide the signal (daily close vs intraday) and make research and C++ compute it identically
-- [ ] Warm-up: refuse to trade until the window is genuinely full; no zero-filled history
-- [ ] Advance the window exactly once per trading day
-- [ ] Same price basis in research and live (raw vs dividend-adjusted)
-- [ ] Deterministic replay backtest through the real C++ strategy; cross-check against Python on the same data
+- [x] Signal = research rule: z of the daily close over W complete days incl. that day (sample std);
+      decide at close d, act at session d+1 with MARKET_ON_CLOSE orders (fill at close d+1)
+- [x] `BasketState` keyed by trading day: re-sent closes overwrite, no z until W real days exist
+- [x] Intraday EMA signal removed (indicative intraday z kept for the UI only)
+- [x] Live warm-up and daily window rebuild from dividend-ADJUSTED IBKR history (research uses adjusted)
+- [x] Deterministic backtest: synchronous event bus; mock exchange fills MOC at the session's close
+- [x] Fixed: a close arriving while a cycle was still filling consumed that day's decision (found by parity)
+- [x] Research simulator sizes entries with the previous close (the only price known when ordering)
 
 **Gate:** C++ backtest and Python simulation produce the same trades on the same data.
+✅ `scripts/parity_check.py --size-with-prev-close`: **60/60 baskets identical** (days, legs, sides,
+fill prices) on the 2026 holdout.
 
 ## Phase 5 — Robustness and risk
 
-- [ ] IBKR reconnect without use-after-free; handle 1100/1101/1102; re-subscribe; re-sync
-- [ ] Thread-safety: all strategy state mutated on the dispatcher thread only (incl. shutdown)
-- [ ] Global risk layer: gross exposure cap, per-basket loss limit, per-symbol concentration cap
-- [ ] Market-hours guard, kill switch, halt-on-anomaly; alerts
-- [ ] Order watchdog: legs unresolved after N seconds are cancelled/queried (covers unhandled IBKR error codes)
+- [x] All strategy state on the dispatcher thread (`IEventBus::post`/`flush`), including start-up
+      reconciliation and shutdown
+- [x] TWS client access serialised (`ClientGuard`): the TWS send path is not thread-safe
+- [x] IBKR reconnect reuses one client object (no use-after-free); 1100 logged, 1101 re-subscribes
+- [x] `RiskManager`: gross exposure cap, per-symbol net cap, reservations for in-flight MOC entries,
+      per-basket loss limit (exit then halt), kill-switch and flatten files (`config/risk.json`)
+- [x] Order watchdog: cycles unresolved a full session later are cancelled at the next close
+- [x] Rotating file log with errors flushed immediately; orchestrator refuses to size without equity
+- [x] ASan/UBSan and TSan clean on the full unit suite
+- [ ] Not done: alerts beyond logs/exit codes (e-mail/webhook), stale-price/bad-tick detection,
+      explicit MOC cutoff guard (late orders are rejected by the exchange and simply re-decided)
 
-**Gate:** chaos tests (drop connection mid-cycle, rejects, stale data) end in a correct or safely halted state.
+**Gate:** failure scenarios end correct or safely halted. ✅ covered by the strategy and restart
+suites (rejects, partials, failed recovery, stale cycles, kill/flatten, loss limit). Reconnect and
+1101 handling are implemented but only verifiable against a real gateway.
 
-## Phase 6 — Paper trading
+## Phase 6 — Paper trading (owner)
 
-- [ ] Run on IBKR paper for at least 4–6 weeks; daily reconciliation report
-- [ ] Track live vs simulated PnL per basket
+- [x] Runbook: `docs/OPERATIONS.md`; daily report: `scripts/state_report.py` (exit 1 on halts)
+- [ ] Build with `-DFUNTRADE_LIVE_TESTS=ON`, run `tests/test_ibkr_execution` against IB Gateway paper
+- [ ] Run on IBKR paper for at least 4–6 weeks; daily reconciliation report must show 0 mismatches
+- [ ] Track live vs simulated PnL per basket; one deliberate restart and one disconnect handled
 
 **Gate:** no position mismatches, live tracks simulation. Only then consider real money,
 starting small. That decision stays with the owner.

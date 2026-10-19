@@ -1,238 +1,240 @@
 #include <gtest/gtest.h>
-#include <strategy/BasketMeanReversionStrategy.hpp>
-#include <execution/OrderManager.hpp>
-#include <risk/PortfolioManager.hpp>
-#include "fakes/SyncEventBus.hpp"
-#include "fakes/FakeExecutionEngine.hpp"
+#include "fakes/StrategyHarness.hpp"
 #include <chrono>
-#include <cmath>
-#include <filesystem>
 #include <fstream>
 #include <map>
 
 using namespace bot;
 using namespace bot::test;
-namespace fs = std::filesystem;
 
-// End-to-end: real strategy + OrderManager + PortfolioManager on a synchronous bus and a
-// scripted engine. Basket is A - B; spread = log(A) - log(B).
-class BasketStrategyTest : public ::testing::Test {
+class BasketStrategyTest : public StrategyHarness {
 protected:
-    static constexpr int kWindow = 20;
-    static constexpr uint64_t kDayMs = 86'400'000;
-    static constexpr uint64_t kT0 = 1'780'000'000'000;  // arbitrary epoch ms
-
-    std::shared_ptr<SyncEventBus> bus = std::make_shared<SyncEventBus>();
-    std::shared_ptr<FakeExecutionEngine> engine = std::make_shared<FakeExecutionEngine>();
-    std::shared_ptr<OrderManager> om;
-    std::shared_ptr<PortfolioManager> pm;
-    std::shared_ptr<BasketMeanReversionStrategy> strat;
-    fs::path cfgPath;
-    uint64_t now = kT0 + 60 * kDayMs;
-    std::map<std::string, double> last;
-
-    void SetUp() override {
-        engine->bus = bus.get();
-        om = std::make_shared<OrderManager>(bus, engine);
-        pm = std::make_shared<PortfolioManager>(bus, engine);
-
-        cfgPath = fs::temp_directory_path() / ("funtrade_test_" + std::to_string(::getpid()) + ".json");
-        std::ofstream(cfgPath) << R"({"basket_id":"tb","tickers":["A","B"],"weights":{"A":1.0,"B":-1.0},
-            "trading_params":{"window_size":20,"entry_z":1.0,"exit_z":0.0}})";
-
-        std::vector<HistoricalBar> a, b;
-        for (int i = 0; i < 2 * kWindow; ++i) {
-            uint64_t ts = kT0 + i * kDayMs;
-            a.push_back(HistoricalBar{"A", ts, 0, 0, 0, 100.0 * std::exp(0.01 * std::sin(i * 0.7)), 1e6, 0, 0});
-            b.push_back(HistoricalBar{"B", ts, 0, 0, 0, 100.0, 1e6, 0, 0});
-        }
-        bus->setHistory("A", a);
-        bus->setHistory("B", b);
-
-        strat = std::make_shared<BasketMeanReversionStrategy>(bus, om, pm, cfgPath.string(), 100000.0);
-        strat->start();
-    }
-
-    void TearDown() override {
-        // stop() flattens any open basket and waits for fills; fill instantly so it doesn't time out.
-        engine->onPlace = [this](const OrderRequest& r) {
-            engine->emit(FakeExecutionEngine::report(r, OrderStatus::FILLED, r.quantity, r.quantity, 100.0));
-        };
-        engine->onCancel = [this](const std::string& id) {
-            if (auto* r = engine->findPlaced(id)) engine->emit(FakeExecutionEngine::report(*r, OrderStatus::CANCELED, 0, 0, 0));
-        };
-        strat->stop();
-        fs::remove(cfgPath);
-    }
-
-    // One synchronized round of midpoints at the given spread level.
-    void tickSpread(double spread, int rounds = 1) {
-        for (int i = 0; i < rounds; ++i) {
-            now += 1000;
-            last["A"] = 100.0 * std::exp(spread);
-            last["B"] = 100.0;
-            bus->publishMarketEvent(MidPointTick{"A", last["A"], now});
-            bus->publishMarketEvent(MidPointTick{"B", last["B"], now});
-        }
-    }
-
-    double px(const std::string& s) { return last.at(s); }
+    void SetUp() override { build(); start(); }
 };
 
 TEST_F(BasketStrategyTest, NoTradeWhileSpreadIsNormal) {
-    tickSpread(0.0, 30);
+    for (int i = 0; i < 10; ++i) closeDay(0.4 * spreadAt(i));  // well inside the history's range
     EXPECT_TRUE(engine->placed.empty());
+    EXPECT_EQ(strat->masterState(), MasterState::FLAT);
 }
 
-TEST_F(BasketStrategyTest, ShortsTheSpreadWhenZBreachesEntry) {
-    tickSpread(0.04, 30);
-    ASSERT_EQ(engine->placed.size(), 2u) << "one order per leg, and no re-entry while pending";
+TEST_F(BasketStrategyTest, SignalAtCloseTradesAtNextSessionWithMocOrders) {
+    closeDay(0.05);
+    EXPECT_TRUE(engine->placed.empty()) << "decided at the close, nothing sent yet";
+    EXPECT_EQ(strat->pendingAction(), PendingAction::ENTER_SHORT);
+    ASSERT_TRUE(strat->lastDailyZ());
+    EXPECT_GT(*strat->lastDailyZ(), 1.0);
 
-    const auto& a = engine->placed[0].symbol == "A" ? engine->placed[0] : engine->placed[1];
-    const auto& b = engine->placed[0].symbol == "B" ? engine->placed[0] : engine->placed[1];
+    openSession();  // first event of the next day
+    ASSERT_EQ(engine->placed.size(), 2u);
+    const auto& a = placedFor("A");
+    const auto& b = placedFor("B");
     EXPECT_EQ(a.side, Side::SELL);
     EXPECT_EQ(b.side, Side::BUY);
-    EXPECT_EQ(a.type, OrderType::MARKET);
-    EXPECT_EQ(a.tif, TimeInForce::IOC);
-    EXPECT_GT(a.quantity, 0);
-    EXPECT_NEAR(a.quantity * px("A"), b.quantity * px("B"), 0.03 * a.quantity * px("A")) << "dollar neutral";
-    engine->fillAll([this](const std::string& s) { return px(s); });
+    EXPECT_EQ(a.type, OrderType::MARKET_ON_CLOSE);
+    EXPECT_EQ(a.tif, TimeInForce::DAY);
+    EXPECT_NEAR(a.quantity * last["A"], b.quantity * last["B"], 0.03 * a.quantity * last["A"]) << "dollar neutral";
+    EXPECT_EQ(strat->masterState(), MasterState::ENTRY_PENDING);
 }
 
 TEST_F(BasketStrategyTest, FullRoundTripEntryFillExitFill) {
-    tickSpread(0.04, 30);
+    closeDay(0.05);
+    openSession();
     ASSERT_EQ(engine->placed.size(), 2u);
-    engine->fillAll([this](const std::string& s) { return px(s); });
+    fillFrom(0);
+    EXPECT_EQ(strat->masterState(), MasterState::IN_POSITION);
 
-    tickSpread(0.04, 5);
-    EXPECT_EQ(engine->placed.size(), 2u) << "in position: no new orders while z stays high";
+    closeDay(0.05);
+    openSession();
+    EXPECT_EQ(engine->placed.size(), 2u) << "still rich: hold";
 
-    tickSpread(-0.03, 40);
-    ASSERT_EQ(engine->placed.size(), 4u) << "exit orders once z crosses exit threshold";
+    closeDay(-0.02);
+    EXPECT_EQ(strat->pendingAction(), PendingAction::EXIT);
+    openSession();
+    ASSERT_EQ(engine->placed.size(), 4u);
     std::map<std::string, OrderRequest> entries{{engine->placed[0].symbol, engine->placed[0]},
                                                 {engine->placed[1].symbol, engine->placed[1]}};
     for (size_t i = 2; i < 4; ++i) {
         const auto& exit = engine->placed[i];
-        const auto& entry = entries.at(exit.symbol);
-        EXPECT_NE(exit.side, entry.side) << exit.symbol;
-        EXPECT_DOUBLE_EQ(exit.quantity, entry.quantity) << exit.symbol;
+        EXPECT_NE(exit.side, entries.at(exit.symbol).side) << exit.symbol;
+        EXPECT_DOUBLE_EQ(exit.quantity, entries.at(exit.symbol).quantity) << exit.symbol;
+        EXPECT_EQ(exit.type, OrderType::MARKET_ON_CLOSE);
     }
-    engine->fillAll([this](const std::string& s) { return px(s); }, 2);
-
+    fillFrom(2);
+    EXPECT_EQ(strat->masterState(), MasterState::FLAT);
     EXPECT_DOUBLE_EQ(pm->getNetPosition("tb_A"), 0.0);
     EXPECT_DOUBLE_EQ(pm->getNetPosition("tb_B"), 0.0);
-    EXPECT_GT(pm->getTotalRealizedPnL(), 0.0) << "shorted rich spread, covered cheap";
+    EXPECT_GT(pm->getTotalRealizedPnL(), 0.0) << "shorted a rich spread, covered it cheap";
 }
 
-TEST_F(BasketStrategyTest, EntryWhiffRevertsToFlatAndCanReenter) {
-    tickSpread(0.04, 30);
-    ASSERT_EQ(engine->placed.size(), 2u);
+TEST_F(BasketStrategyTest, EntryWhiffRevertsToFlatAndRedecidesAtNextClose) {
+    closeDay(0.05);
+    openSession();
     for (const auto& r : engine->placed)
         engine->emit(FakeExecutionEngine::report(r, OrderStatus::CANCELED, 0, 0, 0));
+    EXPECT_EQ(strat->masterState(), MasterState::FLAT);
 
-    tickSpread(0.04, 3);
-    EXPECT_EQ(engine->placed.size(), 4u) << "back to FLAT, signal still on, so it re-enters";
-    engine->fillAll([this](const std::string& s) { return px(s); }, 2);
+    closeDay(0.05);
+    EXPECT_EQ(strat->pendingAction(), PendingAction::ENTER_SHORT);
+    openSession();
+    EXPECT_EQ(engine->placed.size(), 4u);
 }
 
-TEST_F(BasketStrategyTest, PartialEntryTriggersRecoverySweepOfFilledInventory) {
-    tickSpread(0.04, 30);
-    ASSERT_EQ(engine->placed.size(), 2u);
+TEST_F(BasketStrategyTest, PartialEntrySchedulesRecoveryOfFilledLegOnly) {
+    closeDay(0.05);
+    openSession();
     const auto r0 = engine->placed[0], r1 = engine->placed[1];
-    engine->emit(FakeExecutionEngine::report(r0, OrderStatus::FILLED, r0.quantity, r0.quantity, px(r0.symbol)));
+    engine->emit(FakeExecutionEngine::report(r0, OrderStatus::FILLED, r0.quantity, r0.quantity, last[r0.symbol]));
     engine->emit(FakeExecutionEngine::report(r1, OrderStatus::CANCELED, 0, 0, 0));
+    EXPECT_EQ(strat->masterState(), MasterState::RECOVERY_PENDING);
+    EXPECT_EQ(strat->pendingAction(), PendingAction::RECOVER);
+    EXPECT_EQ(engine->placed.size(), 2u) << "recovery waits for the next session (MOC)";
 
-    ASSERT_EQ(engine->placed.size(), 3u) << "only the filled leg is unwound";
-    EXPECT_EQ(engine->placed[2].symbol, r0.symbol);
-    EXPECT_NE(engine->placed[2].side, r0.side);
-    EXPECT_DOUBLE_EQ(engine->placed[2].quantity, r0.quantity);
-}
-
-// Fixed in Phase 2 (were known bugs).
-
-// Stopping while entry orders are still working cancels them and finishes promptly.
-TEST_F(BasketStrategyTest, StopWhileEntryPendingCancelsAndReturnsPromptly) {
-    tickSpread(0.04, 30);
-    ASSERT_EQ(engine->placed.size(), 2u);
-    engine->onCancel = [this](const std::string& id) {
-        if (auto* r = engine->findPlaced(id)) engine->emit(FakeExecutionEngine::report(*r, OrderStatus::CANCELED, 0, 0, 0));
-    };
-    auto t0 = std::chrono::steady_clock::now();
-    strat->stop();
-    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::seconds(1));
-    EXPECT_EQ(engine->canceled.size(), 2u) << "both working entry orders canceled";
-    EXPECT_EQ(engine->placed.size(), 2u) << "nothing filled, so nothing to flatten";
-}
-
-// Stopping with a partially filled entry cancels the rest and unwinds what did fill.
-TEST_F(BasketStrategyTest, StopWithPartialEntryUnwindsFilledLeg) {
-    tickSpread(0.04, 30);
-    ASSERT_EQ(engine->placed.size(), 2u);
-    const auto r0 = engine->placed[0];
-    engine->emit(FakeExecutionEngine::report(r0, OrderStatus::FILLED, r0.quantity, r0.quantity, px(r0.symbol)));
-    engine->onCancel = [this](const std::string& id) {
-        if (auto* r = engine->findPlaced(id)) engine->emit(FakeExecutionEngine::report(*r, OrderStatus::CANCELED, 0, 0, 0));
-    };
-    engine->onPlace = [this](const OrderRequest& r) {
-        engine->emit(FakeExecutionEngine::report(r, OrderStatus::FILLED, r.quantity, r.quantity, 100.0));
-    };
-    strat->stop();
+    closeDay(0.05);
+    openSession();
     ASSERT_EQ(engine->placed.size(), 3u);
     EXPECT_EQ(engine->placed[2].symbol, r0.symbol);
     EXPECT_NE(engine->placed[2].side, r0.side);
-    EXPECT_DOUBLE_EQ(pm->getNetPosition("tb_" + r0.symbol), 0.0);
+    EXPECT_DOUBLE_EQ(engine->placed[2].quantity, r0.quantity);
+    fillFrom(2);
+    EXPECT_EQ(strat->masterState(), MasterState::FLAT);
 }
 
-// Every order gets a fresh client id, so a late report from a finished cycle is ignored.
-TEST_F(BasketStrategyTest, LateReportFromPreviousCycleDoesNotAffectNewCycle) {
-    tickSpread(0.04, 30);
-    ASSERT_EQ(engine->placed.size(), 2u);
-    const auto oldA = engine->placed[0];
-    for (const auto& r : engine->placed)
-        engine->emit(FakeExecutionEngine::report(r, OrderStatus::CANCELED, 0, 0, 0));  // whiff -> FLAT
+TEST_F(BasketStrategyTest, FailedRecoveryHalts) {
+    closeDay(0.05);
+    openSession();
+    const auto r0 = engine->placed[0], r1 = engine->placed[1];
+    engine->emit(FakeExecutionEngine::report(r0, OrderStatus::FILLED, r0.quantity, r0.quantity, last[r0.symbol]));
+    engine->emit(FakeExecutionEngine::report(r1, OrderStatus::CANCELED, 0, 0, 0));
+    closeDay(0.0);
+    openSession();
+    ASSERT_EQ(engine->placed.size(), 3u);
+    engine->emit(FakeExecutionEngine::report(engine->placed[2], OrderStatus::REJECTED, 0, 0, 0));
+    EXPECT_EQ(strat->masterState(), MasterState::SYSTEM_HALTED);
+    EXPECT_FALSE(strat->haltReason().empty());
 
-    tickSpread(0.04, 3);  // re-enters
+    closeDay(0.05);
+    openSession();
+    EXPECT_EQ(engine->placed.size(), 3u) << "halted baskets never trade";
+}
+
+TEST_F(BasketStrategyTest, FailedPlacementResolvesCycle) {
+    engine->failPlacements = true;
+    closeDay(0.05);
+    openSession();
+    EXPECT_EQ(engine->placed.size(), 2u);
+    EXPECT_EQ(strat->masterState(), MasterState::FLAT) << "placements failed -> whiff, not a hang";
+    engine->failPlacements = false;
+}
+
+TEST_F(BasketStrategyTest, LateReportFromPreviousCycleIsIgnored) {
+    closeDay(0.05);
+    openSession();
+    const auto oldA = placedFor("A");
+    for (const auto& r : engine->placed)
+        engine->emit(FakeExecutionEngine::report(r, OrderStatus::CANCELED, 0, 0, 0));  // whiff
+    closeDay(0.05);
+    openSession();
     ASSERT_EQ(engine->placed.size(), 4u);
     EXPECT_NE(engine->placed[2].client_order_id, oldA.client_order_id);
     EXPECT_EQ(OrderIdUtils::positionKeyOf(engine->placed[2].client_order_id), "tb_A");
 
-    // A stale "filled" for the old order must not complete the new cycle's leg.
-    engine->emit(FakeExecutionEngine::report(oldA, OrderStatus::FILLED, 0, oldA.quantity, px("A")));
-    engine->emit(FakeExecutionEngine::report(engine->placed[3], OrderStatus::FILLED,
-                                             engine->placed[3].quantity, engine->placed[3].quantity, px("B")));
-    tickSpread(-0.03, 40);
-    EXPECT_EQ(engine->placed.size(), 4u) << "still ENTRY_PENDING on leg A: no exit orders";
-    const auto& newA = engine->placed[2];
-    engine->emit(FakeExecutionEngine::report(newA, OrderStatus::FILLED, newA.quantity, newA.quantity, px("A")));
-    EXPECT_DOUBLE_EQ(pm->getNetPosition("tb_A"), -newA.quantity) << "only the real fill moved inventory";
+    engine->emit(FakeExecutionEngine::report(oldA, OrderStatus::FILLED, 0, oldA.quantity, last["A"]));
+    EXPECT_EQ(strat->masterState(), MasterState::ENTRY_PENDING) << "stale report must not complete the new cycle";
+    fillFrom(2);
+    EXPECT_EQ(strat->masterState(), MasterState::IN_POSITION);
 }
 
-// A placement that never reaches the exchange counts as a rejection, not a hang.
-TEST_F(BasketStrategyTest, FailedPlacementResolvesCycle) {
-    engine->failPlacements = true;
-    tickSpread(0.04, 30);
-    // Each round: both placements fail -> whiff -> FLAT -> next tick tries again. With the
-    // old code the first cycle waited forever for reports that could never come.
-    EXPECT_GT(engine->placed.size(), 2u);
-    EXPECT_EQ(engine->placed.size() % 2, 0u);
-    EXPECT_DOUBLE_EQ(pm->getNetPosition("tb_A"), 0.0);
-    engine->failPlacements = false;
+TEST_F(BasketStrategyTest, IntradayTicksGivePricesButNeverSignals) {
+    for (int i = 0; i < 50; ++i) tick(0.08);  // wildly rich intraday
+    EXPECT_TRUE(engine->placed.empty());
+    EXPECT_EQ(strat->pendingAction(), PendingAction::NONE);
 }
 
-// ---------------------------------------------------------------------------
-// Known bugs (see docs/ROADMAP.md). Enable when the owning phase fixes them.
-// ---------------------------------------------------------------------------
-
-// Phase 4: the strategy only reacts to MidPointTick, which only the IBKR feed emits. The
-// CSV backtest (trades + bars) and Alpaca (trades + quotes) can never trade.
-TEST_F(BasketStrategyTest, DISABLED_Phase4_TradesOnQuoteStream) {
-    for (int i = 0; i < 30; ++i) {
-        now += 1000;
-        double a = 100.0 * std::exp(0.04);
-        bus->publishMarketEvent(QuoteTick{"A", a - 0.01, 100, a + 0.01, 100, now, {}});
-        bus->publishMarketEvent(QuoteTick{"B", 99.99, 100, 100.01, 100, now, {}});
-    }
+TEST_F(BasketStrategyTest, QuoteStreamStartsTheSessionToo) {
+    closeDay(0.05);
+    ASSERT_EQ(strat->pendingAction(), PendingAction::ENTER_SHORT);
+    day++;
+    bus->publishMarketEvent(QuoteTick{"A", 104.9, 100, 105.1, 100, ms(day) + 34'200'000, {}});
     EXPECT_EQ(engine->placed.size(), 2u);
 }
 
+TEST_F(BasketStrategyTest, WatchdogCancelsCycleUnresolvedAfterAFullSession) {
+    closeDay(0.05);
+    openSession();
+    ASSERT_EQ(engine->placed.size(), 2u);
+    closeDay(0.05);  // same session's close: MOC fills may still be coming
+    EXPECT_TRUE(engine->canceled.empty());
+    closeDay(0.05);  // a full session later: stale
+    EXPECT_EQ(engine->canceled.size(), 2u);
+}
 
+TEST_F(BasketStrategyTest, StopWhileEntryPendingCancelsAndReturnsPromptly) {
+    closeDay(0.05);
+    openSession();
+    ASSERT_EQ(engine->placed.size(), 2u);
+    autoCancel();
+    auto t0 = std::chrono::steady_clock::now();
+    stopStrategy();
+    EXPECT_LT(std::chrono::steady_clock::now() - t0, std::chrono::seconds(1));
+    EXPECT_EQ(engine->canceled.size(), 2u);
+    EXPECT_EQ(engine->placed.size(), 2u) << "nothing filled: nothing to do";
+}
+
+TEST_F(BasketStrategyTest, StopInPositionDoesNotFlatten) {
+    closeDay(0.05);
+    openSession();
+    fillFrom(0);
+    stopStrategy();
+    EXPECT_EQ(engine->placed.size(), 2u) << "positions persist across restarts; stop never trades";
+    EXPECT_NE(pm->getNetPosition("tb_A"), 0.0);
+}
+
+// --- Risk ---
+
+TEST_F(BasketStrategyTest, RiskGrossCapRejectsEntry) {
+    rebuild([](RiskLimits& l) { l.max_gross_exposure_usd = 1000.0; });
+    closeDay(0.05);
+    openSession();
+    EXPECT_TRUE(engine->placed.empty());
+    EXPECT_EQ(strat->masterState(), MasterState::FLAT);
+}
+
+TEST_F(BasketStrategyTest, KillSwitchBlocksEntriesButNotExits) {
+    auto kill = tmp / "KILL";
+    rebuild([&](RiskLimits& l) { l.kill_switch_file = kill.string(); });
+    closeDay(0.05);
+    openSession();
+    fillFrom(0);
+    std::ofstream(kill) << "";
+    closeDay(-0.05);
+    openSession();
+    EXPECT_EQ(engine->placed.size(), 4u) << "exit still allowed";
+    fillFrom(2);
+    closeDay(0.06);
+    openSession();
+    EXPECT_EQ(engine->placed.size(), 4u) << "no new entry while the kill switch exists";
+}
+
+TEST_F(BasketStrategyTest, FlattenFileExitsAtNextSession) {
+    auto flat = tmp / "FLATTEN";
+    rebuild([&](RiskLimits& l) { l.flatten_file = flat.string(); });
+    closeDay(0.05);
+    openSession();
+    fillFrom(0);
+    std::ofstream(flat) << "";
+    closeDay(0.05);  // still rich, but flatten requested
+    EXPECT_EQ(strat->pendingAction(), PendingAction::EXIT);
+}
+
+TEST_F(BasketStrategyTest, BasketLossLimitExitsThenHalts) {
+    rebuild([](RiskLimits& l) { l.max_basket_loss_usd = 100.0; });
+    closeDay(0.05);
+    openSession();
+    fillFrom(0);
+    closeDay(0.12);  // spread blows out further: the short loses
+    EXPECT_EQ(strat->pendingAction(), PendingAction::EXIT);
+    openSession();
+    fillFrom(2);
+    EXPECT_EQ(strat->masterState(), MasterState::SYSTEM_HALTED);
+}

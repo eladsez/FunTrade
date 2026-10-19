@@ -13,6 +13,11 @@ public:
     explicit ExecutionCycle(std::string basket_id): basket_id_(std::move(basket_id)) { }
 
     void addLeg(const std::string& clientOrderId, const std::string& symbol, double targetQty, Side side);
+    // Restart: a leg whose fill so far (and whether it is still working) is already known.
+    void restoreLeg(const std::string& clientOrderId, const std::string& symbol, double targetQty, Side side,
+                    double filledQty, OrderStatus status) {
+        legs_.emplace(clientOrderId, LegExecutionState(symbol, clientOrderId, targetQty, side, basket_id_, filledQty, status));
+    }
     
     // Processes the report. Returns true if the ENTIRE cycle is now complete.
     bool processExecutionReport(const ExecutionReport& report);

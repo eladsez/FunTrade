@@ -133,6 +133,20 @@ std::optional<ExecutionReport> IbkrOrderTracker::onExecution(long orderId, const
         auto it = idByClient_.find(orderRef);
         if (it != idByClient_.end()) { orderId = it->second; t = find(orderId); }
     }
+    if (!t && orderRef.find(OrderIdUtils::kSeparator) != std::string::npos) {
+        // A bot order from an earlier run (replayed by reqExecutions after a restart). Its
+        // total size is unknown, so it is tracked as filled by what we see.
+        Tracked restored;
+        restored.client_order_id = orderRef;
+        restored.symbol = symbol;
+        restored.side = (ibSide == "BOT") ? Side::BUY : Side::SELL;
+        long key = orderId > 0 ? orderId : -static_cast<long>(orders_.size() + 1);
+        restored.quantity = 0.0;
+        orders_[key] = restored;
+        idByClient_[orderRef] = key;
+        orderId = key;
+        t = find(key);
+    }
     if (!t) {
         LOG_WARN("[IbkrOrderTracker] Execution {} for untracked order {} (ref '{}', {} {} {}) ignored.",
                  execId, orderId, orderRef, ibSide, shares, symbol);

@@ -154,10 +154,16 @@ def check_tradeability_dynamic(weights, max_prices, max_capital=5000.0, max_erro
             return False
     return True
 
-def simulate_event_loop(z_spread, prices, weights, entry_z, exit_z, cost_per_trade=0.002, max_capital=5000.0):
+def simulate_event_loop(z_spread, prices, weights, entry_z, exit_z, cost_per_trade=0.002, max_capital=5000.0,
+                        size_with_prev_close=True):
     """
     Chronological state machine simulating actual execution logic.
     Returns the final Sharpe ratio and total number of trades.
+
+    Orders fill at today's close (MOC). Entries are sized with YESTERDAY's close by default,
+    because that is the last price known when the order is sent; sizing with today's close
+    (size_with_prev_close=False, the original behaviour) uses a price nobody has yet.
+    scripts/parity_check.py verifies the C++ bot trades exactly this.
     """
     current_position = 0 # 1 for Long Spread, -1 for Short Spread, 0 for Flat
     current_shares = {}
@@ -172,6 +178,7 @@ def simulate_event_loop(z_spread, prices, weights, entry_z, exit_z, cost_per_tra
         today_z = z_spread.iloc[i-1] # Yesterday's close determines today's action
         today_prices = aligned_prices.iloc[i].to_dict()
         yesterday_prices = aligned_prices.iloc[i-1].to_dict()
+        sizing_prices = yesterday_prices if size_with_prev_close else today_prices
         
         day_pnl = 0.0
         
@@ -201,7 +208,7 @@ def simulate_event_loop(z_spread, prices, weights, entry_z, exit_z, cost_per_tra
         # 3. Check Entries
         elif current_position == 0:
             if today_z < -entry_z:
-                new_shares = calculate_execution_shares(today_prices, weights, direction=1, max_capital=max_capital)
+                new_shares = calculate_execution_shares(sizing_prices, weights, direction=1, max_capital=max_capital)
                 if new_shares: # Only enter if the tracking error allows it today
                     current_position = 1
                     current_shares = new_shares
@@ -209,7 +216,7 @@ def simulate_event_loop(z_spread, prices, weights, entry_z, exit_z, cost_per_tra
                     trade_count += 1
                     
             elif today_z > entry_z:
-                new_shares = calculate_execution_shares(today_prices, weights, direction=-1, max_capital=max_capital)
+                new_shares = calculate_execution_shares(sizing_prices, weights, direction=-1, max_capital=max_capital)
                 if new_shares:
                     current_position = -1
                     current_shares = new_shares

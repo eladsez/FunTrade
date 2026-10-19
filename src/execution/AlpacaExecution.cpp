@@ -70,6 +70,7 @@ const char* AlpacaExecutionEngine::orderTypeToString(OrderType type) {
         case OrderType::STOP: return "stop";
         case OrderType::STOP_LIMIT: return "stop_limit";
         case OrderType::TRAILING_STOP: return "trailing_stop";
+        case OrderType::MARKET_ON_CLOSE: return "market";  // with time_in_force "cls"
         default: return "unknown";
     }
 }
@@ -94,7 +95,7 @@ std::string AlpacaExecutionEngine::placeOrder(const OrderRequest& request) {
         {"qty", formatDouble(request.quantity)},
         {"side", sideToString(request.side)},
         {"type", orderTypeToString(request.type)},
-        {"time_in_force", timeInForceToString(request.tif)},
+        {"time_in_force", request.type == OrderType::MARKET_ON_CLOSE ? "cls" : timeInForceToString(request.tif)},
         {"client_order_id", clientOrderId}
     };
 

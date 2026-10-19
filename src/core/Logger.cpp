@@ -5,12 +5,15 @@ namespace bot {
 
 std::shared_ptr<spdlog::logger> Logger::logger_;
 
-void Logger::init(bool debugMode) {
+void Logger::init(bool debugMode, const std::string& logFile) {
     if (!logger_) {
         // Create console sink
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         
         std::vector<spdlog::sink_ptr> sinks {console_sink};
+        if (!logFile.empty()) {
+            sinks.push_back(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(logFile, 10 * 1024 * 1024, 10));
+        }
         
         logger_ = std::make_shared<spdlog::logger>("FunTrade", sinks.begin(), sinks.end());
 
@@ -26,6 +29,8 @@ void Logger::init(bool debugMode) {
         
         // Setup SPDLOG macros to use our logger level
         spdlog::set_default_logger(logger_);
+        // Errors must reach disk even if the process dies right after.
+        logger_->flush_on(spdlog::level::warn);
     }
 }
 

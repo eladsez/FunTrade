@@ -88,7 +88,8 @@ enum class OrderType {
     LIMIT,
     STOP,
     STOP_LIMIT,
-    TRAILING_STOP
+    TRAILING_STOP,
+    MARKET_ON_CLOSE  // fills in the closing auction at the official close (research's fill price)
 };
 
 enum class OrderStatus {
@@ -184,6 +185,13 @@ struct OrderState {
     double filled_quantity = 0.0;    // Cumulative quantity filled so far
     double avg_price = 0.0;          // Average execution price
 };
+
+// Trading-day index (days since the Unix epoch, UTC) of a millisecond timestamp. Daily bars
+// are stamped at UTC midnight of their date, and US regular trading hours fall on the same
+// UTC date, so ticks and bars of one session share a day index.
+inline int64_t tradingDay(uint64_t timestamp_ms) {
+    return static_cast<int64_t>(timestamp_ms / 86'400'000ULL);
+}
 
 namespace OrderIdUtils {
 

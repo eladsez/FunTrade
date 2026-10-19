@@ -2,6 +2,17 @@
 
 FunTrade is a event-driven algorithmic trading bot written in **C++20**. It is designed with a strict focus on low-latency execution, robust concurrency, and adherence to SOLID principles. The architecture decouples market data ingestion, strategy logic, and order execution, allowing researchers to seamlessly transition from historical backtesting to live paper trading without modifying core strategy code.
 
+## Strategy
+
+Daily basket mean reversion on cointegrated 3-stock baskets (`config/basket_configs/`, produced
+by `scripts/compute.py`). At each close the bot computes the basket's z-score from
+dividend-adjusted daily closes; at the next session it acts with market-on-close orders, so it
+fills at the official close exactly as the research simulator assumes
+(`scripts/parity_check.py` verifies trade-for-trade parity). State is persisted in `state/`,
+reconciled against the broker on every start, and guarded by portfolio risk limits
+(`config/risk.json`). Operating instructions: `docs/OPERATIONS.md`. Status and history of the
+hardening work: `docs/ROADMAP.md`.
+
 ## Core Architecture
 
 The system is built around a central Publisher/Subscriber messaging system to prevent blocking calls between the network and the trading logic.

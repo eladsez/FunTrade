@@ -1,11 +1,13 @@
 #include <core/EventBus.hpp>
 #include <core/Logger.hpp>
 #include <chrono>
+#include <future>
 
 namespace bot {
 
-EventBus::EventBus(std::shared_ptr<IDataFeed> dataFeed, std::shared_ptr<IExecutionEngine> executionEngine)
-                    : dataFeed_(std::move(dataFeed)), executionEngine_(std::move(executionEngine)){
+EventBus::EventBus(std::shared_ptr<IDataFeed> dataFeed, std::shared_ptr<IExecutionEngine> executionEngine,
+                   DispatchMode mode)
+                    : dataFeed_(std::move(dataFeed)), executionEngine_(std::move(executionEngine)), mode_(mode) {
     if (dataFeed_) {
         dataFeed_->setMarketTickCallback([this](const MarketEvent& tick) {
             this->publishMarketEvent(tick);
@@ -24,6 +26,7 @@ EventBus::~EventBus() {
 }
 
 void EventBus::start() {
+    if (mode_ == DispatchMode::Synchronous) return;
     if (isRunning.exchange(true)) return;
     
     dispatcherThread = std::thread(&EventBus::processEvents, this);
@@ -73,9 +76,33 @@ void EventBus::unsubscribeFromMarketEvents(const std::string& symbol, uint64_t s
     }
 }
 
-void EventBus::publishMarketEvent(const MarketEvent& event) {
+void EventBus::enqueue(Event event) {
+    if (mode_ == DispatchMode::Synchronous) {
+        // Recursive: a callback may publish (e.g. the mock engine filling an order), which is
+        // then delivered inline, exactly like a synchronous exchange would.
+        std::lock_guard<std::recursive_mutex> lock(syncDispatchMtx_);
+        dispatchEvent(event);
+        return;
+    }
     // Lock-free enqueue: Network thread returns immediately
-    queue.enqueue(event);
+    queue.enqueue(std::move(event));
+}
+
+void EventBus::publishMarketEvent(const MarketEvent& event) {
+    enqueue(event);
+}
+
+void EventBus::post(std::function<void()> task) {
+    enqueue(Task(std::move(task)));
+}
+
+void EventBus::flush() {
+    if (mode_ == DispatchMode::Synchronous || !isRunning) return;
+    if (std::this_thread::get_id() == dispatcherThread.get_id()) return;  // would deadlock
+    std::promise<void> done;
+    auto fut = done.get_future();
+    post([&done] { done.set_value(); });
+    fut.wait();
 }
 
 uint64_t EventBus::subscribeToExecution(ExecutionCallback callback) {
@@ -92,7 +119,7 @@ void EventBus::unsubscribeFromExecution(uint64_t subId) {
 }
 
 void EventBus::publishExecution(const ExecutionReport& report) {
-    queue.enqueue(report);
+    enqueue(report);
 }
 
 void EventBus::dispatchEvent(const Event& event) {
@@ -134,6 +161,9 @@ void EventBus::dispatchEvent(const Event& event) {
             for (const auto& [id, callback] : localExecSubs) {
                 callback(arg);
             }
+        }
+        else if constexpr (std::is_same_v<T, Task>) {
+            arg();
         }
     }, event);
 }

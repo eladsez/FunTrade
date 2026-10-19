@@ -2,6 +2,8 @@
 #include <risk/PortfolioManager.hpp>
 #include "fakes/SyncEventBus.hpp"
 #include "fakes/FakeExecutionEngine.hpp"
+#include <filesystem>
+#include <unistd.h>
 
 using namespace bot;
 using namespace bot::test;
@@ -12,7 +14,10 @@ protected:
     std::shared_ptr<FakeExecutionEngine> engine = std::make_shared<FakeExecutionEngine>();
     std::unique_ptr<PortfolioManager> pm;
 
-    void SetUp() override { pm = std::make_unique<PortfolioManager>(bus, engine); }
+    void SetUp() override {
+        engine->trackPositions = false;  // these tests set broker positions explicitly
+        pm = std::make_unique<PortfolioManager>(bus, engine);
+    }
 
     void fill(const std::string& vkey, const std::string& sym, Side side, double qty, double px,
               OrderStatus st = OrderStatus::FILLED) {
@@ -50,7 +55,8 @@ TEST_F(PortfolioManagerTest, ShortCoverRealizesPnl) {
     fill("bk_A", "A", Side::BUY, 10, 45.0);
     EXPECT_DOUBLE_EQ(pm->getNetPosition("bk_A"), 0);
     EXPECT_DOUBLE_EQ(pm->getTotalRealizedPnL(), 50.0);
-    EXPECT_FALSE(pm->getPosition("bk_A").has_value()) << "flat positions are purged";
+    EXPECT_DOUBLE_EQ(pm->getPosition("bk_A")->realized_pnl, 50.0) << "flat positions keep their realized PnL";
+    EXPECT_DOUBLE_EQ(pm->getPnL({"bk_A"}), 50.0);
 }
 
 TEST_F(PortfolioManagerTest, FlipResetsAveragePrice) {
@@ -95,11 +101,34 @@ TEST_F(PortfolioManagerTest, BooksUnderPositionKeyOfUniqueOrderId) {
     EXPECT_DOUBLE_EQ(pm->getNetPosition("bk_A"), 15);
 }
 
-TEST_F(PortfolioManagerTest, SyncsBrokerPositionsOnStartup) {
+TEST_F(PortfolioManagerTest, BrokerPositionsAreKeptApartFromVirtualBooks) {
     auto e = std::make_shared<FakeExecutionEngine>();
     e->openPositions = {Position{"AAPL", 5, 180.0, 185.0, 0.0}};
     PortfolioManager pm2(bus, e);
-    EXPECT_DOUBLE_EQ(pm2.getNetPosition("AAPL"), 5);
+    EXPECT_DOUBLE_EQ(pm2.getBrokerPosition("AAPL"), 5);
+    EXPECT_DOUBLE_EQ(pm2.getNetPosition("AAPL"), 0) << "not the bot's position";
+    EXPECT_FALSE(pm2.isReconciled("AAPL"));
+    auto m = pm2.reconcile();
+    ASSERT_EQ(m.size(), 1u);
+    EXPECT_EQ(m[0].symbol, "AAPL");
+}
+
+TEST_F(PortfolioManagerTest, ReconcilesSumOfBasketsAgainstBroker) {
+    fill("bk1_HBAN", "HBAN", Side::BUY, 100, 15.0);
+    fill("bk2_HBAN", "HBAN", Side::SELL, 60, 15.0);
+    engine->openPositions = {Position{"HBAN", 40, 15.0, 15.0, 0.0}};
+    pm->resync();
+    EXPECT_TRUE(pm->isReconciled("HBAN"));
+    engine->openPositions = {Position{"HBAN", 41, 15.0, 15.0, 0.0}};
+    pm->resync();
+    EXPECT_FALSE(pm->isReconciled("HBAN"));
+}
+
+TEST_F(PortfolioManagerTest, ExposureAggregates) {
+    fill("bk1_A", "A", Side::BUY, 10, 50.0);
+    fill("bk2_A", "A", Side::SELL, 4, 50.0);
+    EXPECT_DOUBLE_EQ(pm->getNetSymbolQuantity("A"), 6);
+    EXPECT_DOUBLE_EQ(pm->getGrossExposure(), 700.0);
 }
 
 // The same execution delivered twice must be counted once (fixed in Phase 2).
@@ -113,15 +142,22 @@ TEST_F(PortfolioManagerTest, DuplicateExecutionCountedOnce) {
     EXPECT_EQ(pm->getTotalTrades(), 1u);
 }
 
-// ---------------------------------------------------------------------------
-// Known bugs (see docs/ROADMAP.md). Enable when the owning phase fixes them.
-// ---------------------------------------------------------------------------
-
-// Phase 3: inventory restored from the broker must be attributed back to the basket that
-// owns it, otherwise every basket restarts FLAT and orphans its hedge.
-TEST_F(PortfolioManagerTest, DISABLED_Phase3_RestoredPositionsAreAttributedToBaskets) {
-    auto e = std::make_shared<FakeExecutionEngine>();
-    e->openPositions = {Position{"A", 10, 50.0, 50.0, 0.0}};
-    PortfolioManager pm2(bus, e);
+// Fixed in Phase 3 (was a known bug): per-basket books are persisted and restored, so
+// inventory stays attributed to the basket that owns it across restarts.
+TEST_F(PortfolioManagerTest, RestoredPositionsAreAttributedToBaskets) {
+    auto file = std::filesystem::temp_directory_path() / ("funtrade_pm_" + std::to_string(::getpid()) + ".json");
+    std::filesystem::remove(file);
+    {
+        PortfolioManager pm1(bus, engine, file.string());
+        OrderRequest r{};
+        r.client_order_id = OrderIdUtils::newClientOrderId("bk_A"); r.symbol = "A"; r.side = Side::BUY; r.quantity = 10;
+        bus->publishExecution(FakeExecutionEngine::report(r, OrderStatus::FILLED, 10, 10, 50.0));
+    }
+    engine->openPositions = {Position{"A", 10, 50.0, 50.0, 0.0}};
+    auto bus2 = std::make_shared<SyncEventBus>();
+    PortfolioManager pm2(bus2, engine, file.string());
     EXPECT_DOUBLE_EQ(pm2.getNetPosition("bk_A"), 10);
+    EXPECT_DOUBLE_EQ(pm2.getPosition("bk_A")->avg_price, 50.0);
+    EXPECT_TRUE(pm2.isReconciled("A"));
+    std::filesystem::remove(file);
 }

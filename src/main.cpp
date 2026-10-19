@@ -7,6 +7,10 @@
 #include <condition_variable>
 #include <atomic>
 #include <iostream>
+#include <fstream>
+#include <nlohmann/json.hpp>
+#include <utils/magic_enum.hpp>
+#include <risk/RiskManager.hpp>
 
 #include <core/Logger.hpp>
 #include <core/EventBus.hpp>
@@ -85,97 +89,123 @@ int runAlpacaLive(const std::string& apiKey, const std::string& apiSecret) {
 int runBacktestMode(const std::string& csvTickPath, const std::string& csvHistorPath, const std::string& configPath) {
     LOG_INFO("--- Starting HISTORICAL BACKTEST Mode ---");
     LOG_INFO("[Backtest] Data File: {}", csvTickPath);
+    LOG_INFO("[Backtest] Warm-up File: {}", csvHistorPath.empty() ? "(none)" : csvHistorPath);
     LOG_INFO("[Backtest] Config File: {}", configPath);
 
-    // 1. Initialize Mocks
+    // Synchronous dispatch: every event (and the mock exchange's fills) is fully processed
+    // before the next CSV row, so results are deterministic and comparable to compute.py.
     auto dataFeed = std::make_shared<CsvDataFeed>(csvTickPath, csvHistorPath);
-    auto eventBus = std::make_shared<EventBus>(dataFeed, nullptr);
+    auto eventBus = std::make_shared<EventBus>(dataFeed, nullptr, DispatchMode::Synchronous);
     auto executionEngine = std::make_shared<MockExecutionEngine>(eventBus);
 
-    // 2. Initialize Managers
     auto orderManager = std::make_shared<OrderManager>(eventBus, executionEngine);
     auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, executionEngine);
 
-    // 3. Initialize Strategy
-    double capitalAllocation = 5000.0; 
+    double capitalAllocation = 5000.0;  // same as compute.py's max_capital
     auto strategy = std::make_shared<BasketMeanReversionStrategy>(
         eventBus, orderManager, portfolioManager, configPath, capitalAllocation
     );
 
-    // 4. Start Strategy
     LOG_INFO("[Backtest] Booting up Strategy...");
     strategy->start();
 
-    // 5. Start the CSV Data Pump (false = max speed, no real-time sleep)
     LOG_INFO("[Backtest] Pumping historical data...");
     dataFeed->startReplay(false); 
-
-    // Wait until the CSV finishes reading or the user hits Ctrl+C
     while (dataFeed->isPlaying() && !g_shutdown_requested.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    // 6. Graceful Shutdown
     LOG_INFO("[Backtest] End of data reached. Stopping strategy...");
     dataFeed->stopReplay();
     strategy->stop();
 
     double realized = portfolioManager->getTotalRealizedPnL();
     double unrealized = portfolioManager->getTotalUnrealizedPnL();
-    int total_trades = portfolioManager->getTotalTrades();
     LOG_INFO("==================================================");
     LOG_INFO("              BACKTEST RESULTS                    ");
     LOG_INFO("==================================================");
-    LOG_INFO("Total Fills:    {}", total_trades);
+    LOG_INFO("Final state:    {} / {}", std::string(magic_enum::enum_name(strategy->masterState())),
+             std::string(magic_enum::enum_name(strategy->position())));
+    LOG_INFO("Executions:     {}", portfolioManager->getTotalTrades());
     LOG_INFO("Realized PnL:   ${:.2f}", realized);
     LOG_INFO("Unrealized PnL: ${:.2f}", unrealized);
     LOG_INFO("Total Net PnL:  ${:.2f}", (realized + unrealized));
     LOG_INFO("==================================================");
-    
-    LOG_INFO("[Backtest] Backtest complete.");
     return 0;
 }
 
-int runLiveIbkr() {
-    // running from my docker
-    // auto infra = std::make_shared<IbkrInfra>("host.docker.internal", 7497, 1); 
-    auto infra = std::make_shared<IbkrInfra>("127.0.0.1", 4002, 1);
+// Risk limits from config/risk.json, scaled to the account's equity.
+static RiskLimits loadRiskLimits(const std::string& path, double equity, double allocationPerBasket) {
+    RiskLimits limits;
+    nlohmann::json j = nlohmann::json::object();
+    if (std::ifstream f(path); f.is_open()) f >> j;
+    else LOG_WARN("[Risk] {} not found; using defaults.", path);
 
+    limits.max_gross_exposure_usd = j.value("max_gross_exposure", 1.0) * equity;
+    limits.max_symbol_net_usd = j.value("max_symbol_net", 0.10) * equity;
+    limits.max_basket_loss_usd = j.value("max_basket_loss", 0.15) * allocationPerBasket * equity;
+    limits.kill_switch_file = j.value("kill_switch_file", "state/KILL");
+    limits.flatten_file = j.value("flatten_file", "state/FLATTEN");
+    LOG_INFO("[Risk] Equity ${:.0f}: gross cap ${:.0f}, per-symbol net cap ${:.0f}, per-basket loss limit ${:.0f}. "
+             "Kill switch: {}  Flatten: {}", equity, limits.max_gross_exposure_usd, limits.max_symbol_net_usd,
+             limits.max_basket_loss_usd, limits.kill_switch_file, limits.flatten_file);
+    return limits;
+}
+
+int runLiveIbkr() {
+    const char* envHost = std::getenv("IBKR_HOST");
+    const char* envPort = std::getenv("IBKR_PORT");
+    const char* envClient = std::getenv("IBKR_CLIENT_ID");
+    std::string host = envHost ? envHost : "127.0.0.1";
+    int port = envPort ? std::stoi(envPort) : 4002;   // 4002 = IB Gateway paper
+    int clientId = envClient ? std::stoi(envClient) : 1;
+
+    auto infra = std::make_shared<IbkrInfra>(host, port, clientId);
     auto execEngine = std::make_shared<IbkrExecutionEngine>(infra); 
     auto dataFeed = std::make_shared<IbkrDataFeed>(infra); 
-
     auto eventBus = std::make_shared<EventBus>(dataFeed, execEngine); 
 
-    execEngine->connectToInfra();
-    dataFeed->connectToInfra();
-
+    // Books first, so the executions replayed while connecting are booked (deduped against
+    // the persisted state) before anything trades.
     auto orderManager = std::make_shared<OrderManager>(eventBus, execEngine);
-    auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, execEngine);
+    auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, execEngine, "state/positions.json");
 
-    double percentPerStrategy = 0.10; // Representing 5% of available cash
+    execEngine->connectToInfra();   // blocks until account, positions, orders, executions synced
+    dataFeed->connectToInfra();
+    eventBus->flush();              // replayed executions are now booked
+    orderManager->syncWithExchange();
+    portfolioManager->resync();     // reconciliation report; mismatching baskets halt on start
 
-    // Initialize the Orchestrator
+    const double allocationPerBasket = [] {
+        nlohmann::json j = nlohmann::json::object();
+        if (std::ifstream f("config/risk.json"); f.is_open()) f >> j;
+        return j.value("allocation_per_basket", 0.05);
+    }();
+    auto equity = execEngine->getPortfolioValue();
+    if (!equity) {
+        LOG_ERROR("[LIVE] No account value (NetLiquidation/ExchangeRate) from TWS. Refusing to trade.");
+        return 1;
+    }
+
+    StrategyOptions options;
+    options.state_dir = "state/baskets";
+    options.rebuild_window_daily = true;
+    options.risk = std::make_shared<RiskManager>(portfolioManager,
+        loadRiskLimits("config/risk.json", *equity, allocationPerBasket));
+
     LOG_INFO("[LIVE] Booting up Strategy Orchestrator...");
     StrategyOrchestrator orchestrator(
-        eventBus, 
-        orderManager, 
-        portfolioManager, 
-        "config/basket_configs", 
-        percentPerStrategy
-    );
-
-    // Load and start all strategies
+        eventBus, orderManager, portfolioManager, "config/basket_configs", allocationPerBasket, options);
     orchestrator.loadStrategies();
     orchestrator.startAll();
 
-    LOG_INFO("[LIVE] Bot is running and printing Press Ctrl+C to stop.");
-    
+    LOG_INFO("[LIVE] Running {} baskets. Ctrl+C stops (positions persist; nothing is flattened).",
+             orchestrator.getStrategyCount());
     while (!g_shutdown_requested.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     orchestrator.stopAll();
-
     LOG_INFO("[LIVE] Shutting down...");
     return 0;
 }
@@ -193,7 +223,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    bot::Logger::init(debugMode);
+    bool backtest = argc > 1 && std::string(argv[1]) == "--backtest";
+    bot::Logger::init(debugMode, backtest ? "" : "logs/funtrade.log");
     setupSignalHandlers();
 
     LOG_INFO("==================================================");
@@ -203,7 +234,7 @@ int main(int argc, char* argv[]) {
         LOG_DEBUG("Debug mode is ENABLED.");
     }
 
-    std::string configPath = "config/basket_configs/amzn_cmg_expe.json";
+    std::string configPath = "config/basket_configs/amzn_cmg_ebay.json";
     std::string csvTickPath = "data/testing_ticks.csv";
     std::string csvHistorPath = "";
 
@@ -234,6 +265,6 @@ int main(int argc, char* argv[]) {
         return runAlpacaLive(apiKey, apiSecret);
     }
     else{
-        runLiveIbkr();
+        return runLiveIbkr();
     }
 }

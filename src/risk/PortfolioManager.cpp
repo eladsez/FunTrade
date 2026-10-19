@@ -3,12 +3,18 @@
 #include <core/Logger.hpp>
 #include <risk/UiBroadcaster.hpp>
 #include <nlohmann/json.hpp>
+#include <utils/StateStore.hpp>
+#include <algorithm>
 #include <cmath>
 
 namespace bot {
 
-PortfolioManager::PortfolioManager(std::shared_ptr<IEventBus> eventBus, std::shared_ptr<IExecutionEngine> engine) 
-    : eventBus_(std::move(eventBus)), engine_(std::move(engine)) {
+PortfolioManager::PortfolioManager(std::shared_ptr<IEventBus> eventBus, std::shared_ptr<IExecutionEngine> engine,
+                                   std::string stateFile)
+    : eventBus_(std::move(eventBus)), engine_(std::move(engine)), state_file_(std::move(stateFile)) {
+
+    // 0. Restore the bot's own books from the last run
+    loadState();
     
     // 1. Subscribe to all executions immediately
     eventBus_->subscribeToExecution([this](const ExecutionReport& report) {
@@ -20,8 +26,8 @@ PortfolioManager::PortfolioManager(std::shared_ptr<IEventBus> eventBus, std::sha
         this->onMarketEvent(event);
     });
     
-    // 3. Automatically sync with the exchange on startup
-    syncWithExchange();
+    // 3. Snapshot the broker's positions to reconcile against
+    resync();
 }
 
 
@@ -44,6 +50,21 @@ void PortfolioManager::onMarketEvent(const MarketEvent& event) {
             // Make sure we capture EOD Bar updates too for backtesting!
             updatedPrice = tick.close;
         } 
+
+        // Daily reconciliation: the first EOD bar of a new day arrives after that day's
+        // closing-auction fills, so the broker and the virtual books should agree.
+        if constexpr (std::is_same_v<T, BarUpdate>) {
+            int64_t day = tradingDay(tick.timestamp_ms);
+            bool due = false;
+            {
+                std::lock_guard<std::mutex> lock(mtx_);
+                if (day > last_reconcile_day_) { last_reconcile_day_ = day; due = true; }
+            }
+            if (due) {
+                syncBrokerPositions();
+                logReconciliation("Daily");
+            }
+        }
 
         // Only update if we derived a valid price
         if (updatedPrice > 0.0) {
@@ -101,7 +122,7 @@ double PortfolioManager::applyFill(Position& pos, double signed_fill_qty, double
     return realized;
 }
 
-// Manages the O(1) index and purges closed positions. Returns true if purged.
+// Manages the O(1) symbol index; closed positions leave the index. Returns true if closed.
 bool PortfolioManager::updatePositionIndex(const std::string& symbol, const std::string& virtual_key, bool was_flat, bool is_flat_now) {
     if (was_flat && !is_flat_now) {
         // Position Opened: Add to O(1) index
@@ -121,7 +142,7 @@ bool PortfolioManager::updatePositionIndex(const std::string& symbol, const std:
             symbol_to_vkeys_.erase(symbol);
         }
         
-        positions_.erase(virtual_key);
+        // Keep the (now flat) entry: it carries the basket's realized PnL.
         return true;
     }
     
@@ -168,10 +189,11 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
 
     // 2. Synchronize memory and indices
     bool was_purged = updatePositionIndex(report.symbol, virtual_key, was_flat, is_flat_now);
+    saveStateLocked();
 
     // 3. Log results safely
     if (was_purged) {
-        LOG_INFO("[PortfolioManager] Position closed and purged for: {}", virtual_key);
+        LOG_INFO("[PortfolioManager] Position closed for {} (realized {:.2f})", virtual_key, pos.realized_pnl);
         return; 
     }
 
@@ -179,45 +201,115 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
              virtual_key, pos.symbol, pos.quantity, pos.avg_price, pos.realized_pnl);
 }
 
-void PortfolioManager::syncWithExchange() {
-    LOG_INFO("[PortfolioManager] Syncing positions with exchange...");
-    std::vector<Position> openPos = engine_->getOpenPositions();
-    
-    // 1. Build the new map completely offline (no locks)
-    std::unordered_map<std::string, Position> new_positions;
-    std::unordered_map<std::string, std::vector<std::string>> new_symbol_to_vkeys;
-    new_positions.reserve(openPos.size());
-     
-    for (auto& pos : openPos) {
-        // We need a copy of the symbol for the key, but we can move the struct itself
-        std::string key = pos.symbol;
-        
-        // Log locally before we move 'pos' and lose its data
-        LOG_DEBUG("[PortfolioManager] Synced {} | Qty: {} | AvgPrice: {}", 
-                  pos.symbol, pos.quantity, pos.avg_price);
-
-        // Build the secondary index. When pulling raw from the broker,
-        // we don't have the client_order_id, so the v_key is just the symbol.
-        new_symbol_to_vkeys[pos.symbol].push_back(key);
-        new_positions.emplace(std::move(key), std::move(pos));
+void PortfolioManager::syncBrokerPositions() {
+    std::vector<Position> brokerPos = engine_->getOpenPositions();
+    std::map<std::string, double> fresh;
+    for (const auto& p : brokerPos) {
+        if (std::abs(p.quantity) > 1e-9) fresh[p.symbol] += p.quantity;
     }
+    std::lock_guard<std::mutex> lock(mtx_);
+    broker_positions_.swap(fresh);
+}
 
-    // --- LOG THE FINAL STATE BEFORE LOCKING ---
-    LOG_INFO("[PortfolioManager] === Sync Complete. Current Portfolio State ===");
-    LOG_INFO("[PortfolioManager] Total open positions: {}", new_positions.size());
-    
-    for (const auto& [symbol, pos] : new_positions) {
-        LOG_INFO("  -> Symbol: {} | Qty: {:.4f} | Avg Price: {:.2f} | Cur Price: {:.2f} | uPnL: {:.2f}", 
-                 symbol, pos.quantity, pos.avg_price, pos.current_price, pos.unrealized_pnl());
-    }
-    LOG_INFO("[PortfolioManager] ================================================");
+void PortfolioManager::resync() {
+    syncBrokerPositions();
+    logReconciliation("Startup");
+}
 
-    // 2. Lock the mutex ONLY for the swap. This is an O(1) operation.
-    {
-        std::lock_guard<std::mutex> lock(mtx_);
-        positions_.swap(new_positions);
-        symbol_to_vkeys_.swap(new_symbol_to_vkeys);
+double PortfolioManager::virtualQtyLocked(const std::string& symbol) const {
+    double qty = 0.0;
+    auto it = symbol_to_vkeys_.find(symbol);
+    if (it == symbol_to_vkeys_.end()) return 0.0;
+    for (const auto& vkey : it->second) {
+        auto p = positions_.find(vkey);
+        if (p != positions_.end()) qty += p->second.quantity;
     }
+    return qty;
+}
+
+std::vector<SymbolMismatch> PortfolioManager::reconcileLocked() const {
+    std::set<std::string> symbols;
+    for (const auto& [sym, q] : broker_positions_) symbols.insert(sym);
+    for (const auto& [sym, keys] : symbol_to_vkeys_) symbols.insert(sym);
+
+    std::vector<SymbolMismatch> out;
+    for (const auto& sym : symbols) {
+        double v = virtualQtyLocked(sym);
+        auto b = broker_positions_.find(sym);
+        double bq = b == broker_positions_.end() ? 0.0 : b->second;
+        if (std::abs(v - bq) > 1e-6) out.push_back({sym, v, bq});
+    }
+    return out;
+}
+
+std::vector<SymbolMismatch> PortfolioManager::reconcile() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return reconcileLocked();
+}
+
+bool PortfolioManager::isReconciled(const std::string& symbol) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    auto b = broker_positions_.find(symbol);
+    double bq = b == broker_positions_.end() ? 0.0 : b->second;
+    return std::abs(virtualQtyLocked(symbol) - bq) <= 1e-6;
+}
+
+double PortfolioManager::getBrokerPosition(const std::string& symbol) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    auto b = broker_positions_.find(symbol);
+    return b == broker_positions_.end() ? 0.0 : b->second;
+}
+
+void PortfolioManager::logReconciliation(const char* when) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    auto mismatches = reconcileLocked();
+    LOG_INFO("[PortfolioManager] === {} reconciliation: {} virtual positions, {} broker symbols, {} mismatches ===",
+             when, positions_.size(), broker_positions_.size(), mismatches.size());
+    for (const auto& [vkey, pos] : positions_) {
+        LOG_INFO("  -> {} | {} {:.4f} @ {:.2f} | rPnL {:.2f} uPnL {:.2f}",
+                 vkey, pos.symbol, pos.quantity, pos.avg_price, pos.realized_pnl, pos.unrealized_pnl());
+    }
+    for (const auto& m : mismatches) {
+        LOG_ERROR("[PortfolioManager] MISMATCH {}: bot books {:.4f}, broker holds {:.4f}. Baskets trading {} will halt.",
+                  m.symbol, m.virtual_qty, m.broker_qty, m.symbol);
+    }
+}
+
+void PortfolioManager::loadState() {
+    if (state_file_.empty()) return;
+    auto j = state::readJson(state_file_);  // corrupt file throws: never trade on unknown books
+    if (!j) {
+        LOG_INFO("[PortfolioManager] No state file at {}; starting with empty books.", state_file_);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mtx_);
+    for (const auto& [vkey, p] : (*j)["positions"].items()) {
+        Position pos;
+        pos.symbol = p.at("symbol").get<std::string>();
+        pos.quantity = p.at("quantity").get<double>();
+        pos.avg_price = p.at("avg_price").get<double>();
+        pos.current_price = pos.avg_price;
+        pos.realized_pnl = p.value("realized_pnl", 0.0);
+        positions_[vkey] = pos;
+        symbol_to_vkeys_[pos.symbol].push_back(vkey);
+    }
+    for (const auto& id : (*j)["seen_exec_ids"]) seen_exec_ids_.insert(id.get<std::string>());
+    total_realized_pnl_ = j->value("total_realized_pnl", 0.0);
+    LOG_INFO("[PortfolioManager] Restored {} virtual positions and {} execution ids from {}.",
+             positions_.size(), seen_exec_ids_.size(), state_file_);
+}
+
+void PortfolioManager::saveStateLocked() const {
+    if (state_file_.empty()) return;
+    nlohmann::json j;
+    j["positions"] = nlohmann::json::object();
+    for (const auto& [vkey, pos] : positions_) {
+        j["positions"][vkey] = {{"symbol", pos.symbol}, {"quantity", pos.quantity},
+                                {"avg_price", pos.avg_price}, {"realized_pnl", pos.realized_pnl}};
+    }
+    j["seen_exec_ids"] = seen_exec_ids_;
+    j["total_realized_pnl"] = total_realized_pnl_;
+    state::writeJsonAtomic(state_file_, j);
 }
 
 double PortfolioManager::getTotalRealizedPnL() const {
@@ -257,6 +349,28 @@ std::optional<double> PortfolioManager::getPortfolioValue() const {
 
 std::optional<double> PortfolioManager::getAvailableCash() const {
     return engine_->getAvailableCash();
+}
+
+double PortfolioManager::getPnL(const std::vector<std::string>& virtual_keys) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    double pnl = 0.0;
+    for (const auto& k : virtual_keys) {
+        auto it = positions_.find(k);
+        if (it != positions_.end()) pnl += it->second.realized_pnl + it->second.unrealized_pnl();
+    }
+    return pnl;
+}
+
+double PortfolioManager::getGrossExposure() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    double gross = 0.0;
+    for (const auto& [k, p] : positions_) gross += std::abs(p.quantity * p.current_price);
+    return gross;
+}
+
+double PortfolioManager::getNetSymbolQuantity(const std::string& symbol) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return virtualQtyLocked(symbol);
 }
 
 size_t PortfolioManager::getTotalTrades() const {

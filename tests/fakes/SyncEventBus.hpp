@@ -44,6 +44,9 @@ public:
         for (auto& [id, cb] : subs) cb(report);
     }
 
+    void post(std::function<void()> task) override { task(); }
+    void flush() override {}
+
     std::vector<HistoricalBar> fetchHistoricalBars(const std::string& symbol, const std::string&,
                                                    const std::string&, const std::string&) override {
         auto it = history_.find(symbol);

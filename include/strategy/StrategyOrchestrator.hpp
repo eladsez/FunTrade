@@ -8,6 +8,7 @@
 #include <execution/OrderManager.hpp>
 #include <risk/PortfolioManager.hpp>
 #include <strategy/IStrategy.hpp>
+#include <strategy/BasketMeanReversionStrategy.hpp>
 
 namespace bot {
 
@@ -18,7 +19,8 @@ public:
         std::shared_ptr<OrderManager> orderMngr,
         std::shared_ptr<PortfolioManager> portfolioMngr,
         const std::string& configDirectory,
-        double percentAllocationPerStrategy
+        double percentAllocationPerStrategy,
+        StrategyOptions options = {}
     );
 
     ~StrategyOrchestrator();
@@ -41,6 +43,7 @@ private:
     std::shared_ptr<PortfolioManager> portfolio_mngr_;
     std::string config_directory_;
     double percent_allocation_per_strategy_;
+    StrategyOptions options_;
 
     std::vector<std::shared_ptr<IStrategy>> strategies_;
 };

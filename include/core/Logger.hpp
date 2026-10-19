@@ -20,7 +20,8 @@ namespace bot {
 
 class Logger {
 public:
-    static void init(bool debugMode = false);
+    // logFile: also write to this rotating file (10 MB x 10), for unattended runs.
+    static void init(bool debugMode = false, const std::string& logFile = "");
     static std::shared_ptr<spdlog::logger>& getLogger();
 
 private:

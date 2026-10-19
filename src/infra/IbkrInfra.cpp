@@ -29,36 +29,40 @@ IbkrInfra::~IbkrInfra() {
         monitorThread_.join();
 
     cleanupConnection();
+    client_.reset();
+    osSignal_.reset();
 }
 
 void IbkrInfra::cleanupConnection() {
     isRunning_ = false;
     isConnected_ = false;
 
-    if (client_ && client_->isConnected()) {
-        client_->eDisconnect();
+    {
+        std::lock_guard<std::recursive_mutex> lock(clientMutex_);
+        if (client_ && client_->isConnected()) {
+            client_->eDisconnect();
+        }
     }
     
     if (osSignal_) {
         osSignal_->issueSignal(); // Unblock the reader thread safely
     }
 
+    // Join WITHOUT the client lock: a callback on the reader thread may be waiting for it.
     if (readerThread_.joinable()) {
         readerThread_.join();
     }
 
     reader_.reset();
-    client_.reset();
-    osSignal_.reset();
+    // client_ and osSignal_ are kept: other threads may hold the client pointer, and
+    // EClientSocket supports eConnect() again after eDisconnect().
 }
 
 bool IbkrInfra::tryConnect() {
     LOG_INFO("[IbkrInfra] Attempting connection to IB Gateway {}:{}", host_, port_);
     cleanupConnection();
 
-    osSignal_ = std::make_unique<EReaderOSSignal>(2000); 
-    client_ = std::make_unique<EClientSocket>(this, osSignal_.get());
-
+    std::lock_guard<std::recursive_mutex> lock(clientMutex_);
     if (client_->eConnect(host_.c_str(), port_, clientId_, false)) {
         LOG_DEBUG("[IbkrInfra] Socket connected. Starting reader thread...");
         reader_ = std::make_unique<EReader>(client_.get(), osSignal_.get());
@@ -157,10 +161,8 @@ void IbkrInfra::nextValidId(OrderId orderId) {
         connectCv_.notify_all(); // Unblock the constructor or the monitor thread
         // Check if this is a reconnect
         if (!isInitialConnection_.load()) {
-            LOG_DEBUG("[IbkrInfra] Reconnection detected. Firing reconnect callbacks...");
-            for (const auto& cb : reconnectCallbacks_) {
-                if (cb) cb();
-            }
+            LOG_INFO("[IbkrInfra] Reconnection detected. Firing reconnect callbacks...");
+            fireReconnectCallbacks();
         }
         isInitialConnection_ = false;
     }
@@ -176,6 +178,16 @@ void IbkrInfra::orderStatus( OrderId orderId, const std::string& status, Decimal
 
 void IbkrInfra::execDetails(int reqId, const Contract& contract, const Execution& execution) {
     if (execDetailsCb_) execDetailsCb_(reqId, contract, execution);
+}
+
+void IbkrInfra::execDetailsEnd(int reqId) {
+    if (execDetailsEndCb_) execDetailsEndCb_(reqId);
+}
+
+void IbkrInfra::fireReconnectCallbacks() {
+    for (const auto& cb : reconnectCallbacks_) {
+        if (cb) cb();
+    }
 }
 
 void IbkrInfra::updateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName) {
@@ -216,10 +228,19 @@ void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string
     (void)id; (void)errorTime; (void)advancedOrderRejectJson;
     LOG_DEBUG("[IbkrInfra] TWS ({}): {}", errorCode, errorString);
 
-    // Common disconnect codes: 502, 504, 1100, 2110
+    // Socket-level loss (our connection to TWS/Gateway): reconnect.
     if (errorCode == 504 || errorCode == 502) { 
         LOG_WARN("[IbkrInfra] Connection loss detected (Code {}). Watchdog taking over.", errorCode);
         handleDisconnect();
+    }
+    // TWS <-> IB servers. Our socket stays up, so the watchdog never sees these.
+    else if (errorCode == 1100) {
+        LOG_ERROR("[IbkrInfra] TWS lost connectivity to IB (1100). Orders and data are paused.");
+    } else if (errorCode == 1101) {
+        LOG_WARN("[IbkrInfra] Connectivity restored, data LOST (1101). Re-subscribing and re-syncing.");
+        fireReconnectCallbacks();
+    } else if (errorCode == 1102) {
+        LOG_INFO("[IbkrInfra] Connectivity restored, data maintained (1102).");
     }
 
     if (errorCb_) errorCb_(id, errorCode, errorString, advancedOrderRejectJson);

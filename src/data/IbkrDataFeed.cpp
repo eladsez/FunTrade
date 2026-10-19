@@ -99,7 +99,7 @@ IbkrDataFeed::~IbkrDataFeed() {
 }
 
 void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
-    if (!infra_->getClient() || !infra_->getClient()->isConnected()) return;
+    if (!infra_->client().connected()) return;
 
     SymbolSubscriptionIds ids;
     {
@@ -126,16 +126,16 @@ void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
     Contract contract = createContract(symbol);
 
     LOG_DEBUG("[IbkrDataFeed] Requesting Contract Details for hours: {}", symbol);
-    infra_->getClient()->reqContractDetails(nextHoursReqId_++, contract);
+    infra_->client()->reqContractDetails(nextHoursReqId_++, contract);
 
     if (useTickByTick_) {
         LOG_INFO("[IbkrDataFeed] Requesting TICK-BY-TICK for {}", symbol);
-        infra_->getClient()->reqTickByTickData(ids.tbtBidAskId, contract, "BidAsk", 0, false);
-        infra_->getClient()->reqTickByTickData(ids.tbtAllLastId, contract, "AllLast", 0, false);
-        infra_->getClient()->reqTickByTickData(ids.tbtMidPointId, contract, "MidPoint", 0, false);
+        infra_->client()->reqTickByTickData(ids.tbtBidAskId, contract, "BidAsk", 0, false);
+        infra_->client()->reqTickByTickData(ids.tbtAllLastId, contract, "AllLast", 0, false);
+        infra_->client()->reqTickByTickData(ids.tbtMidPointId, contract, "MidPoint", 0, false);
     } else {
         LOG_INFO("[IbkrDataFeed] Requesting MKT DATA (L1) for {}", symbol);
-        infra_->getClient()->reqMktData(ids.mktDataId, contract, "", false, false, TagValueListSPtr());
+        infra_->client()->reqMktData(ids.mktDataId, contract, "", false, false, TagValueListSPtr());
     }
 }
 
@@ -161,13 +161,13 @@ void IbkrDataFeed::unsubscribeFromSymbol(const std::string& symbol) {
         activeSubscriptions_.erase(it);
     }
 
-    if (infra_->getClient() && infra_->getClient()->isConnected()) {
+    if (infra_->client().connected()) {
         if (useTickByTick_) {
-            infra_->getClient()->cancelTickByTickData(ids.tbtBidAskId);
-            infra_->getClient()->cancelTickByTickData(ids.tbtAllLastId);
-            infra_->getClient()->cancelTickByTickData(ids.tbtMidPointId);
+            infra_->client()->cancelTickByTickData(ids.tbtBidAskId);
+            infra_->client()->cancelTickByTickData(ids.tbtAllLastId);
+            infra_->client()->cancelTickByTickData(ids.tbtMidPointId);
         } else {
-            infra_->getClient()->cancelMktData(ids.mktDataId);
+            infra_->client()->cancelMktData(ids.mktDataId);
         }
     }
 }
@@ -185,19 +185,19 @@ void IbkrDataFeed::onReconnect() {
     LOG_INFO("[IbkrDataFeed] Re-establishing active subscriptions after reconnect...");
     
     std::lock_guard<std::mutex> lock(dataMutex_);
-    if (!infra_->getClient() || !infra_->getClient()->isConnected()) return;
+    if (!infra_->client().connected()) return;
 
     for (const auto& [symbol, ids] : activeSubscriptions_) {
         Contract contract = createContract(symbol);
         
         if (useTickByTick_) {
             LOG_DEBUG("[IbkrDataFeed] Re-requesting TICK-BY-TICK for {}", symbol);
-            infra_->getClient()->reqTickByTickData(ids.tbtBidAskId, contract, "BidAsk", 0, false);
-            infra_->getClient()->reqTickByTickData(ids.tbtAllLastId, contract, "AllLast", 0, false);
-            infra_->getClient()->reqTickByTickData(ids.tbtMidPointId, contract, "MidPoint", 0, false);
+            infra_->client()->reqTickByTickData(ids.tbtBidAskId, contract, "BidAsk", 0, false);
+            infra_->client()->reqTickByTickData(ids.tbtAllLastId, contract, "AllLast", 0, false);
+            infra_->client()->reqTickByTickData(ids.tbtMidPointId, contract, "MidPoint", 0, false);
         } else {
             LOG_DEBUG("[IbkrDataFeed] Re-requesting MKT DATA (L1) for {}", symbol);
-            infra_->getClient()->reqMktData(ids.mktDataId, contract, "", false, false, TagValueListSPtr());
+            infra_->client()->reqMktData(ids.mktDataId, contract, "", false, false, TagValueListSPtr());
         }
     }
 }
@@ -449,7 +449,7 @@ Contract IbkrDataFeed::createContract(const std::string& symbol) {
 }
 
 std::vector<HistoricalBar> IbkrDataFeed::fetchHistoricalBars(const std::string& symbol, const std::string& start, const std::string& end, const std::string& timeframe) {
-    if (!infra_->getClient() || !infra_->getClient()->isConnected()) {
+    if (!infra_->client().connected()) {
         LOG_ERROR("[IbkrDataFeed] Cannot fetch historical data. Not connected to TWS.");
         return {};
     }
@@ -474,8 +474,14 @@ std::vector<HistoricalBar> IbkrDataFeed::fetchHistoricalBars(const std::string& 
 
     LOG_DEBUG("[IbkrDataFeed] Requesting Historical Data for {} (Duration: {}, End: {})", symbol, durationStr, ibkrEndDateTime);
     
-    // whatToShow = "TRADES", useRTH = 1, formatDate = 1 (String format)
-    infra_->getClient()->reqHistoricalData(reqId, contract, ibkrEndDateTime, durationStr, barSize, "TRADES", 1, 1, false, TagValueListSPtr());
+    // Daily bars are requested dividend/split ADJUSTED, to match the research data
+    // (yfinance auto_adjust). IBKR only serves ADJUSTED_LAST up to "now" (empty end time).
+    bool daily = (timeframe == "1Day");
+    std::string whatToShow = daily ? "ADJUSTED_LAST" : "TRADES";
+    if (daily) ibkrEndDateTime.clear();
+
+    // useRTH = 1, formatDate = 1 (String format)
+    infra_->client()->reqHistoricalData(reqId, contract, ibkrEndDateTime, durationStr, barSize, whatToShow, 1, 1, false, TagValueListSPtr());
 
     // 2. Block and wait for the EWrapper callbacks to resolve the promise
     // Use a 30-second timeout to prevent the strategy thread from hanging on a bad connection
@@ -483,7 +489,7 @@ std::vector<HistoricalBar> IbkrDataFeed::fetchHistoricalBars(const std::string& 
         return future.get();
     } else {
         LOG_ERROR("[IbkrDataFeed] Historical data request timed out for {}", symbol);
-        infra_->getClient()->cancelHistoricalData(reqId); // Cleanup in TWS
+        infra_->client()->cancelHistoricalData(reqId); // Cleanup in TWS
         
         std::lock_guard<std::mutex> lock(histMutex_);
         histPromises_.erase(reqId);
@@ -531,8 +537,8 @@ void IbkrDataFeed::eodTaskLoop() {
     while (!stopEodThread_) {
         // 1. Request the official time from IBKR
         ibkrCurrentTime_.store(0);
-        if (infra_->getClient() && infra_->getClient()->isConnected()) {
-            infra_->getClient()->reqCurrentTime();
+        if (infra_->client().connected()) {
+            infra_->client()->reqCurrentTime();
         }
 
         // 2. Wait until the callback populates the time (with a small timeout for safety)
@@ -682,7 +688,9 @@ uint64_t IbkrDataFeed::parseIbkrDateToMs(const std::string& ibkrDate) {
         std::tm tm_val = {};
         std::istringstream ss(ibkrDate);
         ss >> std::get_time(&tm_val, "%Y%m%d");
-        return static_cast<uint64_t>(std::mktime(&tm_val)) * 1000;
+        // UTC midnight of the bar's date (see tradingDay()). mktime would apply the host's
+        // timezone and, east of UTC, stamp the bar on the previous day.
+        return static_cast<uint64_t>(timegm(&tm_val)) * 1000;
     }
     return 0;
 }

@@ -16,13 +16,29 @@
 
 namespace bot {
 
+// Exclusive access to the TWS client for the duration of one expression. The TWS API's send
+// path is not thread-safe, and the bot sends from several threads (dispatcher, EOD timer,
+// warm-up, reconnect callbacks), so every request goes through this guard.
+//     if (auto c = infra->client(); c && c->isConnected()) c->reqIds(-1);
+class ClientGuard {
+public:
+    ClientGuard(std::recursive_mutex& m, EClientSocket* c) : lock_(m), client_(c) {}
+    EClientSocket* operator->() const { return client_; }
+    explicit operator bool() const { return client_ != nullptr; }
+    bool connected() const { return client_ && client_->isConnected(); }
+private:
+    std::unique_lock<std::recursive_mutex> lock_;
+    EClientSocket* client_;
+};
+
 class IbkrInfra : public DefaultEWrapper {
 public:
     IbkrInfra(std::string host, int port, int clientId);
     ~IbkrInfra() override;
 
-    // Accessor so the Feeds/Engines can send commands
-    EClientSocket* getClient() const { return client_.get(); }
+    // Locked access so the Feeds/Engines can send commands. The client object lives as long
+    // as the infra (reconnects reuse it), so the pointer never dangles.
+    ClientGuard client() { return ClientGuard(clientMutex_, client_.get()); }
 
     // =========================================================================
     // Callback Registrations (Used by DataFeed and ExecutionEngine)
@@ -51,6 +67,8 @@ public:
     using NextValidIdCallback = std::function<void(int)>;
     using OrderStatusCallback = std::function<void(OrderId, const std::string&, Decimal, Decimal, double, long long, int, double, int, const std::string&, double)>;
     using ExecDetailsCallback = std::function<void(int, const Contract&, const Execution&)>;
+    using ExecDetailsEndCallback = std::function<void(int)>;
+    void setExecDetailsEndCallback(ExecDetailsEndCallback cb) { execDetailsEndCb_ = std::move(cb); }
     
     void setNextValidIdCallback(NextValidIdCallback cb) { nextValidIdCb_ = std::move(cb); }
     void setOrderStatusCallback(OrderStatusCallback cb) { orderStatusCb_ = std::move(cb); }
@@ -112,6 +130,7 @@ public:
 	                Decimal remaining, double avgFillPrice, long long permId, int parentId,
 	                double lastFillPrice, int clientId, const std::string& whyHeld, double mktCapPrice) override;
     void execDetails(int reqId, const Contract& contract, const Execution& execution) override;
+    void execDetailsEnd(int reqId) override;
 
     void updateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName) override;
     void position(const std::string& account, const Contract& contract, Decimal position, double avgCost) override;
@@ -136,11 +155,13 @@ private:
     void cleanupConnection();
     void monitorLoop();
     void handleDisconnect();
+    void fireReconnectCallbacks();
 
     std::string host_;
     int port_;
     int clientId_;
 
+    std::recursive_mutex clientMutex_;  // guards every use of client_ (see ClientGuard)
     std::unique_ptr<EReaderOSSignal> osSignal_;
     std::unique_ptr<EClientSocket> client_;
     std::unique_ptr<EReader> reader_;
@@ -173,6 +194,7 @@ private:
     NextValidIdCallback nextValidIdCb_;
     OrderStatusCallback orderStatusCb_;
     ExecDetailsCallback execDetailsCb_;
+    ExecDetailsEndCallback execDetailsEndCb_;
 
     UpdateAccountValueCallback updateAccountValueCb_;
     PositionCallback positionCb_;

@@ -84,6 +84,8 @@ private:
     bool isAccountSynced_{false};
     bool isPositionsSynced_{false};
     bool isOrdersSynced_{false};
+    bool isExecutionsSynced_{false};
+    static constexpr int kExecutionsReqId = 7001;
 
     // Portfolio State
     std::mutex positionMutex_;

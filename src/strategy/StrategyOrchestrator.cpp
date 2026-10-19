@@ -13,12 +13,14 @@ StrategyOrchestrator::StrategyOrchestrator(
     std::shared_ptr<OrderManager> orderMngr,
     std::shared_ptr<PortfolioManager> portfolioMngr,
     const std::string& configDirectory,
-    double percentAllocationPerStrategy)
+    double percentAllocationPerStrategy,
+    StrategyOptions options)
     : event_bus_(std::move(eventBus)),
       order_mngr_(std::move(orderMngr)),
       portfolio_mngr_(std::move(portfolioMngr)),
       config_directory_(configDirectory),
-      percent_allocation_per_strategy_(percentAllocationPerStrategy) {
+      percent_allocation_per_strategy_(percentAllocationPerStrategy),
+      options_(std::move(options)) {
     UiBroadcaster::getInstance().startServer(9000);
 }
 
@@ -33,11 +35,13 @@ void StrategyOrchestrator::loadStrategies() {
         return;
     }
 
-    double availableCash = 100000.0; // Safe default for backtesting
-    auto cashOpt = portfolio_mngr_->getAvailableCash();
-    if (cashOpt) {
-        availableCash = *cashOpt;
+    // Size from account equity (USD net liquidation). Without it we can't size safely.
+    auto equityOpt = portfolio_mngr_->getPortfolioValue();
+    if (!equityOpt || *equityOpt <= 0.0) {
+        LOG_ERROR("[Orchestrator] No account value from the broker; refusing to load strategies.");
+        return;
     }
+    double availableCash = *equityOpt;
 
     double capital_per_strategy = availableCash * percent_allocation_per_strategy_;
     LOG_INFO("[Orchestrator] Total Available Cash: ${}. Allocating {:.2f}% -> ${} per strategy.", 
@@ -54,7 +58,8 @@ void StrategyOrchestrator::loadStrategies() {
                 order_mngr_,
                 portfolio_mngr_,
                 configPath,
-                capital_per_strategy // Pass the calculated absolute dollar amount
+                capital_per_strategy, // Pass the calculated absolute dollar amount
+                options_
             );
             
             strategies_.push_back(std::move(strategy));
