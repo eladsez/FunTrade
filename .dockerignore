@@ -1,0 +1,11 @@
+build/
+logs/
+state/
+data/
+.git/
+.serena/
+.github/
+deploy/
+**/__pycache__
+*.log
+.env

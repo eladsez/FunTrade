@@ -91,3 +91,43 @@ trades again on its own.
 - Live fills track the simulator: for the same days, `holdout_check.py` and the bot's
   realized PnL agree within costs.
 - At least one deliberate restart mid-position and one Gateway disconnect handled correctly.
+
+## Raspberry Pi deployment
+
+Two containers (`deploy/docker-compose.yml`): `ib-gateway` (headless IB Gateway with IBC
+auto-login, daily restart 23:45 New York) and `funtrade` (the bot, connecting to it over the
+compose network). Everything lives in `~/funtrade` on the Pi:
+
+| Path | What |
+|---|---|
+| `.env` | Paper login (`TWS_USERID`, `TWS_PASSWORD`), optional `VNC_SERVER_PASSWORD`, and `FUNTRADE_TAG` (managed by deploy.sh). chmod 600, never committed |
+| `docker-compose.yml`, `state_report.py` | Installed by each deploy |
+| `state/`, `logs/` | The bot's state and log (same as above) |
+| `gateway/` | Gateway settings, kept across restarts |
+
+**Deploys.** Push to `main` → GitHub builds an arm64 image (unit tests run inside the build),
+pushes `ghcr.io/eladsez/funtrade:<sha>`, then the Pi's runner (`~/actions-runner-funtrade`,
+label `funtrade`) runs `deploy/deploy.sh <sha>`. It waits until 16:15 New York if the session
+is open (a restart mid-session cancels the day's MOC orders), restarts, and rolls back if the
+bot doesn't log `Running N baskets` within 5 minutes. "Run workflow" with *force* deploys
+immediately.
+
+**On the Pi:**
+
+```bash
+cd ~/funtrade
+docker compose ps                         # both Up
+docker compose logs -f --tail 100 funtrade
+python3 state_report.py --state state     # daily check (exit 1 = a basket is halted)
+grep -E "\[(warning|error)\]" logs/funtrade.log | tail
+touch state/KILL                          # stop new entries (state/FLATTEN: exit all)
+docker compose restart funtrade           # outside market hours
+```
+
+View the Gateway: set `VNC_SERVER_PASSWORD`, `docker compose up -d`, then from your machine
+`ssh -L 5900:localhost:5900 eladsez@rpi.tail4f4240.ts.net` and open a VNC viewer on
+`localhost:5900`.
+
+Only one Gateway may be logged in with the paper user. Close the one on WSL/desktop while the
+Pi runs (the Pi's takes over: `EXISTING_SESSION_DETECTED_ACTION=primary`). Logging in to the
+**live** account elsewhere still blocks market data (10197).

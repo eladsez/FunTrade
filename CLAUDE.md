@@ -115,6 +115,21 @@ Persistence and restart:
 - `test_ibkr_execution`-style probing belongs on a separate paper account (see above).
   For read-only checks, a small Python `ibapi` script with its own client id is fine.
 
+## Deployment (Raspberry Pi)
+
+Paper runs on a Pi 4 (arm64, Debian 13) at `eladsez@rpi.tail4f4240.ts.net` (tailscale) in
+`~/funtrade`: compose project `funtrade` = `ib-gateway` (ghcr.io/gnzsnz/ib-gateway, IBC
+auto-login) + `funtrade` (ghcr.io/eladsez/funtrade:<sha>). CI: `.github/workflows/deploy.yml`
+(build/test arm64 image → GHCR → self-hosted runner `funtrade` runs `deploy/deploy.sh`, which
+never restarts during the US session unless forced). Runbook: `docs/OPERATIONS.md`.
+
+Diagnosing (read-only, safe any time):
+```bash
+ssh eladsez@rpi.tail4f4240.ts.net 'cd ~/funtrade && docker compose ps && python3 state_report.py --state state; grep -E "\[(warning|error)\]|reconciliation|Running" logs/funtrade.log | tail -40'
+```
+Don't restart containers or touch `state/` during 09:00–16:15 New York without the owner's
+say-so. The Pi also runs an unrelated app (`finance-app`, its own runner); leave it alone.
+
 ## Research (Python)
 
 Deps: `numpy pandas statsmodels yfinance joblib` (no requirements file; use a venv).
