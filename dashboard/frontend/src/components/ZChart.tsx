@@ -3,6 +3,8 @@ import { z as fmtZ } from '../lib/format'
 import type { Close } from '../lib/types'
 
 const LIM = 3
+// Days from the startup z history carry no position (null): only journaled days are drawn as held.
+const held_ = (c: Close) => (c.position === 'LONG' || c.position === 'SHORT') && c.state !== 'FLAT'
 
 /** Daily close z with the entry zones shaded, the exit band, and the days in position
  *  highlighted (green). Values beyond ±3 are drawn at the edge. */
@@ -18,14 +20,14 @@ export function ZChart({ closes, entry, exit, height = 262 }: { closes: Close[];
   const entries: { i: number; side: string }[] = []
   pts.forEach((c, i) => {
     line += `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(c.z!).toFixed(1)} `
-    const inPos = c.position !== 'FLAT' && c.state !== 'FLAT'
-    const prevIn = i > 0 && pts[i - 1].position !== 'FLAT' && pts[i - 1].state !== 'FLAT'
+    const inPos = held_(c)
+    const prevIn = i > 0 && held_(pts[i - 1])
     if (inPos) held += `${prevIn ? 'L' : 'M'}${x(i).toFixed(1)} ${y(c.z!).toFixed(1)} `
     if (c.action === 'ENTER_LONG' || c.action === 'ENTER_SHORT') entries.push({ i, side: c.action })
   })
 
   if (pts.length < 2) {
-    return <div className="flex items-center justify-center text-sm text-muted" style={{ height }}>No journaled closes yet. History starts with the bot version that writes the journal.</div>
+    return <div className="flex items-center justify-center text-sm text-muted" style={{ height }}>No z history yet. The bot writes it when it starts.</div>
   }
   const ticks = [0, 0.2, 0.4, 0.6, 0.8, 1].map(f => pts[Math.round(f * (pts.length - 1))].day)
   const last = pts[pts.length - 1]

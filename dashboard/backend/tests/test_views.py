@@ -111,3 +111,21 @@ def test_system_lists_halts_with_their_books(cfg, journal):
     assert s["halts"][0]["book_keys"] == {"cms_ed_ppl_ED": 12.0}
     assert s["can_edit_state"] is False
     assert s["symbols"] > 50
+
+
+def test_startup_z_history_fills_days_before_the_journal(cfg, journal):
+    from app import store
+    first = journal.closes["fitb_key_tfc"][0]["day"]
+    zdir = cfg.state_dir / "zhistory"
+    zdir.mkdir()
+    # 30 older days, plus one that overlaps the journal (the journal's value must win)
+    days = [[first - 30 + i, 0.1 * i] for i in range(30)] + [[first, 9.9]]
+    (zdir / "fitb_key_tfc.json").write_text(json.dumps({"basket": "fitb_key_tfc", "window": 36, "days": days}))
+    (zdir / "aapl_mu_wdc.json").write_text(json.dumps({"basket": "aapl_mu_wdc", "days": [[99999, 1.23]]}))
+    c = ctx(cfg, journal)
+    d = c.detail("fitb_key_tfc")
+    assert len(d["closes"]) == 120
+    assert d["closes"][0]["action"] is None and d["closes"][0]["position"] is None
+    assert d["closes"][30]["z"] != 9.9
+    assert c.row("aapl_mu_wdc")["close_z"] == 1.23, "a newer history day beats an older journaled close"
+    assert c.row("aapl_mu_wdc")["close_day"] == store.day_iso(99999)

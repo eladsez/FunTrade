@@ -71,6 +71,14 @@ size_t BasketState::completeDayCount() const {
     return std::count_if(closes_.begin(), closes_.end(), [this](const auto& kv) { return complete(kv.second); });
 }
 
+std::vector<int64_t> BasketState::completeDays() const {
+    std::vector<int64_t> out;
+    for (const auto& [day, closes] : closes_) {
+        if (complete(closes)) out.push_back(day);
+    }
+    return out;
+}
+
 std::optional<std::vector<double>> BasketState::window(int64_t day) const {
     if (!isDayComplete(day)) return std::nullopt;
     std::vector<double> spreads;

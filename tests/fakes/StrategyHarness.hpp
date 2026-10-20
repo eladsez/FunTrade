@@ -38,6 +38,7 @@ protected:
     std::function<void(RiskLimits&)> riskConfig;
     bool persist = false;
     bool rebuildDaily = false;
+    std::string historyDir;   // StrategyOptions::history_dir (empty = off)
     bool stopped = false;
     bool sessionOpen = false;
     int64_t day = kLastHistoryDay;
@@ -73,6 +74,7 @@ protected:
         StrategyOptions opts;
         if (persist) opts.state_dir = (tmp / "baskets").string();
         opts.rebuild_window_daily = rebuildDaily;
+        opts.history_dir = historyDir;
         if (riskConfig) {
             RiskLimits limits;
             riskConfig(limits);

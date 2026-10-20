@@ -27,8 +27,10 @@ PortfolioManager::PortfolioManager(std::shared_ptr<IEventBus> eventBus, std::sha
         this->onMarketEvent(event);
     });
     
-    // 3. Snapshot the broker's positions to reconcile against
-    resync();
+    // 3. Snapshot the broker's positions to reconcile against. Silent: live, this runs before
+    // the broker connection exists (an empty snapshot would report every leg as a mismatch);
+    // main calls resync() once the account is synced, which logs the real report.
+    syncBrokerPositions();
 }
 
 
