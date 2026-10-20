@@ -42,6 +42,10 @@ struct StrategyOptions {
     // history file only covers the warm-up period).
     bool rebuild_window_daily = false;
     std::shared_ptr<RiskManager> risk;  // optional
+    // Directory for <basket>.json with the bot's own z for every day of a longer warm-up
+    // history (display only: the dashboard's z chart). Empty disables it (tests, backtests),
+    // and then warm-up loads exactly what it always did.
+    std::string history_dir;
 };
 
 // Daily basket mean reversion, trading exactly the rule validated by the research
@@ -80,6 +84,11 @@ private:
     void loadConfig();
     void warmUp();
     void loadHistory(std::optional<int64_t> up_to_day);
+    std::vector<std::vector<HistoricalBar>> fetchDailyBars(int calendar_days_back) const;
+    void applyBars(BasketState& into, const std::vector<std::vector<HistoricalBar>>& bars,
+                   std::optional<int64_t> up_to_day, int64_t from_day) const;
+    int tradingCalendarDays() const;
+    void writeZHistory(const BasketState& full) const;
     void onMarketEvent(const MarketEvent& event) override;
     void onExecutionReport(const ExecutionReport& report);
     bool isValidMarketEvent(const MarketEvent& event) const;

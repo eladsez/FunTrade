@@ -82,3 +82,40 @@ TEST_F(JournalTest, ClosedJournalWritesNothing) {
     closeDay(0.05);
     EXPECT_FALSE(std::filesystem::exists(file));
 }
+
+// state/zhistory/<id>.json: the dashboard's z chart before any close is journaled.
+class ZHistoryTest : public StrategyHarness {};
+
+TEST_F(ZHistoryTest, WarmUpWritesTheBotsOwnZForEveryFullWindowDay) {
+    historyDir = (tmp / "zhistory").string();
+    build();
+    start();
+    auto j = nlohmann::json::parse(std::ifstream(tmp / "zhistory" / "tb.json"));
+    EXPECT_EQ(j["basket"], "tb");
+    EXPECT_EQ(j["window"], kWindow);
+    const auto& days = j["days"];
+    ASSERT_EQ(days.size(), static_cast<size_t>(2 * kWindow - kWindow + 1)) << "40 days of history, window 20";
+    EXPECT_EQ(days.back()[0].get<int64_t>(), day);
+    EXPECT_DOUBLE_EQ(days.back()[1].get<double>(), strat->lastDailyZ().value());
+}
+
+TEST_F(ZHistoryTest, TradingIsTheSameWithOrWithoutIt) {
+    auto run = [this](const std::string& dir) {
+        if (strat && !stopped) stopStrategy();
+        day = kLastHistoryDay;
+        sessionOpen = false;
+        historyDir = dir;
+        build();
+        start();
+        std::vector<std::pair<double, PendingAction>> out;
+        for (double s : {0.0, 0.05}) {
+            closeDay(s);
+            out.emplace_back(strat->lastDailyZ().value_or(99), strat->pendingAction());
+        }
+        return out;
+    };
+    auto plain = run("");
+    auto with = run((tmp / "zhistory").string());
+    EXPECT_EQ(plain, with);
+    EXPECT_EQ(with.back().second, PendingAction::ENTER_SHORT);
+}

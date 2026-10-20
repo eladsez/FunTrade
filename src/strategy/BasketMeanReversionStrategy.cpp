@@ -138,32 +138,70 @@ void BasketMeanReversionStrategy::loadConfig() {
 
 // Loads daily closes from the feed. With `up_to_day` (the close being processed) it loads
 // bars up to that day. Without it (warm-up) it skips bars that may still be forming.
+// ~1.45 calendar days per trading day; 2x plus slack covers holidays.
+int BasketMeanReversionStrategy::tradingCalendarDays() const {
+    return basket_state_->getWindowSize() * 2 + 10;
+}
+
 void BasketMeanReversionStrategy::loadHistory(std::optional<int64_t> up_to_day) {
+    applyBars(*basket_state_, fetchDailyBars(tradingCalendarDays()), up_to_day, 0);
+}
+
+std::vector<std::vector<HistoricalBar>> BasketMeanReversionStrategy::fetchDailyBars(int calendar_days_back) const {
     auto now = std::chrono::system_clock::now();
-    // ~1.45 calendar days per trading day; 2x plus slack covers holidays.
-    int calendar_days_back = basket_state_->getWindowSize() * 2 + 10;
     auto start = now - std::chrono::hours(24 * calendar_days_back);
     std::string end_time = utils::formatTimePoint(now);
     std::string start_time = utils::formatTimePoint(start);
-    int64_t unsettled = firstUnsettledDay();
 
     const auto& symbols = basket_state_->getSymbols();
     std::vector<std::vector<HistoricalBar>> all(symbols.size());
     for (size_t i = 0; i < symbols.size(); ++i) {
         all[i] = event_bus_->fetchHistoricalBars(symbols[i], start_time, end_time, "1Day");
     }
+    return all;
+}
 
+// Settled closes only (up to `up_to_day`, or before today's unsettled bar), from `from_day` on.
+void BasketMeanReversionStrategy::applyBars(BasketState& into, const std::vector<std::vector<HistoricalBar>>& bars,
+                                            std::optional<int64_t> up_to_day, int64_t from_day) const {
+    int64_t unsettled = firstUnsettledDay();
+    const auto& symbols = basket_state_->getSymbols();
     for (size_t i = 0; i < symbols.size(); ++i) {
-        for (const auto& bar : all[i]) {
+        for (const auto& bar : bars[i]) {
             int64_t day = tradingDay(bar.timestamp_ms);
-            if (up_to_day ? day > *up_to_day : day >= unsettled) continue;
-            basket_state_->setDailyClose(symbols[i], day, bar.close);
+            if (day < from_day || (up_to_day ? day > *up_to_day : day >= unsettled)) continue;
+            into.setDailyClose(symbols[i], day, bar.close);
         }
     }
 }
 
+void BasketMeanReversionStrategy::writeZHistory(const BasketState& full) const {
+    nlohmann::json days = nlohmann::json::array();
+    for (int64_t d : full.completeDays()) {
+        if (auto z = full.dailyZScore(d)) days.push_back({d, *z});
+    }
+    auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    state::writeJsonAtomic(std::filesystem::path(options_.history_dir) / (basket_id_ + ".json"),
+                           {{"basket", basket_id_}, {"window", full.getWindowSize()}, {"generated_at", now}, {"days", days}});
+}
+
 void BasketMeanReversionStrategy::warmUp() {
-    loadHistory(std::nullopt);
+    if (options_.history_dir.empty()) {
+        loadHistory(std::nullopt);
+    } else {
+        // One fetch over IBKR's 365-day maximum for daily bars. The trading state gets the same
+        // span the plain warm-up loads (counted back from the newest bar); the full span only
+        // feeds the dashboard's z history, computed by the same dailyZScore.
+        auto bars = fetchDailyBars(std::max(365, tradingCalendarDays()));
+        int64_t newest = 0;
+        for (const auto& leg : bars)
+            for (const auto& bar : leg) newest = std::max(newest, tradingDay(bar.timestamp_ms));
+        applyBars(*basket_state_, bars, std::nullopt, newest - tradingCalendarDays());
+        BasketState full(basket_state_->getWindowSize(), basket_state_->getSymbols(), basket_state_->getWeights(), basket_id_);
+        applyBars(full, bars, std::nullopt, 0);
+        writeZHistory(full);
+    }
 
     // Seed live prices with the latest closes so sizing works before the first tick.
     if (auto last = basket_state_->latestCompleteDay()) {

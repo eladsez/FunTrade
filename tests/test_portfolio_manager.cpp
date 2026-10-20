@@ -3,6 +3,8 @@
 #include "fakes/SyncEventBus.hpp"
 #include "fakes/FakeExecutionEngine.hpp"
 #include <filesystem>
+#include <core/Logger.hpp>
+#include <spdlog/sinks/ringbuffer_sink.h>
 #include <unistd.h>
 
 using namespace bot;
@@ -159,5 +161,38 @@ TEST_F(PortfolioManagerTest, RestoredPositionsAreAttributedToBaskets) {
     EXPECT_DOUBLE_EQ(pm2.getNetPosition("bk_A"), 10);
     EXPECT_DOUBLE_EQ(pm2.getPosition("bk_A")->avg_price, 50.0);
     EXPECT_TRUE(pm2.isReconciled("A"));
+    std::filesystem::remove(file);
+}
+
+// Live, the PM is built before the broker is connected. Its first snapshot is empty, so a
+// reconciliation report at construction listed every held leg as a MISMATCH (2026-10-20).
+TEST_F(PortfolioManagerTest, NoReconciliationReportBeforeTheBrokerIsSynced) {
+    auto file = std::filesystem::temp_directory_path() / ("pm_recon_" + std::to_string(::getpid()) + ".json");
+    PortfolioManager writer(bus, engine, file.string());
+    writer.onExecution([] {
+        ExecutionReport r;
+        r.client_order_id = OrderIdUtils::newClientOrderId("bk_A");
+        r.symbol = "A"; r.side = Side::BUY; r.last_quantity = 10; r.last_price = 50.0; r.exec_id = "x1";
+        return r;
+    }());
+
+    auto sink = std::make_shared<spdlog::sinks::ringbuffer_sink_mt>(200);
+    auto& logger = Logger::getLogger();
+    auto level = logger->level();  // tests run with logging off (test_main.cpp)
+    logger->set_level(spdlog::level::info);
+    logger->sinks().push_back(sink);
+    auto unsynced = std::make_shared<FakeExecutionEngine>();  // broker not connected yet: no positions
+    PortfolioManager pm2(bus, unsynced, file.string());
+    auto logged = [&] { std::string all; for (auto& l : sink->last_formatted()) all += l; return all; };
+    EXPECT_EQ(logged().find("MISMATCH"), std::string::npos) << logged();
+
+    pm2.resync();  // an explicit resync still reports a real mismatch
+    EXPECT_NE(logged().find("MISMATCH A"), std::string::npos);
+
+    unsynced->openPositions = {Position{"A", 10, 50.0, 50.0, 0.0}};
+    pm2.resync();  // main, after the account sync
+    EXPECT_TRUE(pm2.isReconciled("A"));
+    logger->sinks().pop_back();
+    logger->set_level(level);
     std::filesystem::remove(file);
 }

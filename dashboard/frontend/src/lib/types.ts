@@ -64,7 +64,8 @@ export interface Cycle {
   end_t: number | null; end_state: MasterState | null; filled: boolean | null
   fills: { t: number; symbol: string; side: string; quantity: number; price: number; exec_id: string; realized_pnl: number }[]
 }
-export interface Close { day: string; z: number | null; action: string; position: Side; state: MasterState }
+// action/position/state are null for days from the startup z history (before the journal began)
+export interface Close { day: string; z: number | null; action: string | null; position: Side | null; state: MasterState | null }
 
 export interface BasketDetail extends BasketRow {
   weights: Record<string, number>

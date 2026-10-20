@@ -242,6 +242,7 @@ int runLiveIbkr() {
     StrategyOptions options;
     options.state_dir = "state/baskets";
     options.rebuild_window_daily = true;
+    options.history_dir = "state/zhistory";
     options.risk = std::make_shared<RiskManager>(portfolioManager,
         loadRiskLimits("config/risk.json", *equity, allocationPerBasket));
 

@@ -71,6 +71,25 @@ def read_status(state_dir: Path) -> dict | None:
     return read_json(state_dir / "status.json")
 
 
+_zcache: dict[Path, tuple[int, list]] = {}
+
+
+def read_zhistory(state_dir: Path, basket: str) -> list[tuple[int, float]]:
+    """state/zhistory/<id>.json: the bot's z for each day of its warm-up history, written at
+    startup. [(day, z)], oldest first; [] if missing. Cached by mtime (61 files per page)."""
+    p = state_dir / "zhistory" / f"{basket}.json"
+    try:
+        mtime = p.stat().st_mtime_ns
+    except FileNotFoundError:
+        return []
+    hit = _zcache.get(p)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    days = [(int(d), float(z)) for d, z in (read_json(p) or {}).get("days", [])]
+    _zcache[p] = (mtime, days)
+    return days
+
+
 def control_flags(state_dir: Path) -> dict[str, bool]:
     return {"kill": (state_dir / "KILL").exists(), "flatten": (state_dir / "FLATTEN").exists()}
 

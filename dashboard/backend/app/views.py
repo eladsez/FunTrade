@@ -97,6 +97,9 @@ class Ctx:
         st = self.baskets.get(bid, {})
         legs = self.legs_of(bid)
         last = self.journal.last_close(bid)
+        zh = store.read_zhistory(self.s.state_dir, bid)
+        if zh and (not last or zh[-1][0] > last["day"]):
+            last = {"day": zh[-1][0], "z": zh[-1][1]}
         state = st.get("master_state", "FLAT")
         held_days = None
         if state in ("IN_POSITION", "EXIT_PENDING"):
@@ -150,12 +153,21 @@ class Ctx:
             **self.row(bid),
             "weights": cfg["weights"], "metrics": cfg["metrics"], "exported_at": cfg["exported_at"],
             "periods": cfg["periods"], "legs": legs,
-            "closes": [{"day": store.day_iso(c["day"]), "z": c["z"], "action": c["action"],
-                        "position": c["position"], "state": c["state"]} for c in j["closes"]],
+            "closes": self._closes(bid, j["closes"]),
             "cycles": cycles, "skipped": j["skipped"][-20:], "halts": j["halts"],
             "loss_limit": (self.status or {}).get("limits", {}).get("max_basket_loss_usd"),
             "allocation_fraction": risk.get("allocation_per_basket"),
         }
+
+    def _closes(self, bid: str, journaled: list) -> list:
+        """The journal's closes (z, decision, position) over the startup z history: history
+        fills the days before the journal began; a journaled day wins."""
+        by_day = {d: {"day": d, "z": z, "action": None, "position": None, "state": None}
+                  for d, z in store.read_zhistory(self.s.state_dir, bid)}
+        for c in journaled:
+            by_day[c["day"]] = c
+        return [{"day": store.day_iso(c["day"]), "z": c["z"], "action": c["action"], "position": c["position"],
+                 "state": c["state"]} for _, c in sorted(by_day.items())]
 
     # --- pages ---
     def overview(self) -> dict:

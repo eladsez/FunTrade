@@ -35,6 +35,7 @@ public:
     bool isDayComplete(int64_t day) const;
     std::optional<int64_t> latestCompleteDay() const;
     size_t completeDayCount() const;
+    std::vector<int64_t> completeDays() const;  // oldest first
     std::optional<double> dailyZScore(int64_t day) const;
     // Closes of `day` per leg, if the day is complete.
     std::optional<std::vector<double>> closesOn(int64_t day) const {
