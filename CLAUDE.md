@@ -5,8 +5,9 @@ Interactive Brokers. Baskets come from the Python research in `scripts/compute.p
 must trade exactly what that research simulates. IBKR is the only maintained broker; the
 Alpaca code still compiles but is not maintained.
 
-Status (Oct 2026): hardened, running paper on an IB Gateway paper account. Not cleared for
-real money. See `docs/ROADMAP.md` (phases, results) and `docs/OPERATIONS.md` (runbook).
+Status (Oct 2026): hardened; paper trading on the Raspberry Pi since 2026-10-20 (IBKR paper
+account, base currency ILS, ~$82k). Not cleared for real money: the plan is 4–6 clean paper
+weeks first. See `docs/ROADMAP.md` (phases, results) and `docs/OPERATIONS.md` (runbook).
 
 ## Build and test
 
@@ -129,6 +130,33 @@ ssh eladsez@rpi.tail4f4240.ts.net 'cd ~/funtrade && docker compose ps && python3
 ```
 Don't restart containers or touch `state/` during 09:00–16:15 New York without the owner's
 say-so. The Pi also runs an unrelated app (`finance-app`, its own runner); leave it alone.
+
+To see orders as IBKR sees them (the bot doesn't log PendingSubmit), run a read-only `ibapi`
+script in a throwaway container on the compose network, with its own client id:
+`docker run --rm --network funtrade_default -v <script>:/s.py python:3.12-slim sh -c "pip install -q ibapi==9.81.1.post1; python /s.py"`
+connecting to `ib-gateway:4004` (`reqAllOpenOrders`, `reqPositions`, `reqExecutions`).
+Don't log in to IBKR (web/mobile) with the paper user while the Pi runs: it takes over the
+Gateway's session.
+
+Deploy notes:
+- First boot: the bot exits and Docker restarts it until the Gateway has logged in (~1 min).
+  IBC accepts the paper disclaimer / API precaution dialogs (error 10141 once is normal).
+- Forced deploy: Actions → build-and-deploy → Run workflow → force. Only when nothing is
+  working at the broker (a restart cancels the day's MOC orders).
+- `actions/checkout@v4` triggers a Node 20 deprecation warning; bump to v5 at some point.
+
+## Open items
+
+- 2026-10-20: the first live MOC entries (5 baskets, 15 legs) sat in `PendingSubmit` at the
+  broker for hours. Unknown whether that is how paper holds MOC orders or a real problem;
+  check whether they filled at the 16:00 ET auction.
+- A React control/view dashboard (same standard as the owner's finance app) is planned.
+  Ask before adding ad-hoc status tooling (extra log lines, broker-check scripts) that it
+  would replace.
+- Baskets are the 2026-03-28 export. Plan: re-run `compute.py` into a separate folder,
+  validate on later holdout data, switch only if they hold up. Then re-select periodically.
+- Concentration: ~10 baskets are HBAN/SCHW variants; the per-symbol cap admits only the
+  first few in load order. Worth a smarter selection rule later.
 
 ## Research (Python)
 
