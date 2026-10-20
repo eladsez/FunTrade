@@ -115,13 +115,13 @@ bool IbkrExecutionEngine::connectToInfra() {
         return isAccountSynced_ && isPositionsSynced_ && isOrdersSynced_ && isExecutionsSynced_;
     });
 
+    // Partial state is worse than none: empty broker positions would make reconciliation halt
+    // every basket. The caller exits and the supervisor (Docker) retries.
     if (!synced) {
-        LOG_ERROR("[IbkrExecutionEngine] Timeout waiting for TWS state sync. Proceeding with partial/empty state.");
-        // Depending on your risk tolerance, you might want to return false here to crash the bot safely.
-    } else {
-        LOG_DEBUG("[IbkrExecutionEngine] Successfully synced all initial state from TWS.");
+        LOG_ERROR("[IbkrExecutionEngine] Timeout waiting for TWS state sync (Gateway not up or not logged in yet).");
+        return false;
     }
-
+    LOG_DEBUG("[IbkrExecutionEngine] Successfully synced all initial state from TWS.");
     return true;
 }
 

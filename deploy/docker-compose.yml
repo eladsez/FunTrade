@@ -1,0 +1,53 @@
+# FunTrade on the Raspberry Pi: IB Gateway (headless, IBC auto-login) + the bot.
+# Lives in ~/funtrade on the Pi (copied there by deploy.sh) next to .env, state/, logs/, gateway/.
+# Nothing is published beyond localhost; reach VNC/UI over SSH or tailscale.
+name: funtrade
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }   # SD card: cap Docker's own logs
+
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:10.50.1f   # stable channel, pinned; bump deliberately
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${TWS_USERID:?set in .env}
+      TWS_PASSWORD: ${TWS_PASSWORD:?set in .env}
+      TRADING_MODE: paper
+      READ_ONLY_API: "no"
+      TWS_ACCEPT_INCOMING: accept
+      BYPASS_WARNING: "yes"
+      # Paper sessions take over from any other login of the same paper user.
+      EXISTING_SESSION_DETECTED_ACTION: primary
+      # Daily restart without a new login, outside US market hours.
+      AUTO_RESTART_TIME: "11:45 PM"
+      TWOFA_TIMEOUT_ACTION: restart
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      TIME_ZONE: America/New_York
+      TZ: America/New_York
+      TWS_SETTINGS_PATH: /home/ibgateway/tws_settings
+      VNC_SERVER_PASSWORD: ${VNC_SERVER_PASSWORD:-}   # empty = VNC off
+    volumes:
+      - ./gateway:/home/ibgateway/tws_settings
+    ports:
+      - "127.0.0.1:5900:5900"   # VNC (only if VNC_SERVER_PASSWORD is set)
+    logging: *logging
+
+  funtrade:
+    image: ghcr.io/eladsez/funtrade:${FUNTRADE_TAG:?set by deploy.sh}
+    restart: unless-stopped
+    depends_on: [ib-gateway]
+    environment:
+      IBKR_HOST: ib-gateway
+      IBKR_PORT: "4004"     # the gateway image's socat relay to the paper API (4002)
+      IBKR_CLIENT_ID: "1"
+      TZ: America/New_York  # log timestamps in market time
+    volumes:
+      - ./state:/app/state
+      - ./logs:/app/logs
+    ports:
+      - "127.0.0.1:9000:9000"   # UI WebSocket
+    # stop() cancels working orders and saves state; give it time.
+    stop_grace_period: 60s
+    logging: *logging

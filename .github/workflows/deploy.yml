@@ -1,0 +1,93 @@
+# Push to main → build + unit tests in an arm64 image on GitHub's runner → push to GHCR →
+# deploy on the Raspberry Pi (self-hosted runner, label `funtrade`). Pull requests build and
+# test only. The Pi's runner only connects out to GitHub; no port is opened at home.
+name: build-and-deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Deploy now, even during US market hours (cancels today's working MOC orders)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/eladsez/funtrade
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm   # native arm64, same as the Pi
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: no secrets or runtime state in the repo
+        run: |
+          bad=$(git ls-files | grep -E '(^|/)\.env$|^state/|^logs/|^deploy/gateway/' || true)
+          if [ -n "$bad" ]; then echo "::error::tracked files that must never be committed:"; echo "$bad"; exit 1; fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: build (runs the unit tests) and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          build-args: GIT_SHA=${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, funtrade]
+    environment: rpi-paper
+    timeout-minutes: 600   # deploy.sh waits out the US session (up to ~7.5h)
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            deploy
+            scripts/state_report.py
+          sparse-checkout-cone-mode: false
+
+      - name: log in to GHCR (job token, expires with the job)
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: deploy
+        run: deploy/deploy.sh "${{ github.sha }}"
+        env:
+          FORCE_DEPLOY: ${{ inputs.force && '1' || '' }}
+
+      - name: log out of GHCR
+        if: always()
+        run: docker logout ghcr.io

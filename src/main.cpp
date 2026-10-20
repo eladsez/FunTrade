@@ -171,7 +171,11 @@ int runLiveIbkr() {
     auto orderManager = std::make_shared<OrderManager>(eventBus, execEngine);
     auto portfolioManager = std::make_shared<PortfolioManager>(eventBus, execEngine, "state/positions.json");
 
-    execEngine->connectToInfra();   // blocks until account, positions, orders, executions synced
+    // Blocks until account, positions, orders and executions are synced.
+    if (!execEngine->connectToInfra()) {
+        LOG_ERROR("[LIVE] No complete account state from TWS. Exiting without trading.");
+        return 1;
+    }
     dataFeed->connectToInfra();
     eventBus->flush();              // replayed executions are now booked
     orderManager->syncWithExchange();
