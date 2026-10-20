@@ -2,6 +2,7 @@
 #include <risk/UiBroadcaster.hpp>
 #include <utils/TimeUtils.hpp>
 #include <utils/StateStore.hpp>
+#include <utils/Journal.hpp>
 #include <core/Logger.hpp>
 #include <fstream>
 #include <stdexcept>
@@ -339,6 +340,9 @@ void BasketMeanReversionStrategy::decide(int64_t day) {
     if (pending_action_ != PendingAction::NONE) {
         LOG_INFO("[{}] Close z = {:.4f} -> {} at next session.", basket_id_, last_daily_z_.value_or(0.0), name(pending_action_));
     }
+    Journal::instance().record("close", {{"basket", basket_id_}, {"day", day},
+        {"z", last_daily_z_ ? nlohmann::json(*last_daily_z_) : nlohmann::json(nullptr)},
+        {"state", name(master_state_)}, {"position", name(current_position_)}, {"action", name(pending_action_)}});
 }
 
 // =========================================================================
@@ -352,18 +356,21 @@ void BasketMeanReversionStrategy::enter(PositionState side) {
 
     if (!basket_state_->hasAllPrices()) {
         LOG_WARN("[{}] Entry skipped: no price for every leg yet.", basket_id_);
+        Journal::instance().record("entry_skipped", {{"basket", basket_id_}, {"reason", "no price for every leg"}});
         return;
     }
 
     auto targets = BasketSizer::calculateEntry(side, capital_allocation_, basket_state_->getWeights(), prices);
     if (!targets) {
         LOG_INFO("[{}] BasketSizer rejected entry.", basket_id_);
+        Journal::instance().record("entry_skipped", {{"basket", basket_id_}, {"reason", "sizer rejected the entry"}});
         return;
     }
 
     if (options_.risk) {
         if (auto reason = options_.risk->approveEntry(basket_id_, basket_state_->getSymbols(), *targets, prices)) {
             LOG_WARN("[{}] Risk rejected entry: {}", basket_id_, *reason);
+            Journal::instance().record("entry_skipped", {{"basket", basket_id_}, {"reason", *reason}});
             return;
         }
     }
@@ -405,6 +412,14 @@ void BasketMeanReversionStrategy::dispatchCycle(const std::vector<LegTarget>& ta
     }
     saveState();  // the cycle is on disk before any order leaves
 
+    nlohmann::json legs = nlohmann::json::array();
+    for (const auto& req : orders) {
+        legs.push_back({{"symbol", req.symbol}, {"side", name(req.side)}, {"quantity", req.quantity},
+                        {"client_order_id", req.client_order_id}});
+    }
+    Journal::instance().record("cycle_start", {{"basket", basket_id_}, {"label", label}, {"day", cycle_day_},
+        {"position", name(current_position_)}, {"legs", legs}});
+
     // Every leg is registered before the first order goes out, so a fast fill can't
     // complete the cycle early.
     for (const auto& req : orders) {
@@ -430,7 +445,13 @@ void BasketMeanReversionStrategy::dispatchCycle(const std::vector<LegTarget>& ta
     }
 }
 
+// Every resolved cycle passes through here, so this is where its outcome is journaled.
 void BasketMeanReversionStrategy::resetCycle() {
+    if (current_cycle_) {
+        Journal::instance().record("cycle_end", {{"basket", basket_id_}, {"state", name(master_state_)},
+            {"position", name(current_position_)}, {"filled", current_cycle_->hasAnyFills()},
+            {"missed_shares", current_cycle_->getMissedShares()}});
+    }
     current_cycle_.reset();
     cycle_legs_.clear();
     cycle_active_ = false;
@@ -442,6 +463,7 @@ void BasketMeanReversionStrategy::halt(const std::string& reason) {
     master_state_ = MasterState::SYSTEM_HALTED;
     pending_action_ = PendingAction::NONE;
     halt_reason_ = reason;
+    Journal::instance().record("halt", {{"basket", basket_id_}, {"reason", reason}});
     saveState();
     broadcastState();
 }

@@ -12,6 +12,8 @@
 #include <utils/magic_enum.hpp>
 #include <risk/RiskManager.hpp>
 #include <utils/TimeUtils.hpp>
+#include <utils/Journal.hpp>
+#include <utils/StateStore.hpp>
 
 #include <core/Logger.hpp>
 #include <core/EventBus.hpp>
@@ -153,7 +155,40 @@ static RiskLimits loadRiskLimits(const std::string& path, double equity, double 
     return limits;
 }
 
+// state/status.json for the dashboard: what only this process knows (account value, broker
+// connection, risk usage). Rewritten every minute, and with running = false at shutdown.
+static void writeStatus(IbkrInfra& infra, IbkrExecutionEngine& engine, const PortfolioManager& pm,
+                        const RiskManager& risk, double startEquity, size_t baskets, int64_t startedMs, bool running) {
+    using namespace std::chrono;
+    const char* sha = std::getenv("FUNTRADE_GIT_SHA");
+    const auto& limits = risk.limits();
+    auto equity = engine.getPortfolioValue();
+    nlohmann::json j = {
+        {"updated_at", duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count()},
+        {"started_at", startedMs},
+        {"running", running},
+        {"git_sha", sha ? sha : "unknown"},
+        {"broker_connected", infra.client().connected()},
+        {"equity_usd", equity ? nlohmann::json(*equity) : nlohmann::json(nullptr)},
+        {"equity_at_start_usd", startEquity},
+        {"baskets", baskets},
+        {"gross_exposure_usd", pm.getGrossExposure()},
+        {"reserved_gross_usd", risk.reservedGross()},
+        {"limits", {{"max_gross_exposure_usd", limits.max_gross_exposure_usd},
+                    {"max_symbol_net_usd", limits.max_symbol_net_usd},
+                    {"max_basket_loss_usd", limits.max_basket_loss_usd}}},
+        {"kill", risk.killSwitchActive()},
+        {"flatten", risk.flattenRequested()},
+    };
+    state::writeJsonAtomic("state/status.json", j);
+}
+
 int runLiveIbkr() {
+    const auto startedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    // Open before connecting: fills booked while syncing missed executions are journaled too.
+    Journal::instance().open("state/journal.jsonl");
+
     const char* envHost = std::getenv("IBKR_HOST");
     const char* envPort = std::getenv("IBKR_PORT");
     const char* envClient = std::getenv("IBKR_CLIENT_ID");
@@ -218,11 +253,25 @@ int runLiveIbkr() {
 
     LOG_INFO("[LIVE] Running {} baskets. Ctrl+C stops (positions persist; nothing is flattened).",
              orchestrator.getStrategyCount());
+    const char* sha = std::getenv("FUNTRADE_GIT_SHA");
+    Journal::instance().record("start", {{"git_sha", sha ? sha : "unknown"}, {"baskets", orchestrator.getStrategyCount()}});
+    auto status = [&](bool running) {
+        writeStatus(*infra, *execEngine, *portfolioManager, *options.risk, *equity,
+                    orchestrator.getStrategyCount(), startedMs, running);
+    };
+    auto nextStatus = std::chrono::steady_clock::now();
     while (!g_shutdown_requested.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() >= nextStatus) {
+            status(true);
+            nextStatus += std::chrono::minutes(1);
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     orchestrator.stopAll();
+    status(false);
+    Journal::instance().record("stop");
+    Journal::instance().close();
     LOG_INFO("[LIVE] Shutting down...");
     return 0;
 }

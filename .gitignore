@@ -17,3 +17,10 @@ logs/
 data/*.csv
 __pycache__/
 state/
+
+# dashboard
+!dashboard/frontend/src/lib/
+dashboard/frontend/node_modules/
+dashboard/frontend/dist/
+dashboard/dev/data/
+.pytest_cache/

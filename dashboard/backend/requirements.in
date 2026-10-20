@@ -1,0 +1,8 @@
+# Direct dependencies. The installed set is requirements.txt (every package pinned with
+# hashes). Regenerate: dashboard/dev.sh lock
+fastapi==0.142.4
+uvicorn==0.54.0
+websockets==17.2
+ibapi==9.81.1.post1   # read-only broker view; the same client the ops scripts use
+pytest==9.1.1
+httpx==0.28.1

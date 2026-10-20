@@ -24,6 +24,7 @@ add_executable(unit_tests
     test_ibkr_order_tracker.cpp
     test_restart.cpp
     test_risk_and_mock.cpp
+    test_journal.cpp
 )
 target_include_directories(unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(unit_tests FunTradeLib GTest::gtest pthread)

@@ -1,0 +1,11 @@
+{
+  "name": "FunTrade",
+  "short_name": "FunTrade",
+  "description": "FunTrade bot: baskets, orders, controls",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0E1116",
+  "theme_color": "#12161C",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
