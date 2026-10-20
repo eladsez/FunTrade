@@ -112,6 +112,10 @@ Persistence and restart:
   with new symbols can hit the limit.
 - MOC orders must reach the exchange by ~15:50 ET. Later ones are rejected; the basket
   re-decides at the next close.
+- Paper MOC orders show `PendingSubmit` all day (the bot sees no status change) and fill at
+  ~15:59:30 ET at the last price, not at the official closing auction. Real accounts fill at
+  the official close (what the research assumes), so paper P&L won't match the simulator to
+  the cent. First verified 2026-10-20: 5 baskets, 15/15 legs filled, all "Entry cycle perfect".
 - The Gateway restarts daily and needs a fresh login about weekly.
 - `test_ibkr_execution`-style probing belongs on a separate paper account (see above).
   For read-only checks, a small Python `ibapi` script with its own client id is fine.
@@ -147,9 +151,9 @@ Deploy notes:
 
 ## Open items
 
-- 2026-10-20: the first live MOC entries (5 baskets, 15 legs) sat in `PendingSubmit` at the
-  broker for hours. Unknown whether that is how paper holds MOC orders or a real problem;
-  check whether they filled at the 16:00 ET auction.
+- `logs/funtrade.log` lags: the file sink flushes only on warnings, so recent info lines
+  (fills, state changes) may be missing. `docker compose logs funtrade` is complete. Fix:
+  a periodic flush (`spdlog::flush_every`), pending the owner's go-ahead.
 - A React control/view dashboard (same standard as the owner's finance app) is planned.
   Ask before adding ad-hoc status tooling (extra log lines, broker-check scripts) that it
   would replace.
