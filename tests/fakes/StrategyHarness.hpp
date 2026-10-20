@@ -37,6 +37,7 @@ protected:
     std::shared_ptr<BasketMeanReversionStrategy> strat;
     std::function<void(RiskLimits&)> riskConfig;
     bool persist = false;
+    bool rebuildDaily = false;
     bool stopped = false;
     bool sessionOpen = false;
     int64_t day = kLastHistoryDay;
@@ -71,6 +72,7 @@ protected:
         pm = std::make_shared<PortfolioManager>(bus, engine, persist ? (tmp / "positions.json").string() : "");
         StrategyOptions opts;
         if (persist) opts.state_dir = (tmp / "baskets").string();
+        opts.rebuild_window_daily = rebuildDaily;
         if (riskConfig) {
             RiskLimits limits;
             riskConfig(limits);

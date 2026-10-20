@@ -238,3 +238,37 @@ TEST_F(BasketStrategyTest, BasketLossLimitExitsThenHalts) {
     fillFrom(2);
     EXPECT_EQ(strat->masterState(), MasterState::SYSTEM_HALTED);
 }
+
+// Live mode re-reads the dividend-adjusted history at each close. That close is "today" on
+// the wall clock and must be part of the rebuilt window, not dropped as a forming bar.
+class DailyRebuildTest : public StrategyHarness {
+protected:
+    void setHistory(int64_t lastDay, double oldShift) {
+        std::vector<HistoricalBar> a, b;
+        for (int i = 0; i < 2 * kWindow; ++i) {
+            int64_t d = lastDay - (2 * kWindow - 1) + i;
+            double s = (i == 2 * kWindow - 1) ? 0.0 : oldShift + spreadAt(i);  // last day at 0
+            a.push_back(HistoricalBar{"A", ms(d), 0, 0, 0, 100.0 * std::exp(s), 1e6, 0, 0});
+            b.push_back(HistoricalBar{"B", ms(d), 0, 0, 0, 100.0, 1e6, 0, 0});
+        }
+        bus->setHistory("A", a);
+        bus->setHistory("B", b);
+    }
+};
+
+TEST_F(DailyRebuildTest, RebuildAtTodaysCloseUsesAdjustedHistory) {
+    using namespace std::chrono;
+    int64_t today = floor<days>(locate_zone("America/New_York")->to_local(system_clock::now()))
+                        .time_since_epoch().count();
+    rebuildDaily = true;
+    day = today - 1;  // yesterday was the last close
+    build();
+    setHistory(today - 1, 0.0);
+    start();
+    EXPECT_EQ(strat->pendingAction(), PendingAction::NONE);
+
+    // A dividend: the broker's adjusted history now has A's past closes lower.
+    setHistory(today, -0.05);
+    closeDay(0.0);  // today's close, at the unadjusted mean
+    EXPECT_EQ(strat->pendingAction(), PendingAction::ENTER_SHORT) << "z must come from the adjusted window";
+}

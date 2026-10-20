@@ -135,6 +135,7 @@ void IbkrDataFeed::subscribeToSymbol(const std::string& symbol) {
         infra_->client()->reqTickByTickData(ids.tbtMidPointId, contract, "MidPoint", 0, false);
     } else {
         LOG_INFO("[IbkrDataFeed] Requesting MKT DATA (L1) for {}", symbol);
+        infra_->client()->reqMarketDataType(kMarketDataType);
         infra_->client()->reqMktData(ids.mktDataId, contract, "", false, false, TagValueListSPtr());
     }
 }
@@ -187,6 +188,7 @@ void IbkrDataFeed::onReconnect() {
     std::lock_guard<std::mutex> lock(dataMutex_);
     if (!infra_->client().connected()) return;
 
+    if (!useTickByTick_) infra_->client()->reqMarketDataType(kMarketDataType);
     for (const auto& [symbol, ids] : activeSubscriptions_) {
         Contract contract = createContract(symbol);
         
@@ -278,7 +280,21 @@ void IbkrDataFeed::onTickByTickMidPoint(int reqId, time_t time, double midPoint)
     }
 }
 
+// Delayed data arrives as DELAYED_* tick types; treat them like their real-time counterparts.
+static TickType liveEquivalent(TickType field) {
+    switch (field) {
+        case TickType::DELAYED_BID: return TickType::BID;
+        case TickType::DELAYED_ASK: return TickType::ASK;
+        case TickType::DELAYED_LAST: return TickType::LAST;
+        case TickType::DELAYED_BID_SIZE: return TickType::BID_SIZE;
+        case TickType::DELAYED_ASK_SIZE: return TickType::ASK_SIZE;
+        case TickType::DELAYED_LAST_SIZE: return TickType::LAST_SIZE;
+        default: return field;
+    }
+}
+
 void IbkrDataFeed::onTickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& /*attribs*/) {
+    field = liveEquivalent(field);
     std::string symbol = getSymbolFromId(tickerId);
     if (symbol.empty() || price <= 0.0) return;
 
@@ -345,6 +361,7 @@ void IbkrDataFeed::onTickPrice(TickerId tickerId, TickType field, double price, 
 }
 
 void IbkrDataFeed::onTickSize(TickerId tickerId, TickType field, Decimal size) {
+    field = liveEquivalent(field);
     std::string symbol = getSymbolFromId(tickerId);
     if (symbol.empty()) return;
 
@@ -476,8 +493,9 @@ std::vector<HistoricalBar> IbkrDataFeed::fetchHistoricalBars(const std::string& 
     
     // Daily bars are requested dividend/split ADJUSTED, to match the research data
     // (yfinance auto_adjust). IBKR only serves ADJUSTED_LAST up to "now" (empty end time).
+    // FX pairs (e.g. "USD.ILS") have no trades; their bars are midpoints.
     bool daily = (timeframe == "1Day");
-    std::string whatToShow = daily ? "ADJUSTED_LAST" : "TRADES";
+    std::string whatToShow = contract.secType == "CASH" ? "MIDPOINT" : daily ? "ADJUSTED_LAST" : "TRADES";
     if (daily) ibkrEndDateTime.clear();
 
     // useRTH = 1, formatDate = 1 (String format)

@@ -19,6 +19,13 @@ export IBKR_HOST=127.0.0.1 IBKR_PORT=4002 IBKR_CLIENT_ID=1   # defaults shown
 ./build/FunTrade
 ```
 
+Market data: no paid subscription is needed. The bot trades on daily dividend-adjusted
+history (free over the API) and uses 15-minute delayed quotes when there is no real-time
+subscription. Two things block data: being logged in to the **live** account elsewhere (TWS,
+mobile app) while the paper Gateway runs (errors 10197/162), and "Read-Only API" left on
+(error 321, no orders). A non-USD account with no USD balance gets its USD rate from IBKR's
+FX data at startup.
+
 Startup order (automatic): restore books from `state/` → connect and sync account,
 positions, open orders and **today's executions** (fills that happened while the bot was
 down are booked, duplicates ignored) → reconcile every symbol against the broker → start

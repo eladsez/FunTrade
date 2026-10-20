@@ -283,8 +283,21 @@ void IbkrExecutionEngine::onExecDetails(int reqId, const Contract& contract, con
 }
 
 std::optional<double> IbkrExecutionEngine::toUsd(const std::optional<double>& baseValue) {
-    if (!baseValue || !usdRate_ || *usdRate_ <= 0.0) return std::nullopt;
-    return *baseValue / *usdRate_;
+    if (!baseValue) return std::nullopt;
+    if (baseCurrency_ == "USD") return baseValue;
+    std::optional<double> rate = usdRate_ ? usdRate_ : usdRateFallback_;
+    if (!rate || *rate <= 0.0) return std::nullopt;
+    return *baseValue / *rate;
+}
+
+std::optional<std::string> IbkrExecutionEngine::getBaseCurrency() {
+    std::lock_guard<std::mutex> lock(accountMutex_);
+    return baseCurrency_;
+}
+
+void IbkrExecutionEngine::setUsdRateFallback(double baseUnitsPerUsd) {
+    std::lock_guard<std::mutex> lock(accountMutex_);
+    usdRateFallback_ = baseUnitsPerUsd;
 }
 
 void IbkrExecutionEngine::onUpdateAccountValue(const std::string& key, const std::string& val, const std::string& currency, const std::string& accountName) {
@@ -295,6 +308,7 @@ void IbkrExecutionEngine::onUpdateAccountValue(const std::string& key, const std
             baseAvailableFunds_ = std::stod(val);
         } else if (key == "NetLiquidation" && currency != "BASE") {
             baseNetLiquidation_ = std::stod(val);
+            baseCurrency_ = currency;
         } else if (key == "ExchangeRate" && currency == "USD") {
             usdRate_ = std::stod(val);
         }

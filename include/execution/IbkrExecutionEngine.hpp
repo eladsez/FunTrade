@@ -37,6 +37,8 @@ public:
     // Synchronous Account/Portfolio Methods
     std::optional<double> getAvailableCash() override;
     std::optional<double> getPortfolioValue() override;
+    std::optional<std::string> getBaseCurrency();
+    void setUsdRateFallback(double baseUnitsPerUsd);
     std::vector<Position> getOpenPositions() override;
     std::vector<OrderState> getOpenOrders() override;
 
@@ -76,6 +78,10 @@ private:
     std::optional<double> baseAvailableFunds_;
     std::optional<double> baseNetLiquidation_;
     std::optional<double> usdRate_;
+    // TWS sends ExchangeRate[USD] only while the account holds USD; until then main sets
+    // this from IBKR's FX quotes. A rate from TWS takes precedence.
+    std::optional<double> usdRateFallback_;
+    std::optional<std::string> baseCurrency_;
     std::optional<double> toUsd(const std::optional<double>& baseValue);
 
     // Initialization Sync Barrier

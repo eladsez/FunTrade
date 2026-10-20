@@ -19,10 +19,14 @@ uint64_t timestampOf(const MarketEvent& e) {
     return std::visit([](auto&& t) { return t.timestamp_ms; }, e);
 }
 
-int64_t wallClockDay() {
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::system_clock::now().time_since_epoch()).count();
-    return tradingDay(static_cast<uint64_t>(ms));
+// First day whose daily bar may still be forming: today in New York until the EOD fetch
+// (18:00 ET), tomorrow after it. Keyed like tradingDay(), which is the bar's calendar date.
+int64_t firstUnsettledDay() {
+    using namespace std::chrono;
+    auto ny = locate_zone("America/New_York")->to_local(system_clock::now());
+    auto day = floor<days>(ny);
+    if (ny - day >= hours{18}) day += days{1};
+    return day.time_since_epoch().count();
 }
 
 template <typename E>
@@ -131,8 +135,8 @@ void BasketMeanReversionStrategy::loadConfig() {
 // History
 // =========================================================================
 
-// Loads daily closes from the feed. Bars dated today (wall clock) are skipped: during the
-// session today's daily bar is still forming. `up_to_day` additionally bounds the bars used.
+// Loads daily closes from the feed. With `up_to_day` (the close being processed) it loads
+// bars up to that day. Without it (warm-up) it skips bars that may still be forming.
 void BasketMeanReversionStrategy::loadHistory(std::optional<int64_t> up_to_day) {
     auto now = std::chrono::system_clock::now();
     // ~1.45 calendar days per trading day; 2x plus slack covers holidays.
@@ -140,7 +144,7 @@ void BasketMeanReversionStrategy::loadHistory(std::optional<int64_t> up_to_day) 
     auto start = now - std::chrono::hours(24 * calendar_days_back);
     std::string end_time = utils::formatTimePoint(now);
     std::string start_time = utils::formatTimePoint(start);
-    int64_t today = wallClockDay();
+    int64_t unsettled = firstUnsettledDay();
 
     const auto& symbols = basket_state_->getSymbols();
     std::vector<std::vector<HistoricalBar>> all(symbols.size());
@@ -151,8 +155,7 @@ void BasketMeanReversionStrategy::loadHistory(std::optional<int64_t> up_to_day) 
     for (size_t i = 0; i < symbols.size(); ++i) {
         for (const auto& bar : all[i]) {
             int64_t day = tradingDay(bar.timestamp_ms);
-            if (day >= today) continue;
-            if (up_to_day && day > *up_to_day) continue;
+            if (up_to_day ? day > *up_to_day : day >= unsettled) continue;
             basket_state_->setDailyClose(symbols[i], day, bar.close);
         }
     }

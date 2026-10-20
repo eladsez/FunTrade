@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <utils/magic_enum.hpp>
 #include <risk/RiskManager.hpp>
+#include <utils/TimeUtils.hpp>
 
 #include <core/Logger.hpp>
 #include <core/EventBus.hpp>
@@ -181,6 +182,18 @@ int runLiveIbkr() {
         if (std::ifstream f("config/risk.json"); f.is_open()) f >> j;
         return j.value("allocation_per_basket", 0.05);
     }();
+    // A non-USD account reports ExchangeRate[USD] only while it holds USD; until then take
+    // the rate from IBKR's FX bars.
+    auto base = execEngine->getBaseCurrency();
+    if (!execEngine->getPortfolioValue() && base && *base != "USD") {
+        auto now = std::chrono::system_clock::now();
+        auto bars = dataFeed->fetchHistoricalBars("USD." + *base, utils::formatTimePoint(now - std::chrono::hours(24 * 7)),
+                                                  utils::formatTimePoint(now), "1Day");
+        if (!bars.empty()) {
+            execEngine->setUsdRateFallback(bars.back().close);
+            LOG_INFO("[LIVE] No USD balance; using USD.{} = {:.4f} from IBKR FX data.", *base, bars.back().close);
+        }
+    }
     auto equity = execEngine->getPortfolioValue();
     if (!equity) {
         LOG_ERROR("[LIVE] No account value (NetLiquidation/ExchangeRate) from TWS. Refusing to trade.");

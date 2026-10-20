@@ -1,8 +1,9 @@
 {
     "_doc": "Live risk limits. Fractions are of account equity (USD net liquidation) at startup, except max_basket_loss which is a fraction of one basket's allocation.",
-    "allocation_per_basket": 0.05,
+    "_allocation": "0.061 ~ $5,000 per basket at ~$82k equity: the capital compute.py tests baskets with (integer-share sizing depends on it).",
+    "allocation_per_basket": 0.061,
     "max_gross_exposure": 1.0,
-    "max_symbol_net": 0.10,
+    "max_symbol_net": 0.1,
     "max_basket_loss": 0.15,
     "kill_switch_file": "state/KILL",
     "flatten_file": "state/FLATTEN"

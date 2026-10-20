@@ -119,7 +119,10 @@ private:
     std::atomic<int> nextTickerId_{2000}; 
     std::atomic<int> nextHistReqId_{4000}; // Separate ID space for historical requests
     bool useTickByTick_;
-    
+    // 3 = delayed: real-time where the account has a subscription, 15-min delayed otherwise.
+    // The strategy trades on daily closes, so delayed quotes are enough.
+    static constexpr int kMarketDataType = 3;
+
     std::unordered_map<std::string, SymbolSubscriptionIds> activeSubscriptions_;
     std::unordered_map<int, TopOfBookCache> mktDataCache_;
     std::unordered_map<int, std::string> idToSymbol_; // Maps any ID back to its symbol

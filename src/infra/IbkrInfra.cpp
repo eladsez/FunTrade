@@ -225,8 +225,14 @@ void IbkrInfra::contractDetailsEnd(int reqId) {
 // --- System & Error Handling ---
 
 void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string& errorString, const std::string& advancedOrderRejectJson) {
-    (void)id; (void)errorTime; (void)advancedOrderRejectJson;
-    LOG_DEBUG("[IbkrInfra] TWS ({}): {}", errorCode, errorString);
+    (void)errorTime; (void)advancedOrderRejectJson;
+    // 21xx are status notices (data farm OK, ...); 10167 is "showing delayed data", expected
+    // without a real-time subscription. Anything else (e.g. 10089/354/162 missing market data
+    // permissions, order rejections) must be visible in the log.
+    bool notice = (errorCode >= 2100 && errorCode < 2200) || errorCode == 10167 ||
+                  (errorCode >= 1100 && errorCode <= 1102);  // logged below
+    if (notice) LOG_DEBUG("[IbkrInfra] TWS ({}): {}", errorCode, errorString);
+    else LOG_WARN("[IbkrInfra] TWS error {} (req {}): {}", errorCode, id, errorString);
 
     // Socket-level loss (our connection to TWS/Gateway): reconnect.
     if (errorCode == 504 || errorCode == 502) { 
