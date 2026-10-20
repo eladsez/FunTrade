@@ -76,6 +76,11 @@ public:
     bool killSwitchActive() const { return fileExists(limits_.kill_switch_file); }
     bool flattenRequested() const { return fileExists(limits_.flatten_file); }
     const RiskLimits& limits() const { return limits_; }
+    // Exposure reserved by entries in flight (MOC orders not filled yet).
+    double reservedGross() const {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return reservedGrossLocked();
+    }
 
 private:
     struct Reservation {

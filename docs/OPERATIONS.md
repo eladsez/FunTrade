@@ -45,6 +45,8 @@ kept**. The next start resumes them. Nothing is flattened on shutdown.
 |---|---|
 | `state/positions.json` | Per-basket positions, realized PnL, executions already booked |
 | `state/baskets/<id>.json` | Basket state, pending action, in-flight orders, halt reason |
+| `state/journal.jsonl` | Append-only events for the dashboard: each basket's close z and decision, cycles, fills, skipped entries, halts, start/stop. The bot never reads it back |
+| `state/status.json` | Heartbeat for the dashboard (every minute; `running: false` on a clean stop): equity, broker connection, exposure, limits |
 | `logs/funtrade.log` | Rotating log (10 × 10 MB); warnings and errors flushed immediately |
 | `config/risk.json` | Allocation and risk limits (fractions of account equity) |
 | `config/basket_configs/` | The baskets |
@@ -58,6 +60,8 @@ State files are written atomically. **Never edit them while the bot runs.**
 | Stop new entries (keep positions, exits still allowed) | `touch state/KILL` |
 | Exit every basket at the next session | `touch state/FLATTEN` |
 | Resume | delete the file |
+
+The dashboard's System page does the same (type-to-confirm, audit-logged).
 
 ## Daily checks
 
@@ -100,9 +104,10 @@ compose network). Everything lives in `~/funtrade` on the Pi:
 
 | Path | What |
 |---|---|
-| `.env` | Paper login (`TWS_USERID`, `TWS_PASSWORD`), optional `VNC_SERVER_PASSWORD`, and `FUNTRADE_TAG` (managed by deploy.sh). chmod 600, never committed |
+| `.env` | Paper login (`TWS_USERID`, `TWS_PASSWORD`), optional `VNC_SERVER_PASSWORD`, and `FUNTRADE_TAG` / `DASHBOARD_TAG` (managed by deploy.sh). chmod 600, never committed |
 | `docker-compose.yml`, `state_report.py` | Installed by each deploy |
 | `state/`, `logs/` | The bot's state and log (same as above) |
+| `dashboard/` | The dashboard's audit log (`audit.jsonl`) and backups of cleared halts |
 | `gateway/` | Gateway settings, kept across restarts |
 
 **Deploys.** Push to `main` → GitHub builds an arm64 image (unit tests run inside the build),
@@ -110,7 +115,9 @@ pushes `ghcr.io/eladsez/funtrade:<sha>`, then the Pi's runner (`~/actions-runner
 label `funtrade`) runs `deploy/deploy.sh <sha>`. It waits until 16:15 New York if the session
 is open (a restart mid-session cancels the day's MOC orders), restarts, and rolls back if the
 bot doesn't log `Running N baskets` within 5 minutes. "Run workflow" with *force* deploys
-immediately.
+immediately. The dashboard image (`ghcr.io/eladsez/funtrade-dashboard:<sha>`) is built on
+every push; when a push changes nothing outside `dashboard/` and docs, only the dashboard is
+deployed, right away, without touching the bot (`DASHBOARD_ONLY=1`).
 
 **On the Pi:**
 
@@ -131,3 +138,26 @@ View the Gateway: set `VNC_SERVER_PASSWORD`, `docker compose up -d`, then from y
 Only one Gateway may be logged in with the paper user. Close the one on WSL/desktop while the
 Pi runs (the Pi's takes over: `EXISTING_SESSION_DETECTED_ACTION=primary`). Logging in to the
 **live** account elsewhere still blocks market data (10197).
+
+## Dashboard
+
+`dashboard/` (FastAPI + React, one container, `127.0.0.1:8090` on the Pi). Pages: Overview,
+Baskets, basket detail (z history, legs, trades), Orders (bot vs broker), System (controls,
+halts, health, warnings).
+
+- **Reads:** `state/` (baskets, books, journal, status), `logs/funtrade.log`, the bot's UI
+  WebSocket (`funtrade:9000`, live prices and intraday z), and the Gateway through its own
+  read-only connection (client id 17: open orders, positions, today's executions, net
+  liquidation, every 60 s). That connection refuses order calls and market data in code.
+- **Writes:** `state/KILL`, `state/FLATTEN`, and "Clear halt" (only while the bot is
+  stopped: `running: false` in status.json, or no heartbeat for 5 minutes). Clearing backs
+  up the basket file and `positions.json` to `dashboard/backups/` first. Every write goes to
+  `dashboard/audit.jsonl` with the tailnet user when known.
+- **Access:** tailnet only. One-time on the Pi (Kupa already uses 443):
+  `sudo tailscale serve --bg --https=8443 http://127.0.0.1:8090`, then
+  `https://rpi.tail4f4240.ts.net:8443` (add it to the phone's home screen).
+- **History** (z chart, trades) starts with the first bot version that writes the journal.
+- **Restart only the dashboard:** `docker compose restart dashboard` (any time; the bot is
+  unaffected).
+- **Develop:** `dashboard/dev.sh up` (everything in containers, sample data, hot reload on
+  `localhost:5173`); `dashboard/dev.sh test` runs what the image build runs.

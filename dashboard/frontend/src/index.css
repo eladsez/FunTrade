@@ -1,0 +1,45 @@
+@import 'tailwindcss';
+
+/* One dark "terminal" theme (the approved sketches). Blue = long, orange = short,
+   red only when something is wrong. */
+@theme {
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --color-bg: #0e1116;
+  --color-bar: #12161c;
+  --color-panel: #161b22;
+  --color-raised: #1c232c;
+  --color-sel: #1f2731;
+  --color-line: #2a323d;
+  --color-line2: #222a33;
+  --color-edge: #3a4450;
+  --color-text: #e6eaf0;
+  --color-dim: #c4cbd5;
+  --color-muted: #9aa4b2;
+  --color-accent: #6ca8ff;
+  --color-link: #8ab8ff;
+
+  --color-long: #8ab8ff;
+  --color-long-bg: #14243a;
+  --color-long-bd: #244a78;
+  --color-short: #f5b97a;
+  --color-short-bg: #2a2116;
+  --color-short-bd: #6b4a26;
+  --color-good: #7fe0ae;
+  --color-good-bg: #123024;
+  --color-good-bd: #25553f;
+  --color-bad: #ffb3b3;
+  --color-bad-bg: #3a1518;
+  --color-bad-bd: #6b2a30;
+  --color-alert: #ff7b7b;
+  --color-ok: #5fd39a;
+  --color-warn: #f2a65a;
+}
+
+html { background: var(--color-bg); color-scheme: dark; }
+body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+a { color: var(--color-link); text-decoration: none; }
+a:hover { color: #b5d2ff; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }

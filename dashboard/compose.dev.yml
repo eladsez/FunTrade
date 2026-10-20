@@ -1,0 +1,45 @@
+# Local development, everything in containers (dashboard/dev.sh up):
+#   web  Vite dev server with hot reload        http://localhost:5173
+#   api  FastAPI with --reload, on made-up data  http://localhost:8090
+# No bot, no Gateway: the API reads a sample state/ in dev/data (dev.sh sample resets it).
+name: funtrade-dashboard-dev
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: dashboard/Dockerfile
+      target: app
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      FUNTRADE_STATE: /data/state
+      FUNTRADE_LOGS: /data/logs
+      DASHBOARD_DATA: /data/dashboard
+      BOT_WS_URL: ${BOT_WS_URL:-}
+      BROKER_ENABLED: ${BROKER_ENABLED:-0}
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+      - ./dev/data:/data
+    command: >
+      sh -c "[ -f /data/state/status.json ] || python -m app.sample /data/state /data/logs;
+             python -m app.sample heartbeat /data/state &
+             exec uvicorn app.main:create_app --factory --reload --reload-dir /app/app --host 0.0.0.0 --port 8080"
+    ports:
+      - "127.0.0.1:8090:8080"
+
+  web:
+    image: node:22-slim
+    working_dir: /web
+    environment:
+      API_URL: http://api:8080
+    volumes:
+      - ./frontend:/web
+      - node_modules:/web/node_modules
+    command: sh -c "npm ci --no-audit --no-fund && npm run dev"
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on: [api]
+
+volumes:
+  node_modules:

@@ -5,8 +5,9 @@ Interactive Brokers. Baskets come from the Python research in `scripts/compute.p
 must trade exactly what that research simulates. IBKR is the only maintained broker; the
 Alpaca code still compiles but is not maintained.
 
-Status (Oct 2026): hardened, running paper on an IB Gateway paper account. Not cleared for
-real money. See `docs/ROADMAP.md` (phases, results) and `docs/OPERATIONS.md` (runbook).
+Status (Oct 2026): hardened; paper trading on the Raspberry Pi since 2026-10-20 (IBKR paper
+account, base currency ILS, ~$82k). Not cleared for real money: the plan is 4–6 clean paper
+weeks first. See `docs/ROADMAP.md` (phases, results) and `docs/OPERATIONS.md` (runbook).
 
 ## Build and test
 
@@ -38,6 +39,9 @@ cmake --build build -j$(nproc)
   and prints `FILL day=<n> SIDE SYM QTY @ PX` lines, which `parity_check.py` parses.
 - `--debug` enables debug logging.
 - UI: WebSocket on port 9000 (`UiBroadcaster`), page in `index.html` (hardcoded `WS_URL`).
+  Superseded by the dashboard, which consumes the same WebSocket.
+- Dashboard: `dashboard/` (FastAPI backend + Vite/React/TS/Tailwind frontend, one image).
+  Dev in containers only: `dashboard/dev.sh up` (sample data, :5173), `dashboard/dev.sh test`.
 
 ## Architecture
 
@@ -96,6 +100,17 @@ Persistence and restart:
   book missed fills → reconcile per symbol → baskets that mismatch HALT (never auto-fix).
   In-flight cycles are reattached. Halts persist until a human clears them.
 - `stop()` cancels working orders and saves state. Shutdown never flattens.
+- `utils/Journal` appends `state/journal.jsonl` (close z + decision per basket per day,
+  cycle_start/cycle_end, fill, entry_skipped, halt, start/stop); main writes
+  `state/status.json` every minute (`running: false` on a clean stop). Both exist for the
+  dashboard: the bot never reads them, and a failed write must never affect trading.
+
+Dashboard (`dashboard/`):
+- Writes only `state/KILL`, `state/FLATTEN` and halt clears (only when status.json says the
+  bot stopped or is silent 5 min; backs up first). Everything else is read-only.
+- Its IBKR connection (client id 17) is read-only by construction (`broker.FORBIDDEN`:
+  no orders, no market data lines; tested). Never give it the bot's client id.
+- It deploys and restarts without the bot (`--no-deps`); keep it that way.
 
 ## IBKR facts learned the hard way
 
@@ -119,9 +134,12 @@ Persistence and restart:
 
 Paper runs on a Pi 4 (arm64, Debian 13) at `eladsez@rpi.tail4f4240.ts.net` (tailscale) in
 `~/funtrade`: compose project `funtrade` = `ib-gateway` (ghcr.io/gnzsnz/ib-gateway, IBC
-auto-login) + `funtrade` (ghcr.io/eladsez/funtrade:<sha>). CI: `.github/workflows/deploy.yml`
-(build/test arm64 image → GHCR → self-hosted runner `funtrade` runs `deploy/deploy.sh`, which
-never restarts during the US session unless forced). Runbook: `docs/OPERATIONS.md`.
+auto-login) + `funtrade` (ghcr.io/eladsez/funtrade:<sha>) + `dashboard`
+(ghcr.io/eladsez/funtrade-dashboard:<sha>, `127.0.0.1:8090`, tailnet via
+`tailscale serve --https=8443`). CI: `.github/workflows/deploy.yml` (build/test arm64 images →
+GHCR → self-hosted runner `funtrade` runs `deploy/deploy.sh`, which never restarts the bot
+during the US session unless forced; a push touching only `dashboard/`/docs deploys just the
+dashboard, immediately). Runbook: `docs/OPERATIONS.md`.
 
 Diagnosing (read-only, safe any time):
 ```bash
@@ -129,6 +147,32 @@ ssh eladsez@rpi.tail4f4240.ts.net 'cd ~/funtrade && docker compose ps && python3
 ```
 Don't restart containers or touch `state/` during 09:00–16:15 New York without the owner's
 say-so. The Pi also runs an unrelated app (`finance-app`, its own runner); leave it alone.
+
+To see orders as IBKR sees them (the bot doesn't log PendingSubmit), run a read-only `ibapi`
+script in a throwaway container on the compose network, with its own client id:
+`docker run --rm --network funtrade_default -v <script>:/s.py python:3.12-slim sh -c "pip install -q ibapi==9.81.1.post1; python /s.py"`
+connecting to `ib-gateway:4004` (`reqAllOpenOrders`, `reqPositions`, `reqExecutions`).
+Don't log in to IBKR (web/mobile) with the paper user while the Pi runs: it takes over the
+Gateway's session.
+
+Deploy notes:
+- First boot: the bot exits and Docker restarts it until the Gateway has logged in (~1 min).
+  IBC accepts the paper disclaimer / API precaution dialogs (error 10141 once is normal).
+- Forced deploy: Actions → build-and-deploy → Run workflow → force. Only when nothing is
+  working at the broker (a restart cancels the day's MOC orders).
+- `actions/checkout@v4` triggers a Node 20 deprecation warning; bump to v5 at some point.
+
+## Open items
+
+- 2026-10-20: the first live MOC entries (5 baskets, 15 legs) sat in `PendingSubmit` at the
+  broker for hours. Unknown whether that is how paper holds MOC orders or a real problem;
+  check whether they filled at the 16:00 ET auction.
+- Dashboard v1 is in `dashboard/` (screens approved from the design sketches). Add status
+  and visibility features there, not as ad-hoc tooling (extra log lines, broker scripts).
+- Baskets are the 2026-03-28 export. Plan: re-run `compute.py` into a separate folder,
+  validate on later holdout data, switch only if they hold up. Then re-select periodically.
+- Concentration: ~10 baskets are HBAN/SCHW variants; the per-symbol cap admits only the
+  first few in load order. Worth a smarter selection rule later.
 
 ## Research (Python)
 
@@ -159,3 +203,5 @@ Deps: `numpy pandas statsmodels yfinance joblib` (no requirements file; use a ve
   Bug fixes get a regression test that fails before the fix.
 - Comments explain why, briefly. Match the surrounding style.
 - Never commit `state/`, `logs/`, `build/`, or credentials.
+- `.gitignore` ignores every `lib/` (C++ build output); `dashboard/frontend/src/lib/` is
+  re-included explicitly. Keep it that way when touching ignore rules.

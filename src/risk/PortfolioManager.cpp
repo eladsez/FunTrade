@@ -4,6 +4,7 @@
 #include <risk/UiBroadcaster.hpp>
 #include <nlohmann/json.hpp>
 #include <utils/StateStore.hpp>
+#include <utils/Journal.hpp>
 #include <algorithm>
 #include <cmath>
 
@@ -190,6 +191,12 @@ void PortfolioManager::onExecution(const ExecutionReport& report) {
     // 2. Synchronize memory and indices
     bool was_purged = updatePositionIndex(report.symbol, virtual_key, was_flat, is_flat_now);
     saveStateLocked();
+
+    Journal::instance().record("fill", {{"basket", virtual_key.substr(0, virtual_key.rfind('_'))},
+        {"position_key", virtual_key}, {"symbol", report.symbol},
+        {"side", report.side == Side::BUY ? "BUY" : "SELL"}, {"quantity", report.last_quantity},
+        {"price", report.last_price}, {"exec_id", report.exec_id}, {"client_order_id", report.client_order_id},
+        {"position_after", pos.quantity}, {"realized_pnl", pos.realized_pnl}});
 
     // 3. Log results safely
     if (was_purged) {

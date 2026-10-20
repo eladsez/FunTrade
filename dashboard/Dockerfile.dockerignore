@@ -1,0 +1,9 @@
+# Build context = repo root (the image bakes in config/ from the same commit).
+*
+!config/
+!dashboard/backend/
+!dashboard/frontend/
+dashboard/frontend/node_modules
+dashboard/frontend/dist
+**/__pycache__
+**/.pytest_cache

@@ -51,3 +51,27 @@ services:
     # stop() cancels working orders and saves state; give it time.
     stop_grace_period: 60s
     logging: *logging
+
+  # Dashboard (dashboard/): reads the bot's state/ and logs/, its live WebSocket, and the
+  # Gateway over a read-only connection (client id 17). Writes only state/KILL, state/FLATTEN
+  # and, with the bot stopped, halt clears. Deploys and restarts independently of the bot.
+  # Remote access: tailscale serve (docs/OPERATIONS.md, Dashboard).
+  dashboard:
+    image: ghcr.io/eladsez/funtrade-dashboard:${DASHBOARD_TAG:?set by deploy.sh}
+    restart: unless-stopped
+    environment:
+      FUNTRADE_STATE: /data/state
+      FUNTRADE_LOGS: /data/logs
+      DASHBOARD_DATA: /data/dashboard
+      BOT_WS_URL: ws://funtrade:9000
+      IBKR_HOST: ib-gateway
+      IBKR_PORT: "4004"
+      IBKR_CLIENT_ID: "17"
+      TZ: America/New_York
+    volumes:
+      - ./state:/data/state
+      - ./logs:/data/logs:ro
+      - ./dashboard:/data/dashboard   # audit log, backups of cleared halts
+    ports:
+      - "127.0.0.1:8090:8080"
+    logging: *logging
