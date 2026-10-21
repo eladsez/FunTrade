@@ -31,8 +31,8 @@ public:
     // Starts all loaded strategies
     void startAll();
     
-    // Stops all active strategies
-    void stopAll();
+    // Stops all active strategies. handOver: leave working orders for the next process.
+    void stopAll(bool handOver = false);
 
     // Returns the number of loaded strategies
     size_t getStrategyCount() const;

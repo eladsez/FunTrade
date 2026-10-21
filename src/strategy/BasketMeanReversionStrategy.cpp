@@ -4,6 +4,7 @@
 #include <utils/StateStore.hpp>
 #include <utils/Journal.hpp>
 #include <core/Logger.hpp>
+#include <algorithm>
 #include <fstream>
 #include <stdexcept>
 #include <nlohmann/json.hpp>
@@ -74,24 +75,33 @@ void BasketMeanReversionStrategy::start() {
     event_bus_->post([this] { reconcileOnStart(); });
 }
 
-void BasketMeanReversionStrategy::stop() {
-    // 1. Cancel whatever is still working (on the dispatcher). A partially filled entry then
-    //    resolves into a recovery scheduled for the next session; positions are NOT
-    //    flattened: they are persisted and resumed on restart.
-    event_bus_->post([this] {
-        if (!current_cycle_) return;
-        for (const auto& cid : current_cycle_->workingClientOrderIds()) order_mngr_->cancelOrder(cid);
-    });
+void BasketMeanReversionStrategy::stop() { shutdown(true); }
 
-    // 2. Wait (on this thread) for the cancels to resolve the cycle.
-    auto deadline = std::chrono::steady_clock::now() + kShutdownTimeout;
-    while (cycle_active_ && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+void BasketMeanReversionStrategy::handOver() { shutdown(false); }
+
+void BasketMeanReversionStrategy::shutdown(bool cancelWorking) {
+    // 1. Unless handing over, cancel whatever is still working (on the dispatcher). A partially
+    //    filled entry then resolves into a recovery scheduled for the next session; positions
+    //    are NOT flattened: they are persisted and resumed on restart.
+    if (cancelWorking) {
+        event_bus_->post([this] {
+            if (!current_cycle_) return;
+            for (const auto& cid : current_cycle_->workingClientOrderIds()) order_mngr_->cancelOrder(cid);
+        });
+
+        // 2. Wait (on this thread) for the cancels to resolve the cycle.
+        auto deadline = std::chrono::steady_clock::now() + kShutdownTimeout;
+        while (cycle_active_ && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
     }
 
     // 3. Persist and detach (on the dispatcher).
-    event_bus_->post([this] {
-        if (current_cycle_) {
+    event_bus_->post([this, cancelWorking] {
+        if (current_cycle_ && !cancelWorking) {
+            LOG_INFO("[{}] Handover: {} working orders left at the broker for the next process.",
+                     basket_id_, current_cycle_->workingClientOrderIds().size());
+        } else if (current_cycle_) {
             LOG_ERROR("[{}] Shutdown: cycle did not resolve; it will be reattached on restart.", basket_id_);
         } else if (hasInventory()) {
             LOG_INFO("[{}] Shutdown with open position ({}); state saved for restart.", basket_id_, name(master_state_));
@@ -668,6 +678,22 @@ void BasketMeanReversionStrategy::restoreCycle() {
         current_cycle_->restoreLeg(l.client_order_id, l.symbol, l.target, l.side, filled, st);
         LOG_INFO("[{}] Reattached leg {}: {:.4f}/{:.4f} filled, {}", basket_id_, l.client_order_id,
                  filled, l.target, working ? "still working" : "done");
+    }
+    // An entry still in flight keeps its exposure reserved, as when it was approved.
+    if (options_.risk && master_state_ == MasterState::ENTRY_PENDING) {
+        const auto& symbols = basket_state_->getSymbols();
+        std::vector<std::string> syms;
+        std::vector<LegTarget> remaining;
+        std::vector<double> prices;
+        for (const auto& l : cycle_legs_) {
+            auto it = std::find(symbols.begin(), symbols.end(), l.symbol);
+            double filled = std::abs(portfolio_mngr_->getNetPosition(l.position_key) - l.baseline);
+            if (it == symbols.end() || filled + 1e-9 >= l.target) continue;
+            syms.push_back(l.symbol);
+            remaining.push_back({l.target - filled, l.side});
+            prices.push_back(basket_state_->getPrice(static_cast<size_t>(it - symbols.begin())));
+        }
+        if (!remaining.empty()) options_.risk->reserve(basket_id_, syms, remaining, prices);
     }
     if (current_cycle_->isComplete()) evaluateCompletedCycle();
 }
