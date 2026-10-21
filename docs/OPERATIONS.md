@@ -37,7 +37,9 @@ an order sent later is rejected and the basket simply re-decides at the next clo
 ## Stopping
 
 `Ctrl+C` (SIGINT/SIGTERM). Working orders are canceled, state is saved, **positions are
-kept**. The next start resumes them. Nothing is flattened on shutdown.
+kept**. The next start resumes them. Nothing is flattened on shutdown. With `state/HANDOVER`
+present (deploys write it), the stop leaves working orders at the broker instead, for the next
+start to reattach.
 
 ## Files
 
@@ -113,10 +115,14 @@ compose network). Everything lives in `~/funtrade` on the Pi:
 
 **Deploys.** Push to `main` → GitHub builds an arm64 image (unit tests run inside the build),
 pushes `ghcr.io/eladsez/funtrade:<sha>`, then the Pi's runner (`~/actions-runner-funtrade`,
-label `funtrade`) runs `deploy/deploy.sh <sha>`. It waits until 16:15 New York if the session
-is open (a restart mid-session cancels the day's MOC orders), restarts, and rolls back if the
-bot doesn't log `Running N baskets` within 5 minutes. "Run workflow" with *force* deploys
-immediately. The dashboard image (`ghcr.io/eladsez/funtrade-dashboard:<sha>`) is built on
+label `funtrade`) runs `deploy/deploy.sh <sha>`. The restart is a **handover**: deploy.sh
+writes `state/HANDOVER`, the stopping bot leaves its working MOC orders at the broker, and the
+new bot reattaches them (`Reattached leg ... still working` in the job log). So it deploys
+during the session too, except 15:40-16:15 New York (MOC cutoff, auction, fills). It waits
+until 16:15 when the running bot can't hand over (status.json has no `"handover": true`; any
+version before this one) or the compose file changed (it may recreate the Gateway). It rolls
+back if the bot doesn't log `Running N baskets` within 5 minutes, and fails the job if more
+baskets are halted after the restart. "Run workflow" with *force* deploys immediately. The dashboard image (`ghcr.io/eladsez/funtrade-dashboard:<sha>`) is built on
 every push; when a push changes nothing outside `dashboard/` and docs, only the dashboard is
 deployed, right away, without touching the bot (`DASHBOARD_ONLY=1`).
 

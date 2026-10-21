@@ -99,7 +99,10 @@ Persistence and restart:
 - On start: restore books → connect and sync account/positions/orders/today's executions →
   book missed fills → reconcile per symbol → baskets that mismatch HALT (never auto-fix).
   In-flight cycles are reattached. Halts persist until a human clears them.
-- `stop()` cancels working orders and saves state. Shutdown never flattens.
+- `stop()` cancels working orders and saves state. Shutdown never flattens. With
+  `state/HANDOVER` (written by deploy.sh, consumed at stop, dropped if stale at start) the stop
+  is a handover: orders stay working and the next process reattaches them (and re-reserves
+  in-flight entries' risk). status.json `"handover": true` tells deploy.sh the bot supports it.
 - `utils/Journal` appends `state/journal.jsonl` (close z + decision per basket per day,
   cycle_start/cycle_end, fill, entry_skipped, halt, start/stop); main writes
   `state/status.json` every minute (`running: false` on a clean stop). Both exist for the
@@ -148,9 +151,10 @@ Paper runs on a Pi 4 (arm64, Debian 13) at `eladsez@rpi.tail4f4240.ts.net` (tail
 auto-login) + `funtrade` (ghcr.io/eladsez/funtrade:<sha>) + `dashboard`
 (ghcr.io/eladsez/funtrade-dashboard:<sha>, `127.0.0.1:8090`, tailnet via
 `tailscale serve --https=8443`). CI: `.github/workflows/deploy.yml` (build/test arm64 images →
-GHCR → self-hosted runner `funtrade` runs `deploy/deploy.sh`, which never restarts the bot
-during the US session unless forced; a push touching only `dashboard/`/docs deploys just the
-dashboard, immediately). Runbook: `docs/OPERATIONS.md`.
+GHCR → self-hosted runner `funtrade` runs `deploy/deploy.sh`, which restarts the bot with a
+handover, mid-session too, but never 15:40-16:15 ET, and waits for 16:15 if the running bot
+can't hand over or the compose file changed; a push touching only `dashboard/`/docs deploys
+just the dashboard, immediately). Runbook: `docs/OPERATIONS.md`.
 
 Diagnosing (read-only, safe any time):
 ```bash
@@ -169,8 +173,8 @@ Gateway's session.
 Deploy notes:
 - First boot: the bot exits and Docker restarts it until the Gateway has logged in (~1 min).
   IBC accepts the paper disclaimer / API precaution dialogs (error 10141 once is normal).
-- Forced deploy: Actions → build-and-deploy → Run workflow → force. Only when nothing is
-  working at the broker (a restart cancels the day's MOC orders).
+- Forced deploy: Actions → build-and-deploy → Run workflow → force. Skips every wait; with a
+  bot that can't hand over, the restart cancels the day's MOC orders.
 - `actions/checkout@v4` triggers a Node 20 deprecation warning; bump to v5 at some point.
 
 ## Open items
