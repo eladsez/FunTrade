@@ -78,6 +78,9 @@ private:
     std::unordered_map<long, Tracked> orders_;
     std::unordered_map<std::string, long> idByClient_;
     std::unordered_set<std::string> seenExecIds_;
+    // Executions of orders placed by hand (TWS, mobile). TWS replays the day's executions at
+    // every connect, so each is reported once per run, not once per reconnect.
+    std::unordered_set<std::string> warnedUntracked_;
 };
 
 } // namespace bot

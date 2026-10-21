@@ -148,8 +148,11 @@ std::optional<ExecutionReport> IbkrOrderTracker::onExecution(long orderId, const
         t = find(key);
     }
     if (!t) {
-        LOG_WARN("[IbkrOrderTracker] Execution {} for untracked order {} (ref '{}', {} {} {}) ignored.",
-                 execId, orderId, orderRef, ibSide, shares, symbol);
+        if (warnedUntracked_.insert(execId).second)
+            LOG_WARN("[IbkrOrderTracker] Execution {} for untracked order {} (ref '{}', {} {} {}) ignored.",
+                     execId, orderId, orderRef, ibSide, shares, symbol);
+        else
+            LOG_DEBUG("[IbkrOrderTracker] Execution {} for untracked order replayed; ignored.", execId);
         return std::nullopt;
     }
     if (shares <= 0.0) return std::nullopt;

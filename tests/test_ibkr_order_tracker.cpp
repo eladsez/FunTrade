@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include <execution/IbkrOrderTracker.hpp>
+#include <core/Logger.hpp>
+#include <spdlog/sinks/ringbuffer_sink.h>
 
 using namespace bot;
 
@@ -142,6 +144,28 @@ TEST_F(IbkrOrderTrackerTest, LateExecutionAfterTerminalIsStillAFill) {
     ASSERT_TRUE(f);
     EXPECT_DOUBLE_EQ(f->last_quantity, 3);
     EXPECT_EQ(f->status, OrderStatus::CANCELED) << "terminal status is sticky";
+}
+
+TEST_F(IbkrOrderTrackerTest, ManualExecutionIsReportedOncePerRunNotPerReconnect) {
+    // TWS replays the day's executions at every connect; RapidOrder (manual) trades logged
+    // 8 warnings at each reconnect on 2026-10-20.
+    auto sink = std::make_shared<spdlog::sinks::ringbuffer_sink_mt>(50);
+    auto& logger = Logger::getLogger();
+    auto level = logger->level();  // tests run with logging off (test_main.cpp)
+    logger->set_level(spdlog::level::info);
+    logger->sinks().push_back(sink);
+    auto warnings = [&] {
+        int n = 0;
+        for (auto& l : sink->last_formatted()) n += l.find("untracked order") != std::string::npos;
+        return n;
+    };
+    for (int connect = 0; connect < 3; ++connect) {
+        EXPECT_FALSE(t.onExecution(0, "RapidOrder", "m1", "GWW", "BOT", 1, 900, 900));
+        EXPECT_FALSE(t.onExecution(0, "RapidOrder", "m2", "AOS", "BOT", 23, 70, 70));
+    }
+    EXPECT_EQ(warnings(), 2) << "one per execution";
+    logger->sinks().pop_back();
+    logger->set_level(level);
 }
 
 TEST_F(IbkrOrderTrackerTest, UntrackedOrdersAreIgnored) {

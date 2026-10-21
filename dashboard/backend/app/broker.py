@@ -42,9 +42,13 @@ class ReadOnlyClient(EWrapper, EClient):
         self.account: dict[str, dict] = {}
         self.commissions: dict[str, dict] = {}   # exec_id -> {commission, currency}
         self.last_error: str | None = None
+        # Error 1100: the Gateway lost its own link to IBKR. Our socket stays up but requests
+        # go unanswered until 1101/1102, or a new session after the Gateway restarts.
+        self.ibkr_down_since: float | None = None
 
     # --- connection ---
     def nextValidId(self, orderId):
+        self.ibkr_down_since = None   # the Gateway only accepts a session once logged in
         self.ready.set()
 
     def connectionClosed(self):
@@ -53,6 +57,10 @@ class ReadOnlyClient(EWrapper, EClient):
     def error(self, reqId, errorCode, errorString, *rest):
         if errorCode in INFO_CODES:
             return
+        if errorCode == 1100:
+            self.ibkr_down_since = self.ibkr_down_since or time.time()
+        elif errorCode in (1101, 1102):
+            self.ibkr_down_since = None
         self.last_error = f"{errorCode}: {errorString}"
         log.info("ibkr %s %s", errorCode, errorString)
 
@@ -189,10 +197,11 @@ class BrokerView:
         ok = all(c.done[ev].wait(15) for ev in ("orders", "positions", "execs"))
         c.cancelPositions()
         if not ok:
-            raise TimeoutError("broker did not answer within 15 s")
+            raise TimeoutError("Gateway is cut off from IBKR (1100)" if c.ibkr_down_since
+                               else "broker did not answer within 15 s")
         with c.lock:
             snap = {
-                "connected": True, "checked_at": time.time(), "error": None,
+                "connected": True, "checked_at": time.time(), "error": None, "ibkr_down_since": c.ibkr_down_since,
                 "orders": list(c.orders), "positions": list(c.positions), "executions": list(c.execs),
                 "account": dict(c.account),
             }
@@ -235,7 +244,8 @@ class BrokerView:
             self._stop.wait(self.interval)
 
     def _down(self, why: str):
-        if self.snapshot.get("connected") or self.snapshot.get("error") != why:
-            self.snapshot = {**self.snapshot, "connected": False, "error": why}
+        since = self.client.ibkr_down_since if self.client and self.client.isConnected() else None
+        if self.snapshot.get("connected") or self.snapshot.get("error") != why or self.snapshot.get("ibkr_down_since") != since:
+            self.snapshot = {**self.snapshot, "connected": False, "error": why, "ibkr_down_since": since}
             self.version += 1
         log.info("broker unavailable: %s", why)

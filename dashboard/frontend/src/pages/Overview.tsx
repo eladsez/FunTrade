@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useOverview, useSession } from '../lib/api'
 import { bps, money, pnlClass, qty, usd } from '../lib/format'
-import { fmtDay, fmtWhen, pricesNote, sessionView, useNow } from '../lib/time'
+import { fmtDay, fmtWhen, outage, pricesNote, sessionView, useNow } from '../lib/time'
 import type { Fill, FillQuality } from '../lib/types'
 import { Banner, Card, CardHead, Dot, Failed, Loading, Tile, sideClass } from '../components/ui'
 import { BasketList } from '../components/BasketList'
@@ -67,8 +67,15 @@ export default function Overview() {
     <>
       <SessionLine />
 
-      {(o.halted.length > 0 || o.mismatches.length > 0 || o.settling.length > 0 || o.bot.state !== 'running' || o.working_orders > 0) && (
+      {(o.ibkr.connected === false || o.halted.length > 0 || o.mismatches.length > 0 || o.settling.length > 0 || o.bot.state !== 'running' || o.working_orders > 0) && (
         <section aria-label="Alerts" className="flex flex-col gap-2">
+          {o.ibkr.connected === false && (
+            <Banner tone="bad" to="/system" action="System">
+              <b className="text-bad">Gateway cut off from IBKR</b>
+              {o.ibkr.down_since != null && <> {outage(o.ibkr.down_since)}</>}
+              {' '}· no orders or prices go through. If it lasts, restart ib-gateway.
+            </Banner>
+          )}
           {o.bot.state !== 'running' && (
             <Banner tone="bad" to="/system" action="System">
               <b className="text-bad">Bot {o.bot.state}</b>

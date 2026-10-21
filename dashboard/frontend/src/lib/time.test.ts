@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ago, fmtDay, fmtTime, fmtWhen, inMin, priceNote, pricesNote, sessionView } from './time'
+import { ago, fmtDay, fmtTime, fmtWhen, inMin, outage, priceNote, pricesNote, sessionView } from './time'
 import type { SessionInfo } from './types'
 
 // 2026-10-21 (Wed): EDT = UTC−4, Israel = UTC+3 (IDT until Oct 25).
@@ -95,6 +95,9 @@ describe('time formatting', () => {
   it('helpers', () => {
     expect(inMin(5)).toBe('5m')
     expect(inMin(125)).toBe('2h 05m')
+    const at = Date.parse('2026-10-21T09:40:00-04:00')
+    expect(outage(Date.parse('2026-10-21T00:16:00-04:00'), at)).toBe('since 00:16 ET (9h 24m)')
+    expect(outage(at + 5000, at)).toMatch(/\(0m\)$/)
     expect(fmtDay('2026-10-19')).toBe('Oct 19')
     expect(fmtTime(ny('2026-10-21T00:05'), 'NY')).toBe('00:05')
   })

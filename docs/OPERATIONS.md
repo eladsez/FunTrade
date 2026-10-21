@@ -46,7 +46,7 @@ kept**. The next start resumes them. Nothing is flattened on shutdown.
 | `state/positions.json` | Per-basket positions, realized PnL, executions already booked |
 | `state/baskets/<id>.json` | Basket state, pending action, in-flight orders, halt reason, and the entry that opened the position (`entry`: decision day, entry day, z; display only) |
 | `state/journal.jsonl` | Append-only events for the dashboard: each basket's close z, decision and leg closes, cycles, fills, skipped entries, halts, start/stop. The bot never reads it back |
-| `state/status.json` | Heartbeat for the dashboard (every minute; `running: false` on a clean stop): equity, broker connection, exposure, limits, per-symbol net USD (`symbol_net_usd`, held + reserved) |
+| `state/status.json` | Heartbeat for the dashboard (every minute; `running: false` on a clean stop): equity, broker connection (`broker_connected`: our socket to the Gateway; `ibkr_connected` / `ibkr_down_since`: the Gateway's own link to IBKR), exposure, limits, per-symbol net USD (`symbol_net_usd`, held + reserved) |
 | `state/zhistory/<id>.json` | Each basket's z over the 365-day warm-up history (startup only), for the dashboard's chart |
 | `logs/funtrade.log` | Rotating log (10 × 10 MB); warnings and errors flushed immediately |
 | `config/risk.json` | Allocation and risk limits (fractions of account equity) |
@@ -135,6 +135,25 @@ docker compose restart funtrade           # outside market hours
 View the Gateway: set `VNC_SERVER_PASSWORD`, `docker compose up -d`, then from your machine
 `ssh -L 5900:localhost:5900 eladsez@rpi.tail4f4240.ts.net` and open a VNC viewer on
 `localhost:5900`.
+
+**Gateway cut off from IBKR (error 1100).** Our socket stays up, but no orders or prices go
+through. Short ones are routine around IBKR's midnight server reset and recover by themselves
+(1101/1102; the bot logs one warning and one line when it's back). Past 5 minutes the bot logs
+an error (again every 30 min), and the dashboard shows a red "Gateway cut off from IBKR"
+banner. If it doesn't recover, look at the Gateway's log: on 2026-10-21 a re-login at 00:17 ET
+failed with "Unrecognized Username or Password" and the Gateway sat on that dialog until
+09:40. Restarting it fixed it (the credentials were fine), and the bot then sent the day's
+entries by itself:
+
+```bash
+docker compose logs --since 12h ib-gateway | grep -E "IBC: (Login|detected dialog)" | tail
+docker compose restart ib-gateway         # safe while no MOC orders are working
+```
+
+Restarting the Gateway cancels working MOC orders, so during the session check the Orders
+page first. If the login fails again, the paper credentials need checking (IBKR portal, then
+`.env`). Our own socket dropping (the nightly 23:45 restart) logs one line down and one
+"Reconnected to the Gateway after N s"; past 3 minutes it's an error.
 
 Only one Gateway may be logged in with the paper user. Close the one on WSL/desktop while the
 Pi runs (the Pi's takes over: `EXISTING_SESSION_DETECTED_ACTION=primary`). Logging in to the

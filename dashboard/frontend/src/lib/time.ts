@@ -48,6 +48,10 @@ export function inMin(min: number) {
   return `${Math.floor(min / 60)}h ${pad(min % 60)}m`
 }
 
+/** "since 00:16 ET (9h 24m)" */
+export const outage = (since: number, now = Date.now()) =>
+  `since ${fmtWhen(since)} ET (${inMin(Math.max(0, Math.round((now - since) / 60_000)))})`
+
 const nyDate = (ms: number) => parts(ms, NY).date
 const both = (ms: number) => ({ ny: fmtTime(ms, 'NY'), il: fmtTime(ms, 'IL') })
 

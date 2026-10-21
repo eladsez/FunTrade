@@ -65,6 +65,7 @@ class FakeClient:
         self.orders, self.positions, self.account = [], [{"symbol": "A", "quantity": qty, "sec_type": "STK"}], {}
         self.execs = [{"exec_id": "e1", "symbol": "A", "order_ref": "b_A#1-1", "time": "t"}]
         self.commissions = {"e1": {"commission": 1.0, "currency": "USD"}, "late": {"commission": 2.0, "currency": "USD"}}
+        self.ibkr_down_since = None
 
     def reqAllOpenOrders(self):
         self.done["orders"].set()
@@ -99,3 +100,57 @@ def test_an_unwritable_commission_file_only_logs(tmp_path):
     v = BrokerView("h", 1, 17, 60, tmp_path / "file")   # its "directory" is a file
     v.record_commissions({"e1": {"commission": 1.0, "currency": "USD"}}, {"e1": {"exec_id": "e1", "symbol": "A"}})
     assert v.commissions["e1"]["commission"] == 1.0, "kept in memory regardless"
+
+
+def test_error_1100_marks_the_gateway_cut_off_until_it_recovers():
+    c = ReadOnlyClient()
+    c.error(-1, 1100, "Connectivity between IBKR and Trader Workstation has been lost.")
+    first = c.ibkr_down_since
+    assert first is not None
+    c.error(-1, 1100, "again")
+    assert c.ibkr_down_since == first, "the outage keeps its start"
+    c.error(-1, 1102, "restored, data maintained")
+    assert c.ibkr_down_since is None
+    c.error(-1, 1100, "lost")
+    c.error(-1, 1101, "restored, data lost")
+    assert c.ibkr_down_since is None
+    c.error(-1, 1100, "lost")
+    c.nextValidId(1)
+    assert c.ibkr_down_since is None, "a new session means the Gateway logged in again"
+
+
+class SilentClient(FakeClient):
+    def __init__(self, down_since):
+        super().__init__(0)
+        self.ibkr_down_since = down_since
+
+    def reqExecutions(self, *_):
+        pass   # never answers
+
+    def isConnected(self):
+        return True
+
+
+def test_an_unanswered_poll_says_why(tmp_path, monkeypatch):
+    from app import broker
+    monkeypatch.setattr(broker.threading.Event, "wait", lambda self, t=None: self.is_set())
+    v = broker.BrokerView("h", 1, 17, 60)
+    v.client = SilentClient(123.0)
+    with pytest.raises(TimeoutError, match="cut off from IBKR"):
+        v.poll_once()
+    v._down("Gateway is cut off from IBKR (1100)")
+    assert v.snapshot["ibkr_down_since"] == 123.0 and v.snapshot["connected"] is False
+    version = v.version
+    v._down("Gateway is cut off from IBKR (1100)")
+    assert v.version == version, "an unchanged outage isn't a new snapshot"
+    v.client = SilentClient(None)
+    with pytest.raises(TimeoutError, match="within 15 s"):
+        v.poll_once()
+
+
+def test_a_good_poll_reports_the_link_up(tmp_path):
+    from app.broker import BrokerView
+    v = BrokerView("h", 1, 17, 60)
+    v.client = FakeClient(1)
+    v.poll_once()
+    assert v.snapshot["ibkr_down_since"] is None
