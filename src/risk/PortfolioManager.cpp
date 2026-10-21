@@ -72,6 +72,7 @@ void PortfolioManager::onMarketEvent(const MarketEvent& event) {
         // Only update if we derived a valid price
         if (updatedPrice > 0.0) {
             std::lock_guard<std::mutex> lock(mtx_);
+            live_priced_.insert(symbol);
             auto it = symbol_to_vkeys_.find(symbol);
             if (it != symbol_to_vkeys_.end()) {
                 for (const std::string& v_key : it->second) {
@@ -282,6 +283,15 @@ void PortfolioManager::logReconciliation(const char* when) const {
         LOG_ERROR("[PortfolioManager] MISMATCH {}: bot books {:.4f}, broker holds {:.4f}. Baskets trading {} will halt.",
                   m.symbol, m.virtual_qty, m.broker_qty, m.symbol);
     }
+}
+
+void PortfolioManager::seedPrice(const std::string& symbol, double price) {
+    if (price <= 0.0) return;
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (live_priced_.count(symbol)) return;
+    auto it = symbol_to_vkeys_.find(symbol);
+    if (it == symbol_to_vkeys_.end()) return;
+    for (const auto& vkey : it->second) positions_[vkey].current_price = price;
 }
 
 void PortfolioManager::loadState() {

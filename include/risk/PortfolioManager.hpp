@@ -36,6 +36,9 @@ public:
 
     void onMarketEvent(const MarketEvent& event);
     void onExecution(const ExecutionReport& report);
+    // The last close at startup, for positions restored from disk: their open P&L and gross
+    // exposure use it until the symbol's first live price (which it never overrides).
+    void seedPrice(const std::string& symbol, double price);
 
     double getTotalRealizedPnL() const;
     double getTotalUnrealizedPnL() const;
@@ -84,6 +87,7 @@ private:
     std::map<std::string, double> broker_positions_;
     mutable std::mutex mtx_;
     std::unordered_set<std::string> seen_exec_ids_;
+    std::unordered_set<std::string> live_priced_;  // symbols with a price from the feed
     double total_realized_pnl_ = 0.0;
     size_t total_trades_{0};
     int64_t last_reconcile_day_ = 0;

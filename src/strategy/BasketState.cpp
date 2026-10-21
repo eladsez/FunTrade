@@ -114,6 +114,13 @@ void BasketState::updatePrice(const std::string& symbol, double price, uint64_t 
     UiBroadcaster::getInstance().broadcastPrice(basket_id_, symbol, price);
 }
 
+void BasketState::seedPrice(const std::string& symbol, double price) {
+    int i = indexOf(symbol);
+    if (i < 0 || price <= 0.0) return;
+    current_prices_[i] = price;
+    last_timestamps_[i] = 0;
+}
+
 bool BasketState::hasAllPrices() const {
     return complete(current_prices_);
 }

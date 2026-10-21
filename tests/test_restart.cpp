@@ -71,6 +71,19 @@ TEST_F(RestartTest, InPositionSurvivesRestartAndExitsLater) {
     EXPECT_DOUBLE_EQ(pm->getNetPosition("tb_A"), 0.0);
 }
 
+// After a restart, open P&L is measured against the last close, not reset to 0.
+TEST_F(RestartTest, RestartValuesOpenPositionsAtTheLastClose) {
+    closeDay(0.05);
+    openSession();
+    fillFrom(0);
+    const double qa = pm->getNetPosition("tb_A"), qb = pm->getNetPosition("tb_B");
+    const double avgA = pm->getPosition("tb_A")->avg_price, avgB = pm->getPosition("tb_B")->avg_price;
+
+    restart();  // the restarted bot's history ends with A and B at 100
+    EXPECT_NEAR(pm->getPnL({"tb_A", "tb_B"}), qa * (100.0 - avgA) + qb * (100.0 - avgB), 1e-6);
+    EXPECT_NE(pm->getPnL({"tb_A", "tb_B"}), 0.0);
+}
+
 TEST_F(RestartTest, PendingDecisionSurvivesRestartAndRunsOnce) {
     closeDay(0.05);
     ASSERT_EQ(strat->pendingAction(), PendingAction::ENTER_SHORT);

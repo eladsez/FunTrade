@@ -164,6 +164,25 @@ TEST_F(PortfolioManagerTest, RestoredPositionsAreAttributedToBaskets) {
     std::filesystem::remove(file);
 }
 
+// A restart restored the books with price = avg price, so open P&L read 0 until the first
+// tick (2026-10-21: no P&L after an evening deploy). The startup close fills the gap.
+TEST_F(PortfolioManagerTest, SeededCloseValuesRestoredPositionsUntilTheFirstTick) {
+    fill("bk_A", "A", Side::BUY, 10, 50.0);
+    pm->seedPrice("A", 55.0);
+    EXPECT_DOUBLE_EQ(pm->getPnL({"bk_A"}), 50.0);
+    EXPECT_DOUBLE_EQ(pm->getGrossExposure(), 550.0);
+
+    TradeTick tick;
+    tick.symbol = "A";
+    tick.price = 52.0;
+    tick.timestamp_ms = 1;
+    bus->publishMarketEvent(tick);
+    pm->seedPrice("A", 55.0);
+    EXPECT_DOUBLE_EQ(pm->getPnL({"bk_A"}), 20.0) << "a live price is never overridden by the seed";
+    pm->seedPrice("Z", 1.0);  // not held: ignored
+    EXPECT_FALSE(pm->getPosition("bk_Z"));
+}
+
 // Live, the PM is built before the broker is connected. Its first snapshot is empty, so a
 // reconciliation report at construction listed every held leg as a MISMATCH (2026-10-20).
 TEST_F(PortfolioManagerTest, NoReconciliationReportBeforeTheBrokerIsSynced) {
