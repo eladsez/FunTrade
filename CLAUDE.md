@@ -179,9 +179,11 @@ Deploy notes:
 
 ## Open items
 
-- 2026-10-20: the first live MOC entries (5 baskets, 15 legs) sat in `PendingSubmit` at the
-  broker for hours. Unknown whether that is how paper holds MOC orders or a real problem;
-  check whether they filled at the 16:00 ET auction.
+- Handover deploys (PR #8, 2026-10-21) are not verified live yet. The first bot deploy during
+  a session with working MOC orders must show `Reattached leg ... still working` for each leg
+  in the deploy job log, and those orders must fill at 16:00. Unknown until then: whether IBKR
+  returns orders still in `PendingSubmit` (paper holds MOC orders there for hours; they did
+  fill at the auction on 10-20 and 10-21) to the new process.
 - Dashboard v1 is in `dashboard/` (screens approved from the design sketches). Add status
   and visibility features there, not as ad-hoc tooling (extra log lines, broker scripts).
 - Baskets are the 2026-03-28 export. Plan: re-run `compute.py` into a separate folder,
