@@ -134,6 +134,10 @@ Dashboard (`dashboard/`):
 - MOC orders must reach the exchange by ~15:50 ET. Later ones are rejected; the basket
   re-decides at the next close.
 - The Gateway restarts daily and needs a fresh login about weekly.
+- Error 1100 (Gateway cut off from IBKR) leaves our socket up, so "connected" isn't enough:
+  `ConnectionHealth` tracks both links (`ibkr_connected` in status.json). A failed re-login
+  after IBKR's midnight reset can leave the Gateway stuck on "Unrecognized Username or
+  Password" for hours; `docker compose restart ib-gateway` fixed it (2026-10-21).
 - `test_ibkr_execution`-style probing belongs on a separate paper account (see above).
   For read-only checks, a small Python `ibapi` script with its own client id is fine.
 
