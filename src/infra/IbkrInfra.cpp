@@ -1,7 +1,28 @@
 #include <infra/IbkrInfra.hpp>
 #include <core/Logger.hpp>
 
+#include <chrono>
+
 namespace bot {
+
+namespace {
+int64_t nowMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+}  // namespace
+
+void IbkrInfra::log(const std::optional<ConnectionHealth::Notice>& n) {
+    if (!n) return;
+    switch (n->level) {
+        case ConnectionHealth::Level::Debug: LOG_DEBUG("[IbkrInfra] {}", n->text); break;
+        case ConnectionHealth::Level::Info:  LOG_INFO("[IbkrInfra] {}", n->text); break;
+        case ConnectionHealth::Level::Warn:  LOG_WARN("[IbkrInfra] {}", n->text); break;
+        case ConnectionHealth::Level::Error: LOG_ERROR("[IbkrInfra] {}", n->text); break;
+    }
+}
+
+void IbkrInfra::checkHealth() { log(health_.tick(nowMs())); }
 
 IbkrInfra::IbkrInfra(std::string host, int port, int clientId)
     : host_(std::move(host)), port_(port), clientId_(clientId) {
@@ -158,6 +179,7 @@ void IbkrInfra::nextValidId(OrderId orderId) {
     if (!isConnected_.load()) {
         LOG_DEBUG("[IbkrInfra] Received Next Valid ID: {}. Connection fully established.", orderId);
         isConnected_ = true;
+        log(health_.socketUp(nowMs()));
         connectCv_.notify_all(); // Unblock the constructor or the monitor thread
         // Check if this is a reconnect
         if (!isInitialConnection_.load()) {
@@ -241,12 +263,12 @@ void IbkrInfra::error(int id, time_t errorTime, int errorCode, const std::string
     }
     // TWS <-> IB servers. Our socket stays up, so the watchdog never sees these.
     else if (errorCode == 1100) {
-        LOG_ERROR("[IbkrInfra] TWS lost connectivity to IB (1100). Orders and data are paused.");
+        log(health_.ibkrDown(nowMs()));
     } else if (errorCode == 1101) {
-        LOG_WARN("[IbkrInfra] Connectivity restored, data LOST (1101). Re-subscribing and re-syncing.");
+        log(health_.ibkrUp(nowMs(), true));
         fireReconnectCallbacks();
     } else if (errorCode == 1102) {
-        LOG_INFO("[IbkrInfra] Connectivity restored, data maintained (1102).");
+        log(health_.ibkrUp(nowMs(), false));
     }
 
     if (errorCb_) errorCb_(id, errorCode, errorString, advancedOrderRejectJson);
@@ -263,6 +285,7 @@ void IbkrInfra::connectionClosed() {
 
 void IbkrInfra::handleDisconnect() {
     isRunning_ = false; // Stop the reader loop immediately
+    log(health_.socketDown(nowMs()));
 
     if (isConnected_.exchange(false)) {
         // We were fully connected. Wake up the main monitor wait.

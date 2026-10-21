@@ -8,6 +8,8 @@
 #include <mutex>
 #include <condition_variable>
 
+#include <infra/ConnectionHealth.hpp>
+
 // TWS API Includes
 #include "DefaultEWrapper.h"
 #include "EClientSocket.h"
@@ -39,6 +41,11 @@ public:
     // Locked access so the Feeds/Engines can send commands. The client object lives as long
     // as the infra (reconnects reuse it), so the pointer never dangles.
     ClientGuard client() { return ClientGuard(clientMutex_, client_.get()); }
+
+    // Both links (socket to the Gateway, Gateway to IBKR); see ConnectionHealth.
+    ConnectionHealth::Snapshot health() const { return health_.snapshot(); }
+    // Logs a long outage. Called periodically from the main loop.
+    void checkHealth();
 
     // =========================================================================
     // Callback Registrations (Used by DataFeed and ExecutionEngine)
@@ -156,6 +163,7 @@ private:
     void monitorLoop();
     void handleDisconnect();
     void fireReconnectCallbacks();
+    static void log(const std::optional<ConnectionHealth::Notice>& n);
 
     std::string host_;
     int port_;
@@ -179,6 +187,7 @@ private:
     std::mutex monitorMutex_;
     std::condition_variable monitorCv_;
     std::vector<ReconnectCallback> reconnectCallbacks_;
+    ConnectionHealth health_;
 
     // Callback instances
     TickByTickBidAskCallback tickByTickBidAskCb_;

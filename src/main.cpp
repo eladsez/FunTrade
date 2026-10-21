@@ -163,12 +163,17 @@ static void writeStatus(IbkrInfra& infra, IbkrExecutionEngine& engine, const Por
     const char* sha = std::getenv("FUNTRADE_GIT_SHA");
     const auto& limits = risk.limits();
     auto equity = engine.getPortfolioValue();
+    infra.checkHealth();
+    const auto health = infra.health();
     nlohmann::json j = {
         {"updated_at", duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count()},
         {"started_at", startedMs},
         {"running", running},
         {"git_sha", sha ? sha : "unknown"},
         {"broker_connected", infra.client().connected()},
+        // The Gateway's own link to IBKR: while it's down the socket stays up but nothing trades.
+        {"ibkr_connected", health.ibkr},
+        {"ibkr_down_since", health.ibkr_down_since ? nlohmann::json(*health.ibkr_down_since) : nlohmann::json(nullptr)},
         {"equity_usd", equity ? nlohmann::json(*equity) : nlohmann::json(nullptr)},
         {"equity_at_start_usd", startEquity},
         {"baskets", baskets},
