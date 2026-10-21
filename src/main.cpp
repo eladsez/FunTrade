@@ -8,6 +8,7 @@
 #include <atomic>
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 #include <nlohmann/json.hpp>
 #include <utils/magic_enum.hpp>
 #include <risk/RiskManager.hpp>
@@ -185,11 +186,26 @@ static void writeStatus(IbkrInfra& infra, IbkrExecutionEngine& engine, const Por
                     {"max_basket_loss_usd", limits.max_basket_loss_usd}}},
         {"kill", risk.killSwitchActive()},
         {"flatten", risk.flattenRequested()},
+        // deploy.sh restarts mid-session only if the running bot honours state/HANDOVER.
+        {"handover", true},
     };
     state::writeJsonAtomic("state/status.json", j);
 }
 
+// Written by deploy.sh just before it restarts the bot: this stop leaves working orders at
+// the broker for the next process. Consumed at stop; a stale one is dropped at start, so a
+// later manual stop still cancels.
+static constexpr const char* kHandoverFile = "state/HANDOVER";
+
+static bool takeHandoverFile() {
+    std::error_code ec;
+    bool present = std::filesystem::exists(kHandoverFile, ec);
+    if (present) std::filesystem::remove(kHandoverFile, ec);
+    return present;
+}
+
 int runLiveIbkr() {
+    if (takeHandoverFile()) LOG_WARN("[LIVE] Removed a stale {} (no restart consumed it).", kHandoverFile);
     const auto startedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     // Open before connecting: fills booked while syncing missed executions are journaled too.
@@ -275,9 +291,11 @@ int runLiveIbkr() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    orchestrator.stopAll();
+    const bool handover = takeHandoverFile();
+    if (handover) LOG_INFO("[LIVE] Handover stop: working orders stay at the broker for the next process.");
+    orchestrator.stopAll(handover);
     status(false);
-    Journal::instance().record("stop");
+    Journal::instance().record("stop", {{"handover", handover}});
     Journal::instance().close();
     LOG_INFO("[LIVE] Shutting down...");
     return 0;

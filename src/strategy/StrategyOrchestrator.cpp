@@ -76,10 +76,11 @@ void StrategyOrchestrator::startAll() {
     }
 }
 
-void StrategyOrchestrator::stopAll() {
-    LOG_INFO("[Orchestrator] Stopping all strategies...");
+void StrategyOrchestrator::stopAll(bool handOver) {
+    LOG_INFO("[Orchestrator] Stopping all strategies{}...", handOver ? " (handover: working orders stay)" : "");
     for (auto& strategy : strategies_) {
-        strategy->stop();
+        if (handOver) strategy->handOver();
+        else strategy->stop();
     }
 }
 

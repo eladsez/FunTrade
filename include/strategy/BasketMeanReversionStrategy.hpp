@@ -71,6 +71,7 @@ public:
 
     void start() override;
     void stop() override;
+    void handOver() override;
 
     // Introspection (dispatcher thread, or tests on a synchronous bus)
     MasterState masterState() const { return master_state_; }
@@ -117,6 +118,7 @@ private:
     void halt(const std::string& reason);
 
     // Persistence & restart
+    void shutdown(bool cancelWorking);
     void reconcileOnStart();
     void restoreCycle();
     void restoreEntry();

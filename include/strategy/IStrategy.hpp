@@ -17,6 +17,10 @@ public:
     
     // Halts the strategy and cleans up.
     virtual void stop() = 0;
+
+    // Stops for a restart that takes over (a deploy): like stop(), but working orders stay
+    // at the broker for the next process to reattach.
+    virtual void handOver() { stop(); }
 };
 
 }

@@ -21,6 +21,23 @@ protected:
         crashRestart();
     }
 
+    // Deploy: the old bot hands over (orders stay working at the broker), a new one starts.
+    void handOverRestart() {
+        strat->handOver();
+        crashRestart();
+    }
+
+    static OrderState workingAtBroker(const OrderRequest& r) {
+        OrderState s;
+        s.order_id = "X-" + r.client_order_id;
+        s.client_order_id = r.client_order_id;
+        s.symbol = r.symbol;
+        s.side = r.side;
+        s.quantity = r.quantity;
+        s.status = OrderStatus::NEW;
+        return s;
+    }
+
     // Crash: the old objects simply vanish (no stop(), nothing flushed beyond what was
     // already persisted), then a new bot starts.
     void crashRestart() {
@@ -91,6 +108,34 @@ TEST_F(RestartTest, CrashMidCycleReattachesWorkingOrders) {
     engine->openOrders.clear();
     engine->emit(FakeExecutionEngine::report(b, OrderStatus::FILLED, b.quantity, b.quantity, last["B"]));
     EXPECT_EQ(strat->masterState(), MasterState::IN_POSITION);
+}
+
+// Deploy restart: the old process leaves its MOC orders working, the new one finishes the cycle.
+TEST_F(RestartTest, HandoverLeavesOrdersWorkingAndNextProcessFinishesTheCycle) {
+    closeDay(0.05);
+    openSession();
+    ASSERT_EQ(engine->placed.size(), 2u);
+    const auto a = placedFor("A"), b = placedFor("B");
+    engine->openOrders = {workingAtBroker(a), workingAtBroker(b)};
+
+    handOverRestart();
+    EXPECT_TRUE(engine->canceled.empty()) << "a handover never cancels";
+    EXPECT_EQ(strat->masterState(), MasterState::ENTRY_PENDING);
+    openSession();
+    EXPECT_TRUE(engine->placed.empty()) << "orders already working: nothing re-sent";
+
+    engine->openOrders.clear();
+    engine->emit(FakeExecutionEngine::report(a, OrderStatus::FILLED, a.quantity, a.quantity, last["A"]));
+    engine->emit(FakeExecutionEngine::report(b, OrderStatus::FILLED, b.quantity, b.quantity, last["B"]));
+    EXPECT_EQ(strat->masterState(), MasterState::IN_POSITION);
+}
+
+TEST_F(RestartTest, PlainStopStillCancelsWorkingOrders) {
+    closeDay(0.05);
+    openSession();
+    ASSERT_EQ(engine->placed.size(), 2u);
+    stopStrategy();
+    EXPECT_EQ(engine->canceled.size(), 2u);
 }
 
 TEST_F(RestartTest, CrashAfterPartialFillWithNothingWorkingSchedulesRecovery) {

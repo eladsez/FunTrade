@@ -74,24 +74,33 @@ void BasketMeanReversionStrategy::start() {
     event_bus_->post([this] { reconcileOnStart(); });
 }
 
-void BasketMeanReversionStrategy::stop() {
-    // 1. Cancel whatever is still working (on the dispatcher). A partially filled entry then
-    //    resolves into a recovery scheduled for the next session; positions are NOT
-    //    flattened: they are persisted and resumed on restart.
-    event_bus_->post([this] {
-        if (!current_cycle_) return;
-        for (const auto& cid : current_cycle_->workingClientOrderIds()) order_mngr_->cancelOrder(cid);
-    });
+void BasketMeanReversionStrategy::stop() { shutdown(true); }
 
-    // 2. Wait (on this thread) for the cancels to resolve the cycle.
-    auto deadline = std::chrono::steady_clock::now() + kShutdownTimeout;
-    while (cycle_active_ && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+void BasketMeanReversionStrategy::handOver() { shutdown(false); }
+
+void BasketMeanReversionStrategy::shutdown(bool cancelWorking) {
+    // 1. Unless handing over, cancel whatever is still working (on the dispatcher). A partially
+    //    filled entry then resolves into a recovery scheduled for the next session; positions
+    //    are NOT flattened: they are persisted and resumed on restart.
+    if (cancelWorking) {
+        event_bus_->post([this] {
+            if (!current_cycle_) return;
+            for (const auto& cid : current_cycle_->workingClientOrderIds()) order_mngr_->cancelOrder(cid);
+        });
+
+        // 2. Wait (on this thread) for the cancels to resolve the cycle.
+        auto deadline = std::chrono::steady_clock::now() + kShutdownTimeout;
+        while (cycle_active_ && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
     }
 
     // 3. Persist and detach (on the dispatcher).
-    event_bus_->post([this] {
-        if (current_cycle_) {
+    event_bus_->post([this, cancelWorking] {
+        if (current_cycle_ && !cancelWorking) {
+            LOG_INFO("[{}] Handover: {} working orders left at the broker for the next process.",
+                     basket_id_, current_cycle_->workingClientOrderIds().size());
+        } else if (current_cycle_) {
             LOG_ERROR("[{}] Shutdown: cycle did not resolve; it will be reattached on restart.", basket_id_);
         } else if (hasInventory()) {
             LOG_INFO("[{}] Shutdown with open position ({}); state saved for restart.", basket_id_, name(master_state_));
