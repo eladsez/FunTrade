@@ -81,16 +81,65 @@ TEST(ConnectionHealth, ANewGatewaySessionEndsTheOutage) {
     ConnectionHealth h;
     h.socketUp(T0);
     h.ibkrDown(T0);
-    h.socketDown(T0 + 10 * kMin);
+    h.socketDown(T0 + 10 * kMin, "closed by the Gateway");
     auto s = h.snapshot();
     EXPECT_FALSE(s.socket);
     EXPECT_FALSE(s.ibkr) << "no IBKR link without the socket";
-    EXPECT_FALSE(h.tick(T0 + 20 * kMin).has_value()) << "the IBKR outage isn't escalated while the socket is down";
+    EXPECT_FALSE(h.tick(T0 + 10 * kMin + 30'000).has_value()) << "the IBKR outage isn't escalated while the socket is down";
 
     auto n = h.socketUp(T0 + 11 * kMin);
     ASSERT_TRUE(n.has_value());
-    EXPECT_NE(n->text.find("new Gateway session"), std::string::npos);
+    EXPECT_NE(n->text.find("Reconnected to the Gateway after 1 min"), std::string::npos) << n->text;
+    EXPECT_NE(n->text.find("connected to IBKR again after 11 min (new Gateway session)"), std::string::npos) << n->text;
     EXPECT_TRUE(h.snapshot().ibkr);
+}
+
+TEST(ConnectionHealth, NightlyGatewayRestartLogsOneLineDownAndOneBack) {
+    // 23:45 ET every night: the Gateway closes our socket, each retry for ~45 s is closed
+    // again, then it accepts us. That used to log ~16 warnings and errors.
+    ConnectionHealth h;
+    h.socketUp(T0);
+    auto down = h.socketDown(T0, "closed by the Gateway");
+    ASSERT_TRUE(down.has_value());
+    EXPECT_EQ(down->level, Level::Info);
+    EXPECT_FALSE(h.snapshot().socket);
+    for (int i = 1; i <= 8; ++i) {
+        auto r = h.socketDown(T0 + i * 5000, "TWS code 502");
+        ASSERT_TRUE(r.has_value());
+        EXPECT_EQ(r->level, Level::Debug);
+        EXPECT_EQ(h.retryFailed(T0 + i * 5000)->level, Level::Debug);
+        EXPECT_FALSE(h.tick(T0 + i * 5000).has_value());
+    }
+    auto back = h.socketUp(T0 + 46'000);
+    ASSERT_TRUE(back.has_value());
+    EXPECT_EQ(back->level, Level::Info);
+    EXPECT_EQ(back->text, "Reconnected to the Gateway after 46 s.");
+    EXPECT_TRUE(h.snapshot().socket);
+    EXPECT_TRUE(h.snapshot().ibkr);
+}
+
+TEST(ConnectionHealth, GatewayUnreachablePastTheGraceIsAnError) {
+    ConnectionHealth h;
+    h.socketUp(T0);
+    h.socketDown(T0, "closed by the Gateway");
+    EXPECT_FALSE(h.tick(T0 + 2 * kMin).has_value());
+    auto e = h.tick(T0 + 3 * kMin);
+    ASSERT_TRUE(e.has_value());
+    EXPECT_EQ(e->level, Level::Error);
+    EXPECT_NE(e->text.find("Can't reach the Gateway for 3 min"), std::string::npos) << e->text;
+    EXPECT_FALSE(h.tick(T0 + 32 * kMin).has_value());
+    EXPECT_TRUE(h.tick(T0 + 33 * kMin).has_value()) << "reminder";
+    auto back = h.socketUp(T0 + 40 * kMin);
+    ASSERT_TRUE(back.has_value());
+    EXPECT_EQ(back->level, Level::Warn);
+    EXPECT_FALSE(h.tick(T0 + 80 * kMin).has_value());
+}
+
+TEST(ConnectionHealth, GatewayNotUpYetAtStartCountsAsAnOutage) {
+    ConnectionHealth h;
+    EXPECT_EQ(h.retryFailed(T0)->level, Level::Debug);
+    EXPECT_TRUE(h.tick(T0 + 3 * kMin).has_value());
+    EXPECT_EQ(h.socketUp(T0 + 4 * kMin)->text, "Reconnected to the Gateway after 4 min.");
 }
 
 TEST(ConnectionHealth, DataLostWithoutAnOutageStillSaysSo) {

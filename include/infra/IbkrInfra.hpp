@@ -161,7 +161,7 @@ private:
     bool tryConnect();
     void cleanupConnection();
     void monitorLoop();
-    void handleDisconnect();
+    void handleDisconnect(const std::string& why);
     void fireReconnectCallbacks();
     static void log(const std::optional<ConnectionHealth::Notice>& n);
 
