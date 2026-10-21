@@ -68,8 +68,10 @@ void BasketMeanReversionStrategy::start() {
     report_subid_ = event_bus_->subscribeToExecution(
         [this](const ExecutionReport& report) { this->onExecutionReport(report); });
 
+    std::vector<double> seeds(symbols.size());
+    for (size_t i = 0; i < symbols.size(); ++i) seeds[i] = basket_state_->getPrice(i);
     UiBroadcaster::getInstance().broadcastNewBasket(basket_id_, symbols, basket_state_->getWeights(),
-        -entry_z_score_, -exit_z_score_, exit_z_score_, entry_z_score_);
+        -entry_z_score_, -exit_z_score_, exit_z_score_, entry_z_score_, std::move(seeds));
 
     // Reconcile on the dispatcher, ordered after anything already queued.
     event_bus_->post([this] { reconcileOnStart(); });
@@ -213,14 +215,16 @@ void BasketMeanReversionStrategy::warmUp() {
         writeZHistory(full);
     }
 
-    // Seed live prices with the latest closes so sizing works before the first tick.
+    // Seed prices with the latest closes so sizing (and the books' open P&L) work before the
+    // first tick.
     if (auto last = basket_state_->latestCompleteDay()) {
         last_close_day_ = *last;
         session_day_ = *last;
         const auto& symbols = basket_state_->getSymbols();
         auto closes = basket_state_->closesOn(*last);
         for (size_t i = 0; i < symbols.size(); ++i) {
-            basket_state_->updatePrice(symbols[i], (*closes)[i], 0);
+            basket_state_->seedPrice(symbols[i], (*closes)[i]);
+            portfolio_mngr_->seedPrice(symbols[i], (*closes)[i]);
         }
     }
 

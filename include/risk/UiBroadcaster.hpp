@@ -26,6 +26,7 @@ struct MsgInitBasket {
     double exit_long;
     double exit_short;
     double entry_short;
+    std::vector<double> prices;  // startup seed (last close) per symbol; 0 = none
 };
 
 struct MsgZTick {
@@ -129,10 +130,11 @@ public:
     // ------------------------------------------------------------------------
     
     void broadcastNewBasket(std::string basket_id, std::vector<std::string> symbols, std::vector<double> weights,
-                            double entry_long, double exit_long, double exit_short, double entry_short) {
+                            double entry_long, double exit_long, double exit_short, double entry_short,
+                            std::vector<double> prices = {}) {
         msg_queue_.enqueue(MsgInitBasket{
             std::move(basket_id), std::move(symbols), std::move(weights), 
-            entry_long, exit_long, exit_short, entry_short
+            entry_long, exit_long, exit_short, entry_short, std::move(prices)
         });
     }
 
@@ -250,7 +252,7 @@ private:
                     nlohmann::json legs = nlohmann::json::object();
                     for (size_t i = 0; i < arg.symbols.size(); ++i) {
                         legs[arg.symbols[i]] = {
-                            {"px", 0.0}, {"wgt", arg.weights[i]}, {"tgt", 0}, {"fill", 0}, {"rpnl", 0.0}, {"upnl", 0.0}
+                            {"px", i < arg.prices.size() ? arg.prices[i] : 0.0}, {"wgt", arg.weights[i]}, {"tgt", 0}, {"fill", 0}, {"rpnl", 0.0}, {"upnl", 0.0}
                         };
                     }
                     j["legs"] = legs;

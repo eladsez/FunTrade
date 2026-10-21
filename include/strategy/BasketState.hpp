@@ -46,6 +46,9 @@ public:
 
     // --- Live prices (sizing, UI) ---
     void updatePrice(const std::string& symbol, double price, uint64_t timestamp);
+    // The last close at startup: a price for sizing until the first tick. Not a quote, so
+    // not broadcast as one (the basket's init message carries it).
+    void seedPrice(const std::string& symbol, double price);
     bool hasAllPrices() const;
     double getPrice(size_t index) const { return current_prices_[index]; }
     // Live spread against the latest W complete days. Informational only: never traded on.
