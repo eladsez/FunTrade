@@ -1,14 +1,21 @@
 """The broker's own view (IBKR open orders, positions, today's executions, net liquidation)
 over a separate, read-only API connection with its own client id. It only asks; it can't
 place, modify or cancel anything, and it requests no market data (the bot uses ~90 of the
-100 market data lines)."""
+100 market data lines).
+
+Commissions arrive with the executions (commissionReport). IBKR only returns recent
+executions, so each one is appended to <data_dir>/commissions.jsonl and kept."""
+import json
 import logging
 import threading
 import time
+from pathlib import Path
 
 from ibapi.client import EClient
 from ibapi.execution import ExecutionFilter
 from ibapi.wrapper import EWrapper
+
+from .store import load_commissions
 
 log = logging.getLogger("dashboard.broker")
 
@@ -20,6 +27,7 @@ FORBIDDEN = (
 
 # Informational codes TWS sends on every connect (market data farm OK, etc.).
 INFO_CODES = {2104, 2106, 2107, 2108, 2158, 2119}
+UNSET = 1e300   # ibapi's UNSET_DOUBLE (sys.float_info.max): no value
 
 
 class ReadOnlyClient(EWrapper, EClient):
@@ -32,6 +40,7 @@ class ReadOnlyClient(EWrapper, EClient):
         self._orders, self._positions, self._execs = {}, [], {}
         self.orders, self.positions, self.execs = [], [], []
         self.account: dict[str, dict] = {}
+        self.commissions: dict[str, dict] = {}   # exec_id -> {commission, currency}
         self.last_error: str | None = None
 
     # --- connection ---
@@ -89,6 +98,13 @@ class ReadOnlyClient(EWrapper, EClient):
                 "order_ref": execution.orderRef or "", "perm_id": execution.permId, "client_id": execution.clientId,
             }
 
+    def commissionReport(self, commissionReport):
+        r = commissionReport
+        if r.commission is None or r.commission >= UNSET:
+            return
+        with self.lock:
+            self.commissions[r.execId] = {"commission": float(r.commission), "currency": r.currency}
+
     def execDetailsEnd(self, reqId):
         with self.lock:
             self.execs = sorted(self._execs.values(), key=lambda e: e["time"])
@@ -120,13 +136,16 @@ class BrokerView:
     """Polls the broker every `interval` seconds on its own thread; reconnects after the
     Gateway's daily restart."""
 
-    def __init__(self, host: str, port: int, client_id: int, interval: float):
+    def __init__(self, host: str, port: int, client_id: int, interval: float, data_dir: Path | None = None):
         self.host, self.port, self.client_id, self.interval = host, port, client_id, interval
         self.client: ReadOnlyClient | None = None
         self.snapshot: dict = {"connected": False, "checked_at": None}
+        self.previous: dict | None = None   # the snapshot before, to tell settling from mismatched
         self.version = 0
         self._stop = threading.Event()
         self._req = 9000
+        self._commission_file = data_dir / "commissions.jsonl" if data_dir else None
+        self.commissions: dict[str, dict] = load_commissions(self._commission_file) if data_dir else {}
 
     def start(self):
         threading.Thread(target=self._loop, name="broker", daemon=True).start()
@@ -172,12 +191,37 @@ class BrokerView:
         if not ok:
             raise TimeoutError("broker did not answer within 15 s")
         with c.lock:
-            self.snapshot = {
+            snap = {
                 "connected": True, "checked_at": time.time(), "error": None,
                 "orders": list(c.orders), "positions": list(c.positions), "executions": list(c.execs),
                 "account": dict(c.account),
             }
+            execs = {e["exec_id"]: e for e in snap["executions"]}
+            # A report can arrive after this poll's execution list; it's taken on the next one.
+            fresh = {k: v for k, v in c.commissions.items() if k not in self.commissions and k in execs}
+        self.record_commissions(fresh, execs)
+        if self.snapshot.get("checked_at"):
+            self.previous = self.snapshot
+        self.snapshot = snap
         self.version += 1
+
+    def record_commissions(self, fresh: dict[str, dict], execs: dict[str, dict]):
+        """Keeps new commissions (with the execution's symbol, orderRef and time, so they can
+        be attributed after IBKR stops returning the execution)."""
+        rows = []
+        for exec_id, c in fresh.items():
+            e = execs[exec_id]
+            row = {"exec_id": exec_id, **c, "symbol": e["symbol"], "order_ref": e.get("order_ref", ""),
+                   "time": e.get("time")}
+            self.commissions[exec_id] = row
+            rows.append(row)
+        if rows and self._commission_file:
+            try:
+                self._commission_file.parent.mkdir(parents=True, exist_ok=True)
+                with self._commission_file.open("a") as f:
+                    f.writelines(json.dumps(r) + "\n" for r in rows)
+            except OSError as e:
+                log.warning("cannot save commissions: %s", e)
 
     def _loop(self):
         while not self._stop.is_set():

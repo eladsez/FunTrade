@@ -2,6 +2,7 @@
 read-only broker connection, plus the built React app. One process, uvicorn on :8080."""
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import time
@@ -12,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import controls, logs, settings as settings_mod, store, views
+from . import controls, logs, nyse, settings as settings_mod, store, views
 from .live import BotLive
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -31,7 +32,7 @@ class App:
         self.broker = None
         if s.broker_enabled:
             from .broker import BrokerView  # ibapi only when used
-            self.broker = BrokerView(s.ibkr_host, s.ibkr_port, s.ibkr_client_id, s.broker_interval_s)
+            self.broker = BrokerView(s.ibkr_host, s.ibkr_port, s.ibkr_client_id, s.broker_interval_s, s.data_dir)
         self.state_version = 0
         self._sig = None
 
@@ -116,7 +117,11 @@ def create_app(s: settings_mod.Settings | None = None) -> FastAPI:
 
     @app.get("/api/system")
     def system():
-        return state.ctx().system(logs.problems(s.logs_dir / "funtrade.log"))
+        return state.ctx().system(logs.problems(s.logs_dir / "funtrade.log", state.journal.start_times()))
+
+    @app.get("/api/session")
+    def session():
+        return dataclasses.asdict(nyse.session())
 
     def live_payload():
         return {"connected": state.live.connected, "updated_at": state.live.updated_at,

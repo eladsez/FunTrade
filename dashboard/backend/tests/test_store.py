@@ -79,3 +79,23 @@ def test_sample_configs_load(cfg):
     c = store.load_configs(cfg.config_dir)
     assert c["hban_schw_trv"]["tickers"] == ["HBAN", "SCHW", "TRV"]
     assert c["hban_schw_trv"]["entry_z"] == 2.0
+
+
+def test_closes_keep_each_legs_close_and_runs_and_fills_are_indexed(tmp_path):
+    p = tmp_path / "journal.jsonl"
+    lines(p, {"t": 1, "type": "start"}, {"t": 2, "type": "stop"}, {"t": 3, "type": "start"},
+          {"t": 4, "type": "close", "basket": "b", "day": 10, "z": 1.0, "action": "NONE", "closes": {"A": 12.5}},
+          {"t": 5, "type": "fill", "basket": "b", "symbol": "A", "exec_id": "e"})
+    j = store.JournalIndex(p)
+    j.refresh()
+    assert j.last_close("b")["closes"] == {"A": 12.5}
+    assert j.start_times() == [1, 3]
+    assert j.latest_fill_t() == 5 and len(j.all_fills()) == 1
+    assert store.JournalIndex(tmp_path / "none").latest_fill_t() is None
+
+
+def test_load_commissions(tmp_path):
+    p = tmp_path / "commissions.jsonl"
+    assert store.load_commissions(p) == {}
+    p.write_text('{"exec_id": "a", "commission": 1.0, "currency": "USD"}\n{"exec_id": "b", "comm')
+    assert list(store.load_commissions(p)) == ["a"], "a torn last line is skipped"

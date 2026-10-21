@@ -48,6 +48,22 @@ TEST_F(RiskManagerTest, PerSymbolNetCapAcrossBaskets) {
     EXPECT_FALSE(rm.approveEntry("b3", {"HBAN", "Z"}, legs(100, Side::SELL, 1, Side::BUY), {15, 10})) << "offsetting is fine";
 }
 
+TEST_F(RiskManagerTest, SymbolNetUsdCountsHeldAndReservedExposure) {
+    RiskManager rm(pm, RiskLimits{0, 0, 0, "", ""});
+    OrderRequest r{};
+    r.client_order_id = "b1_A"; r.symbol = "A"; r.side = Side::BUY; r.quantity = 10;
+    bus->publishExecution(FakeExecutionEngine::report(r, OrderStatus::FILLED, 10, 10, 50.0));
+    EXPECT_EQ(rm.symbolNetUsd(), (std::map<std::string, double>{{"A", 500.0}}));
+
+    ASSERT_FALSE(rm.approveEntry("b2", {"A", "B"}, legs(5, Side::BUY, 2, Side::SELL), {60, 20}));
+    auto usd = rm.symbolNetUsd();
+    EXPECT_DOUBLE_EQ(usd.at("A"), 15 * 50.0) << "held + reserved, at the held price";
+    EXPECT_DOUBLE_EQ(usd.at("B"), 2 * 20.0) << "reserved only: the approval price";
+
+    rm.release("b2");
+    EXPECT_EQ(rm.symbolNetUsd(), (std::map<std::string, double>{{"A", 500.0}}));
+}
+
 TEST_F(RiskManagerTest, KillAndFlattenFiles) {
     auto dir = std::filesystem::temp_directory_path() / ("funtrade_risk_" + std::to_string(::getpid()));
     std::filesystem::create_directories(dir);

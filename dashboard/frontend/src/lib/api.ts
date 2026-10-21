@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { BasketDetail, Orders, Overview, System } from './types'
+import type { BasketDetail, Orders, Overview, SessionInfo, System } from './types'
 
 export class ApiError extends Error {
   status: number
@@ -29,6 +29,8 @@ const opts = { refetchInterval: 60_000, staleTime: 5_000 }
 export const useOverview = () => useQuery({ queryKey: ['overview'], queryFn: () => call<Overview>('/api/overview'), ...opts })
 export const useBasket = (id: string) => useQuery({ queryKey: ['basket', id], queryFn: () => call<BasketDetail>(`/api/baskets/${id}`), ...opts })
 export const useOrders = () => useQuery({ queryKey: ['orders'], queryFn: () => call<Orders>('/api/orders'), ...opts })
+// The NYSE calendar changes at most at each open/close: once a minute is plenty.
+export const useSession = () => useQuery({ queryKey: ['session'], queryFn: () => call<SessionInfo>('/api/session'), refetchInterval: 60_000, staleTime: 30_000 })
 export const useSystem = () => useQuery({ queryKey: ['system'], queryFn: () => call<System>('/api/system'), ...opts })
 
 export function useSetFlag() {

@@ -30,3 +30,15 @@ export const price = (v: number | null | undefined) => (v == null ? '—' : v.to
 
 export const pnlClass = (v: number | null | undefined) =>
   v == null || Math.abs(v) < 0.005 ? 'text-muted' : v > 0 ? 'text-good' : 'text-bad'
+
+/** +3.2 bps / −1.0 bps (basis points: 1/100 of a percent). */
+export function bps(v: number | null | undefined) {
+  if (v == null || Number.isNaN(v)) return '—'
+  return `${v < 0 ? MINUS : v > 0 ? '+' : ''}${Math.abs(v).toFixed(1)} bps`
+}
+
+/** "1 trading day", "3 trading days"; short: "3d". */
+export function held(n: number | null | undefined, short = false) {
+  if (n == null) return '—'
+  return short ? `${n}d` : `${n} trading day${n === 1 ? '' : 's'}`
+}

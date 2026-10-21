@@ -154,3 +154,52 @@ TEST_F(RestartTest, CorruptStateFileRefusesToStart) {
     EXPECT_ANY_THROW(start());
     stopped = true;
 }
+
+// The entry record (display only) is saved with the position and dropped once flat.
+TEST_F(RestartTest, EntryRecordSurvivesRestartAndClearsWhenFlat) {
+    closeDay(0.05);
+    const int64_t decided = day;
+    const double z = strat->lastDailyZ().value();
+    openSession();
+    fillFrom(0);
+    ASSERT_EQ(strat->masterState(), MasterState::IN_POSITION);
+
+    restart();
+    ASSERT_TRUE(strat->entry());
+    EXPECT_EQ(strat->entry()->decision_day, decided);
+    EXPECT_EQ(strat->entry()->day, decided + 1) << "MOC entry sent (and filled) the next session";
+    EXPECT_DOUBLE_EQ(strat->entry()->z.value(), z);
+    EXPECT_FALSE(strat->entry()->restored);
+
+    closeDay(-0.05);
+    openSession();
+    fillFrom(0);
+    ASSERT_EQ(strat->masterState(), MasterState::FLAT);
+    auto j = nlohmann::json::parse(std::ifstream(tmp / "baskets" / "tb.json"));
+    EXPECT_TRUE(j.at("entry").is_null());
+    restart();
+    EXPECT_FALSE(strat->entry());
+}
+
+// Positions saved before the record existed: rebuilt from cycle_day and the close before it.
+TEST_F(RestartTest, LegacyPositionGetsItsEntryRestored) {
+    closeDay(0.05);
+    const int64_t decided = day;
+    openSession();
+    fillFrom(0);
+    stopStrategy();
+    auto path = tmp / "baskets" / "tb.json";
+    auto j = nlohmann::json::parse(std::ifstream(path));
+    j.erase("entry");
+    std::ofstream(path) << j.dump();
+
+    crashRestart();
+    ASSERT_EQ(strat->masterState(), MasterState::IN_POSITION);
+    ASSERT_TRUE(strat->entry());
+    EXPECT_EQ(strat->entry()->decision_day, decided);
+    EXPECT_EQ(strat->entry()->day, decided + 1);
+    EXPECT_TRUE(strat->entry()->restored);
+    auto saved = nlohmann::json::parse(std::ifstream(path));
+    EXPECT_EQ(saved.at("entry").at("decision_day"), decided) << "persisted, so it's restored only once";
+    EXPECT_EQ(saved.at("entry").at("restored"), true);
+}

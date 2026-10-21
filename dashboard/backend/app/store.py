@@ -90,6 +90,24 @@ def read_zhistory(state_dir: Path, basket: str) -> list[tuple[int, float]]:
     return days
 
 
+def load_commissions(path: Path) -> dict[str, dict]:
+    """<data_dir>/commissions.jsonl (written by the broker view): exec_id -> {commission,
+    currency, symbol, order_ref, time}. A torn last line (crash mid-append) is skipped; an
+    unreadable file reads as empty (commissions are display only)."""
+    out: dict[str, dict] = {}
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            r = json.loads(line)
+            out[r["exec_id"]] = r
+        except (ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
 def control_flags(state_dir: Path) -> dict[str, bool]:
     return {"kill": (state_dir / "KILL").exists(), "flatten": (state_dir / "FLATTEN").exists()}
 
@@ -102,7 +120,7 @@ class JournalIndex:
     path: Path
     _offset: int = 0
     _partial: bytes = b""
-    closes: dict = field(default_factory=lambda: defaultdict(list))     # basket -> [{day, z, action, state, position, t}]
+    closes: dict = field(default_factory=lambda: defaultdict(list))     # basket -> [{day, z, action, state, position, closes, t}]
     cycles: dict = field(default_factory=lambda: defaultdict(list))     # basket -> [{start, end, fills}]
     fills: list = field(default_factory=list)                           # every fill, oldest first
     skipped: dict = field(default_factory=lambda: defaultdict(list))    # basket -> [entry_skipped]
@@ -153,7 +171,7 @@ class JournalIndex:
             # A restart can re-record a day already decided; the latest record wins.
             if closes and closes[-1]["day"] == e["day"]:
                 closes.pop()
-            closes.append({k: e.get(k) for k in ("t", "day", "z", "action", "state", "position")})
+            closes.append({k: e.get(k) for k in ("t", "day", "z", "action", "state", "position", "closes")})
         elif kind == "cycle_start":
             self.cycles[b].append({"start": e, "end": None, "fills": []})
         elif kind == "cycle_end":
@@ -224,6 +242,18 @@ class JournalIndex:
     def last_run(self) -> dict | None:
         with self._lock:
             return self.runs[-1] if self.runs else None
+
+    def latest_fill_t(self) -> int | None:
+        with self._lock:
+            return self.fills[-1]["t"] if self.fills else None
+
+    def all_fills(self) -> list:
+        with self._lock:
+            return list(self.fills)
+
+    def start_times(self) -> list[int]:
+        with self._lock:
+            return [e["t"] for e in self.runs if e["type"] == "start"]
 
     def latest_close_t(self) -> int | None:
         with self._lock:

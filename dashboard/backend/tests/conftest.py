@@ -14,7 +14,7 @@ CONFIG = Path(os.environ.get("FUNTRADE_CONFIG") or Path(__file__).resolve().pare
 def cfg(tmp_path) -> settings.Settings:
     s = replace(settings.load(), state_dir=tmp_path / "state", logs_dir=tmp_path / "logs", config_dir=CONFIG,
                 data_dir=tmp_path / "dash", static_dir=tmp_path / "static", bot_ws_url="", broker_enabled=False)
-    sample.write(s.state_dir, s.logs_dir, CONFIG)
+    sample.write(s.state_dir, s.logs_dir, CONFIG, data=s.data_dir)
     return s
 
 

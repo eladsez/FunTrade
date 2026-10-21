@@ -1,6 +1,7 @@
 #pragma once
 #include <risk/PortfolioManager.hpp>
 #include <strategy/BasketSizer.hpp>
+#include <cmath>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -58,7 +59,9 @@ public:
                     return sym + " net exposure " + fmt(usd) + " > limit " + fmt(limits_.max_symbol_net_usd);
             }
         }
-        reservations_[basket_id] = {new_gross, new_net};
+        std::map<std::string, double> px;
+        for (size_t i = 0; i < symbols.size(); ++i) px[symbols[i]] = prices[i];
+        reservations_[basket_id] = {new_gross, new_net, px};
         return std::nullopt;
     }
 
@@ -82,10 +85,32 @@ public:
         return reservedGrossLocked();
     }
 
+    // |net exposure| in USD per symbol, held plus reserved by entries in flight: what the
+    // per-symbol cap is checked against (for the dashboard; approveEntry prices legs itself).
+    std::map<std::string, double> symbolNetUsd() const {
+        auto held = pm_->getSymbolNets();
+        std::lock_guard<std::mutex> lock(mtx_);
+        std::map<std::string, std::pair<double, double>> qp;  // symbol -> qty, price
+        for (const auto& [sym, n] : held) qp[sym] = {n.quantity, n.price};
+        for (const auto& [b, r] : reservations_) {
+            for (const auto& [sym, q] : r.net) {
+                auto& [qty, px] = qp[sym];
+                qty += q;
+                if (px <= 0.0) px = r.price.at(sym);
+            }
+        }
+        std::map<std::string, double> out;
+        for (const auto& [sym, v] : qp) {
+            if (std::abs(v.first) > 1e-9) out[sym] = std::abs(v.first * v.second);
+        }
+        return out;
+    }
+
 private:
     struct Reservation {
         double gross;
         std::map<std::string, double> net;
+        std::map<std::string, double> price;  // leg prices the entry was approved at
     };
 
     static bool fileExists(const std::string& p) { return !p.empty() && std::filesystem::exists(p); }

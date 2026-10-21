@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useStream } from '../lib/live'
-import { pnlClass, usd, z as fmtZ } from '../lib/format'
+import { held, pnlClass, usd, z as fmtZ } from '../lib/format'
 import type { BasketRow } from '../lib/types'
 import { Pills, StateChip, Td, Th, sideClass } from './ui'
 import { ZGauge, ZLegend } from './ZGauge'
@@ -85,7 +85,7 @@ export function BasketList({ rows, initial = 'all', limit }: { rows: BasketRow[]
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full border-collapse">
           <thead><tr>
-            <Th>Basket</Th><Th>State</Th><Th>z (last close)</Th><Th>Position</Th><Th>Held</Th><Th right>P&amp;L</Th><Th>Note</Th>
+            <Th>Basket</Th><Th>State</Th><Th>z (last close)</Th><Th>Position</Th><Th>Held (sessions)</Th><Th right>P&amp;L</Th><Th>Note</Th>
           </tr></thead>
           <tbody>
             {visible.map(b => (
@@ -100,7 +100,7 @@ export function BasketList({ rows, initial = 'all', limit }: { rows: BasketRow[]
                   {live?.baskets[b.id]?.z != null && <div className="num mt-0.5 text-[11px] text-muted">intraday {live.baskets[b.id].z!.toFixed(2)}</div>}
                 </Td>
                 <Td className={sideClass(b.position)}>{position(b)}</Td>
-                <Td className="num text-dim">{b.held_days != null ? `${b.held_days} d` : '—'}</Td>
+                <Td className="num text-dim">{held(b.held_days, true)}</Td>
                 <Td right className={`num ${pnlClass(pnlOf(b))}`}>{usd(pnlOf(b), { sign: true })}</Td>
                 <Td className="min-w-[220px] text-[13px] whitespace-normal text-dim">{note(b)}</Td>
               </tr>

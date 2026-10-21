@@ -47,6 +47,12 @@ public:
     // Gross market value of all virtual positions, and the bot's net per symbol.
     double getGrossExposure() const;
     double getNetSymbolQuantity(const std::string& symbol) const;
+    // Net quantity and latest price of every symbol the bot holds (non-zero net only).
+    struct SymbolNet {
+        double quantity = 0.0;
+        double price = 0.0;
+    };
+    std::map<std::string, SymbolNet> getSymbolNets() const;
 
     // Broker view
     double getBrokerPosition(const std::string& symbol) const;

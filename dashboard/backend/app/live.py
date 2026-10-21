@@ -14,7 +14,7 @@ class BotLive:
     def __init__(self, url: str):
         self.url = url
         self.connected = False
-        self.baskets: dict[str, dict] = {}   # id -> {"z": float, "legs": {sym: {"px": float}}}
+        self.baskets: dict[str, dict] = {}   # id -> {"z": float, "legs": {sym: {"px": float, "t": epoch s}}}
         self.updated_at: float | None = None
         self.version = 0                      # bumps on every change; SSE pushes when it moves
 
@@ -22,16 +22,18 @@ class BotLive:
         kind, b = msg.get("type"), msg.get("basket")
         if not b:
             return
+        now = time.time()
         if kind == "init_basket":
-            self.baskets[b] = {"z": msg.get("z"), "legs": {s: {"px": v.get("px") or None}
+            # The bot seeds these with the last close at startup; only later ticks are quotes.
+            self.baskets[b] = {"z": msg.get("z"), "legs": {s: {"px": v.get("px") or None, "t": None}
                                                           for s, v in msg.get("legs", {}).items()}}
         elif kind == "z_tick":
             self.baskets.setdefault(b, {"z": None, "legs": {}})["z"] = msg.get("z")
         elif kind == "price":
-            self.baskets.setdefault(b, {"z": None, "legs": {}})["legs"].setdefault(msg["sym"], {})["px"] = msg.get("p")
+            self.baskets.setdefault(b, {"z": None, "legs": {}})["legs"][msg["sym"]] = {"px": msg.get("p"), "t": now}
         else:
             return
-        self.updated_at = time.time()
+        self.updated_at = now
         self.version += 1
 
     def price(self, basket: str, symbol: str) -> float | None:
@@ -40,11 +42,19 @@ class BotLive:
 
     def prices(self) -> dict[str, float]:
         """Latest price per symbol across baskets."""
-        out = {}
+        return {s: q["px"] for s, q in self.quotes().items()}
+
+    def quotes(self) -> dict[str, dict]:
+        """Latest price per symbol across baskets, with when it arrived (epoch s; None for the
+        startup seed). IBKR delayed data: in session it lags the market by ~15 min."""
+        out: dict[str, dict] = {}
         for b in self.baskets.values():
             for s, leg in b["legs"].items():
-                if leg.get("px") and leg["px"] > 0:
-                    out[s] = leg["px"]
+                if not (leg.get("px") and leg["px"] > 0):
+                    continue
+                cur = out.get(s)
+                if cur is None or (leg.get("t") or 0) > (cur["t"] or 0):
+                    out[s] = {"px": leg["px"], "t": leg.get("t")}
         return out
 
     async def run(self):

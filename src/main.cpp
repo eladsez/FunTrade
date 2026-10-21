@@ -174,6 +174,7 @@ static void writeStatus(IbkrInfra& infra, IbkrExecutionEngine& engine, const Por
         {"baskets", baskets},
         {"gross_exposure_usd", pm.getGrossExposure()},
         {"reserved_gross_usd", risk.reservedGross()},
+        {"symbol_net_usd", risk.symbolNetUsd()},
         {"limits", {{"max_gross_exposure_usd", limits.max_gross_exposure_usd},
                     {"max_symbol_net_usd", limits.max_symbol_net_usd},
                     {"max_basket_loss_usd", limits.max_basket_loss_usd}}},

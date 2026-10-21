@@ -19,7 +19,16 @@ def test_reads(client):
     assert client.get("/api/baskets/nope").status_code == 404
     assert "orders" in client.get("/api/orders").json()
     s = client.get("/api/system").json()
-    assert any("MISMATCH" in l["message"] for l in s["logs"])
+    assert [r["current"] for r in s["logs"]] == [True, False]
+    assert any("MISMATCH IP" in l["message"] for l in s["logs"][1]["lines"]), "the earlier run's error"
+    assert not any("MISMATCH IP" in l["message"] for l in s["logs"][0]["lines"])
+    assert s["symbol_caps"][0]["symbol"] == "SCHW"
+
+
+def test_session(client):
+    s = client.get("/api/session").json()
+    assert set(s) >= {"open", "day", "close_ms", "cutoff_ms", "open_ms", "eod_ms", "holiday", "early_close", "known"}
+    assert s["cutoff_ms"] == s["close_ms"] - 600_000
 
 
 def test_writes_need_the_apps_header(client, cfg):

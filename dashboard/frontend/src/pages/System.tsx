@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useClearHalt, useSetFlag, useSystem } from '../lib/api'
 import { qty, usd } from '../lib/format'
 import { ago, fmtWhen } from '../lib/time'
-import type { Halt, System as Sys } from '../lib/types'
+import type { Halt, LogRun, SymbolCap, System as Sys } from '../lib/types'
 import { Card, CardHead, Dot, Failed, Loading } from '../components/ui'
 import { Confirm } from '../components/Confirm'
 
@@ -40,6 +40,84 @@ function healthRows(s: Sys): { k: string; v: string; sub?: string; tone: 'ok' | 
     { k: 'Market data lines', v: `${s.symbols} / ${s.market_data_lines}`, sub: 'one per symbol; delayed quotes, UI only', tone: s.symbols > s.market_data_lines * 0.9 ? 'warn' : 'ok' },
     { k: 'State saved', v: s.state_saved_at ? ago(s.state_saved_at * 1000) : '—', sub: 'newest file in state/', tone: 'ok' },
   ]
+}
+
+function SymbolCaps({ caps, cap }: { caps: SymbolCap[] | null; cap: number | null }) {
+  const [all, setAll] = useState(false)
+  if (!caps) return <p className="m-0 p-4 text-sm text-muted">This bot version doesn't report per-symbol usage.</p>
+  if (!caps.length) return <p className="m-0 p-4 text-sm text-muted">Nothing held or reserved.</p>
+  const shown = all ? caps : caps.slice(0, 8)
+  return (
+    <>
+      <ul className="m-0 flex list-none flex-col gap-2.5 px-4 py-3.5">
+        {shown.map(c => {
+          const pct = c.pct ?? 0
+          const tone = pct >= 0.9 ? 'bg-alert' : pct >= 0.7 ? 'bg-warn' : 'bg-accent'
+          return (
+            <li key={c.symbol} className="flex flex-col gap-1">
+              <div className="flex items-baseline gap-2 text-sm">
+                <span className="num w-14 font-medium">{c.symbol}</span>
+                <span className="num">{c.pct != null ? `${Math.round(c.pct * 100)}%` : '—'}</span>
+                <span className="num text-[13px] text-muted">{usd(c.usd)}</span>
+                <span className="ml-auto text-xs text-muted">{c.baskets} basket{c.baskets === 1 ? '' : 's'} trade it</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-[3px] bg-line" role="meter" aria-label={`${c.symbol} cap used`}
+                aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct * 100)}>
+                <div className={`h-full ${tone}`} style={{ width: `${Math.min(100, pct * 100)}%` }} />
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+      <div className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-2.5 text-xs text-muted">
+        <span>|net| per symbol across baskets, incl. working entries, vs the {usd(cap)} cap. A full symbol blocks every basket that trades it.</span>
+        {caps.length > 8 && (
+          <button type="button" onClick={() => setAll(!all)} className="ml-auto min-h-9 cursor-pointer rounded-md border border-line bg-transparent px-3 text-[13px] text-link">
+            {all ? 'Fewer' : `All ${caps.length}`}
+          </button>
+        )}
+      </div>
+    </>
+  )
+}
+
+const runTitle = (r: LogRun) => (r.started_at == null ? 'Before the first journaled start' : `${r.current ? 'Current run' : 'Run'}, started ${fmtWhen(r.started_at)} ET`)
+
+function LogLines({ run }: { run: LogRun }) {
+  if (!run.lines.length) return <div className="text-muted">None.</div>
+  return (
+    <>
+      {run.lines.map((l, i) => (
+        <div key={i} className="whitespace-nowrap">
+          <span className="text-muted">{l.last.slice(5)}</span>{' '}
+          <span className={l.level === 'error' ? 'text-bad' : 'text-short'}>{l.level}</span>{' '}
+          {l.count > 1 && <span className="rounded bg-raised px-1 text-muted" title={`first ${l.time}`}>×{l.count}</span>}{' '}{l.message}
+        </div>
+      ))}
+    </>
+  )
+}
+
+function Logs({ runs }: { runs: LogRun[] }) {
+  if (!runs.length) return <div className="num px-4 py-3.5 text-xs text-muted">No warnings or errors in the recent log.</div>
+  const current = runs.find(r => r.current)
+  const older = runs.filter(r => !r.current)
+  return (
+    <div className="num max-h-[480px] overflow-auto px-4 pt-2.5 pb-3.5 text-xs leading-[1.8]">
+      {current ? (
+        <>
+          <div className="mb-1 font-sans text-[13px] font-semibold text-text">{runTitle(current)}</div>
+          {current.lines.length ? <LogLines run={current} /> : <div className="text-muted">No warnings or errors since the bot started.</div>}
+        </>
+      ) : <div className="text-muted">Nothing logged by the current run.</div>}
+      {older.map(r => (
+        <details key={r.started_at ?? 'before'} className="mt-3 border-t border-line2 pt-2">
+          <summary className="cursor-pointer font-sans text-[13px] text-dim">{runTitle(r)} · {r.lines.length} distinct</summary>
+          <div className="mt-1"><LogLines run={r} /></div>
+        </details>
+      ))}
+    </div>
+  )
 }
 
 export default function System() {
@@ -138,16 +216,14 @@ export default function System() {
         </Card>
 
         <Card>
+          <CardHead title="Per-symbol cap usage" />
+          <SymbolCaps caps={s.symbol_caps} cap={lim?.max_symbol_net_usd ?? null} />
+        </Card>
+
+        <Card>
           <CardHead title="Warnings and errors" />
-          <div className="num max-h-[420px] overflow-auto px-4 pt-2.5 pb-3.5 text-xs leading-[1.8]">
-            {s.logs.length ? s.logs.map((l, i) => (
-              <div key={i} className="whitespace-nowrap">
-                <span className="text-muted">{l.time.slice(5)}</span>{' '}
-                <span className={l.level === 'error' ? 'text-bad' : 'text-short'}>{l.level}</span>{' '}{l.message}
-              </div>
-            )) : <span className="text-muted">No warnings or errors in the recent log.</span>}
-          </div>
-          <p className="m-0 border-t border-line px-4 py-2.5 text-xs text-muted">From logs/funtrade.log, newest first, times in New York.</p>
+          <Logs runs={s.logs} />
+          <p className="m-0 border-t border-line px-4 py-2.5 text-xs text-muted">From logs/funtrade.log, by bot run (newest first), repeats folded (×n), times in New York. Earlier runs are collapsed: a restart may have fixed them.</p>
         </Card>
       </div>
 

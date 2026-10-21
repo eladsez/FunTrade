@@ -29,7 +29,7 @@ services:
       - "127.0.0.1:8090:8080"
 
   web:
-    image: node:22-slim
+    image: node:24-slim
     working_dir: /web
     environment:
       API_URL: http://api:8080
