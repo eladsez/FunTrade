@@ -48,6 +48,8 @@ TEST_F(JournalTest, RecordsEachCloseDecisionWithItsZ) {
     ASSERT_TRUE(closes[1]["z"].is_number());
     EXPECT_DOUBLE_EQ(closes[1]["z"].get<double>(), strat->lastDailyZ().value());
     EXPECT_GT(closes[1]["t"].get<int64_t>(), 0);
+    EXPECT_DOUBLE_EQ(closes[1]["closes"]["A"].get<double>(), 100.0 * std::exp(0.05)) << "each leg's close";
+    EXPECT_DOUBLE_EQ(closes[1]["closes"]["B"].get<double>(), 100.0);
 }
 
 TEST_F(JournalTest, RecordsCycleLegsFillsAndOutcome) {

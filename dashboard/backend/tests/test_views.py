@@ -1,7 +1,10 @@
 import json
 import time
+from datetime import datetime, timedelta
 
-from app import views
+import pytest
+
+from app import nyse, store, views
 
 
 class FakeBroker:
@@ -29,7 +32,6 @@ def broker_matching(cfg, **over):
 
 
 def ctx(cfg, journal, broker=None):
-    from app import store
     return views.Ctx(cfg, store.load_configs(cfg.config_dir), journal, None, broker)
 
 
@@ -44,7 +46,8 @@ def test_overview_summarizes_the_sample(cfg, journal):
     assert o["halted"] == [{"id": "cms_ed_ppl", "reason": rows["cms_ed_ppl"]["halt_reason"]}]
     assert o["bot"]["state"] == "running"
     assert o["equity_usd"] == 82140.0
-    assert o["unrealized"] is None, "no live prices: unrealized is unknown, not zero"
+    assert o["unrealized"] is not None, "no live feed: priced at the last journaled close"
+    assert o["prices"]["source"] == "close" and o["prices"]["missing"] == 0
 
 
 def test_orders_match_by_order_ref(cfg, journal):
@@ -69,8 +72,9 @@ def test_orders_report_every_kind_of_difference(cfg, journal):
     assert "differs" in by_ref.values()
     assert by_ref["aapl_mu_wdc_AAPL#123-9"] == "unknown_to_bot"
     assert [x["symbol"] for x in o["other_orders"]] == ["SPY"]
-    assert [m["symbol"] for m in o["position_mismatches"]] == ["ED"]
-    assert o["position_mismatches"][0]["broker"] == 0.0
+    assert o["position_mismatches"] == [], "one snapshot is not enough to call it a mismatch"
+    assert [m["symbol"] for m in o["position_settling"]] == ["ED"]
+    assert o["position_settling"][0]["broker"] == 0.0
 
 
 def test_without_a_broker_matches_are_unknown_not_failures(cfg, journal):
@@ -114,7 +118,6 @@ def test_system_lists_halts_with_their_books(cfg, journal):
 
 
 def test_startup_z_history_fills_days_before_the_journal(cfg, journal):
-    from app import store
     first = journal.closes["fitb_key_tfc"][0]["day"]
     zdir = cfg.state_dir / "zhistory"
     zdir.mkdir()
@@ -129,3 +132,220 @@ def test_startup_z_history_fills_days_before_the_journal(cfg, journal):
     assert d["closes"][30]["z"] != 9.9
     assert c.row("aapl_mu_wdc")["close_z"] == 1.23, "a newer history day beats an older journaled close"
     assert c.row("aapl_mu_wdc")["close_day"] == store.day_iso(99999)
+
+
+# --- Phase 1: accuracy ---
+
+NY = views.NY
+
+
+class FakeLive:
+    connected = True
+
+    def __init__(self, quotes):
+        self._q = quotes
+        self.baskets = {}
+
+    def quotes(self):
+        return self._q
+
+
+def basket_file(cfg, bid):
+    return cfg.state_dir / "baskets" / f"{bid}.json"
+
+
+def edit_basket(cfg, bid, **fields):
+    p = basket_file(cfg, bid)
+    st = json.loads(p.read_text())
+    st.update(fields)
+    p.write_text(json.dumps(st))
+
+
+def test_entry_comes_from_the_state_file(cfg, journal):
+    r = ctx(cfg, journal).row("fitb_key_tfc")
+    assert r["entry"]["z"] == -2.11 and r["entry"]["restored"] is False
+    assert r["entry"]["day"] == store.day_iso(journal.cycles["fitb_key_tfc"][0]["start"]["day"])
+
+
+def test_entry_falls_back_to_the_journal(cfg, journal):
+    st = json.loads(basket_file(cfg, "fitb_key_tfc").read_text())
+    del st["entry"]
+    basket_file(cfg, "fitb_key_tfc").write_text(json.dumps(st))
+    r = ctx(cfg, journal).row("fitb_key_tfc")
+    entry_day = journal.cycles["fitb_key_tfc"][0]["start"]["day"]
+    assert r["entry"]["day"] == store.day_iso(entry_day)
+    decided = [c for c in journal.closes["fitb_key_tfc"] if c["action"] == "ENTER_LONG"][-1]
+    assert r["entry"]["decision_day"] == store.day_iso(decided["day"]) and r["entry"]["z"] == decided["z"]
+
+
+def test_restored_entry_is_flagged(cfg, journal):
+    edit_basket(cfg, "fitb_key_tfc", entry={"decision_day": 20745, "day": 20746, "z": -2.37, "restored": True})
+    r = ctx(cfg, journal).row("fitb_key_tfc")
+    assert r["entry"] == {"day": "2026-10-20", "decision_day": "2026-10-19", "z": -2.37, "restored": True}
+
+
+def test_no_entry_for_flat_or_entering_baskets(cfg, journal):
+    c = ctx(cfg, journal)
+    assert c.row("aapl_mu_wdc")["entry"] is None and c.row("aapl_mu_wdc")["held_days"] is None
+    assert c.row("hban_schw_trv")["entry"] is None, "ENTRY_PENDING: not held yet"
+
+
+def test_held_counts_trading_sessions(cfg, journal):
+    edit_basket(cfg, "fitb_key_tfc", entry={"decision_day": nyse.day_of(datetime(2026, 11, 24).date()),
+                                             "day": nyse.day_of(datetime(2026, 11, 25).date()), "z": -2.2})
+    monday = datetime(2026, 11, 30, 10, tzinfo=NY)
+    assert views.Ctx(cfg, store.load_configs(cfg.config_dir), journal, None, None, now=monday).row(
+        "fitb_key_tfc")["held_days"] == 2, "Thanksgiving and the weekend aren't held days"
+
+
+def last_close_day(journal, bid="fitb_key_tfc"):
+    return journal.closes[bid][-1]["day"]
+
+
+def at_day(day, hour):
+    return datetime.combine(nyse.date_of(day), datetime.min.time(), NY) + timedelta(hours=hour)
+
+
+def leg(c, sym, bid="fitb_key_tfc"):
+    return next(l for l in c.legs_of(bid) if l["symbol"] == sym)
+
+
+def test_after_the_bots_eod_the_close_prices_open_pnl(cfg, journal):
+    d = last_close_day(journal)
+    live = FakeLive({"FITB": {"px": 50.0, "t": at_day(d, 19).timestamp()}})
+    c = views.Ctx(cfg, store.load_configs(cfg.config_dir), journal, live, None, now=at_day(d, 19))
+    fitb = leg(c, "FITB")
+    assert fitb["source"] == "close" and fitb["price_day"] == store.day_iso(d)
+    assert fitb["price"] == journal.closes["fitb_key_tfc"][-1]["closes"]["FITB"], "the close, not the feed"
+    assert fitb["unrealized"] == pytest.approx(52 * (fitb["price"] - 44.18))
+
+
+def test_in_session_the_delayed_feed_prices_open_pnl(cfg, journal):
+    d = last_close_day(journal)
+    now = at_day(d, 24 * 7 + 11)            # a week later, mid-morning: the journaled close is old
+    t = now.timestamp() - 60
+    live = FakeLive({"FITB": {"px": 50.0, "t": t}})
+    c = views.Ctx(cfg, store.load_configs(cfg.config_dir), journal, live, None, now=now)
+    fitb = leg(c, "FITB")
+    assert fitb == {**fitb, "price": 50.0, "source": "delayed", "price_t": int(t * 1000), "price_day": None}
+    key = leg(c, "KEY")
+    assert key["source"] == "close" and key["price_day"] == store.day_iso(d), "no quote: the latest close"
+    assert c.price_summary([fitb, key])["source"] == "mixed"
+
+
+def test_without_closes_the_startup_seed_or_nothing(cfg, tmp_path):
+    empty = store.JournalIndex(tmp_path / "none.jsonl")
+    live = FakeLive({"FITB": {"px": 44.0, "t": None}})
+    c = views.Ctx(cfg, store.load_configs(cfg.config_dir), empty, live, None)
+    assert leg(c, "FITB")["source"] == "close" and leg(c, "FITB")["price"] == 44.0
+    assert leg(c, "KEY")["source"] is None and leg(c, "KEY")["unrealized"] is None
+    assert c.row("fitb_key_tfc")["unrealized"] is None, "one leg unpriced: the basket's open P&L is unknown"
+
+
+def test_price_summary():
+    s = views.Ctx.price_summary
+    assert s([]) == {"source": None, "oldest_t": None, "close_day": None, "missing": 0}
+    legs = [{"source": "delayed", "price_t": 5, "price_day": None}, {"source": "delayed", "price_t": 3, "price_day": None},
+            {"source": None, "price_t": None, "price_day": None}]
+    assert s(legs) == {"source": "delayed", "oldest_t": 3, "close_day": None, "missing": 1}
+
+
+def test_commissions_are_attributed_to_baskets(cfg, journal):
+    with (cfg.data_dir / "commissions.jsonl").open("a") as f:
+        f.write(json.dumps({"exec_id": "x.1", "commission": 4.0, "currency": "ILS", "symbol": "HBAN",
+                            "order_ref": "hban_schw_trv_HBAN#1-1"}) + "\n")
+        f.write(json.dumps({"exec_id": "x.2", "commission": 1.0, "currency": "USD", "symbol": "GWW",
+                            "order_ref": "RapidOrder"}) + "\n")
+        f.write('{"exec_id": "torn')
+    c = ctx(cfg, journal)
+    assert c.row("fitb_key_tfc")["commissions"] == pytest.approx(3.15)
+    assert c.commissions_by_basket()["hban_schw_trv"] == {"usd": 0.0, "fills": 1, "other": {"ILS": 4.0}}
+    o = c.overview()
+    assert o["commissions"] == pytest.approx(3.15) and o["commission_fills"] == 4, "a manual trade isn't a basket's"
+    d = c.detail("fitb_key_tfc")
+    assert [f["commission"] for f in d["cycles"][0]["fills"]] == [1.0, 1.05, 1.1]
+    assert d["commission_fills"] == 3
+
+
+def test_commissions_from_the_live_broker_view(cfg, journal):
+    b = broker_matching(cfg)
+    b.commissions = {"0000e0d5.FITB.01.01": {"commission": 2.5, "currency": "USD", "order_ref": ""}}
+    assert ctx(cfg, journal, b).row("fitb_key_tfc")["commissions"] == 2.5, "attributed through the journal's fill"
+
+
+def test_fills_are_compared_with_the_official_close(cfg, journal):
+    d = ctx(cfg, journal).detail("fitb_key_tfc")
+    by = {f["symbol"]: f for f in d["cycles"][0]["fills"]}
+    assert by["FITB"]["close"] == 44.15 and by["FITB"]["cost_usd"] == pytest.approx(52 * 0.03), "bought above the close"
+    assert by["KEY"]["cost_usd"] == pytest.approx(-61 * 0.03), "sold above the close: better than the research"
+    assert by["FITB"]["cost_bps"] == pytest.approx(0.03 / 44.15 * 1e4)
+    q = d["fill_quality"]
+    notional = 44.15 * 52 + 17.89 * 61 + 46.02 * 18
+    assert q["fills"] == 3 and q["pending"] == 0
+    assert q["cost_usd"] == pytest.approx(0.03 * (52 - 61 + 18))
+    assert q["bps"] == pytest.approx(q["cost_usd"] / notional * 1e4)
+    assert q["worst"]["symbol"] == "FITB"
+    assert ctx(cfg, journal).overview()["fill_quality"]["fills"] == 3
+
+
+def test_fill_without_a_journaled_close_is_pending():
+    q = views.Ctx.fill_quality([{"cost_usd": None, "close": None, "quantity": 1, "cost_bps": None}])
+    assert q == {"fills": 0, "pending": 1, "cost_usd": None, "bps": None, "worst": None}
+    assert views.fill_cost("BUY", 10, 10.5, 10.0) == 5.0
+    assert views.fill_cost("SELL", 10, 10.5, 10.0) == -5.0
+
+
+def test_a_mismatch_needs_two_snapshots_after_the_books_changed(cfg, journal):
+    b = broker_matching(cfg)
+    b.snapshot["positions"] = [p for p in b.snapshot["positions"] if p["symbol"] != "ED"]
+    changed = (cfg.state_dir / "positions.json").stat().st_mtime
+    b.snapshot["checked_at"] = changed + 60
+    b.previous = {**b.snapshot, "checked_at": changed - 1}
+    o = ctx(cfg, journal, b).orders()
+    assert o["position_mismatches"] == [] and o["position_settling"][0]["symbol"] == "ED", \
+        "the earlier snapshot predates the books: still settling"
+
+    b.previous = {**b.snapshot, "checked_at": changed + 1}
+    c = ctx(cfg, journal, b)
+    assert [m["symbol"] for m in c.orders()["position_mismatches"]] == ["ED"]
+    assert c.overview()["mismatches"][0]["symbol"] == "ED"
+    ed = next(l for l in c.detail("cms_ed_ppl")["legs"] if l["symbol"] == "ED")
+    assert ed["broker_match"] is False and ed["broker_settling"] is False
+
+    b.previous = {**b.snapshot, "checked_at": changed + 1,
+                  "positions": b.snapshot["positions"] + [{"symbol": "ED", "quantity": 12.0, "sec_type": "STK"}]}
+    assert ctx(cfg, journal, b).orders()["position_settling"][0]["symbol"] == "ED", "the snapshot before agreed"
+
+
+def test_executions_say_who_placed_them(cfg, journal):
+    b = broker_matching(cfg, executions=[{"exec_id": "e1", "symbol": "FITB", "order_ref": "fitb_key_tfc_FITB#1-0"},
+                                         {"exec_id": "e2", "symbol": "GWW", "order_ref": "RapidOrder"}])
+    ex = {e["exec_id"]: e["origin"] for e in ctx(cfg, journal, b).orders()["executions"]}
+    assert ex == {"e1": "bot", "e2": "manual"}
+
+
+def test_symbol_caps(cfg, journal):
+    s = ctx(cfg, journal).system([])
+    caps = s["symbol_caps"]
+    assert caps[0] == {"symbol": "SCHW", "usd": 7905.4, "pct": pytest.approx(7905.4 / 8214.0), "baskets": caps[0]["baskets"]}
+    assert caps[0]["baskets"] > 5, "SCHW is in many baskets"
+    assert [c["usd"] for c in caps] == sorted((c["usd"] for c in caps), reverse=True)
+    st = json.loads((cfg.state_dir / "status.json").read_text())
+    del st["symbol_net_usd"]
+    (cfg.state_dir / "status.json").write_text(json.dumps(st))
+    assert ctx(cfg, journal).system([])["symbol_caps"] is None, "an older bot doesn't report it"
+
+
+def test_timeline_texts():
+    ev = views.Ctx._event
+    assert ev({"t": 1, "type": "cycle_end", "basket": "b", "state": "FLAT", "filled": False})["text"] == \
+        "b: cycle resolved → FLAT (no fills)"
+    assert ev({"t": 1, "type": "stop"})["text"] == "Bot stopped"
+    assert ev({"t": 1, "type": "start", "baskets": 61, "git_sha": "ca784ef4e96e"})["text"] == "Bot started (61 baskets, ca784ef)"
+    assert ev({"t": 1, "type": "halt", "basket": "b", "reason": "x"})["text"] == "b: HALTED, x"
+    assert ev({"t": 1, "type": "other"})["text"] == "other"
+
+
+def test_books_changed_at_uses_the_latest_fill_without_a_positions_file(cfg, journal):
+    (cfg.state_dir / "positions.json").unlink()
+    assert ctx(cfg, journal).books_changed_at() == journal.latest_fill_t() / 1000

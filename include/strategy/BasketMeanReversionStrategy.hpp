@@ -80,6 +80,16 @@ public:
     const std::string& basketId() const { return basket_id_; }
     const std::string& haltReason() const { return halt_reason_; }
 
+    // The entry that opened the current position (display only: the dashboard reads it from
+    // the state file; nothing trades on it).
+    struct EntryRecord {
+        int64_t decision_day = 0;   // close whose z triggered the entry
+        int64_t day = 0;            // session the entry orders were sent in (MOC: filled that close)
+        std::optional<double> z;    // z at decision_day
+        bool restored = false;      // rebuilt at startup for a position saved before this existed
+    };
+    const std::optional<EntryRecord>& entry() const { return entry_; }
+
 private:
     void loadConfig();
     void warmUp();
@@ -109,6 +119,7 @@ private:
     // Persistence & restart
     void reconcileOnStart();
     void restoreCycle();
+    void restoreEntry();
     void saveState() const;
     void loadState();
     std::string statePath() const;
@@ -140,6 +151,7 @@ private:
     int64_t last_close_day_ = 0; // latest day whose close was processed
     int64_t decision_day_ = 0;   // close the pending/last decision was based on
     std::optional<double> last_daily_z_;
+    std::optional<EntryRecord> entry_;  // persisted while not FLAT
 
     // In-flight cycle bookkeeping, persisted so a restart can reattach.
     struct LegRecord {

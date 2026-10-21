@@ -2,12 +2,12 @@
 # process serving both on :8080. Build from the repo root:
 #   docker build -f dashboard/Dockerfile .
 # Native arm64 on CI for the Pi, like the bot image.
-FROM node:22-slim AS web
+FROM node:24-slim AS web
 WORKDIR /web
 COPY dashboard/frontend/package.json dashboard/frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY dashboard/frontend/ ./
-RUN npm run lint && npm run build
+RUN npm run lint && npm test && npm run build
 
 FROM python:3.12-slim AS app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

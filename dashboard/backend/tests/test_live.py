@@ -19,3 +19,13 @@ def test_zero_price_is_no_price():
     live = BotLive("")
     live.apply({"type": "init_basket", "basket": "b1", "legs": {"A": {"px": 0.0}}})
     assert live.prices() == {}
+
+
+def test_quotes_carry_their_arrival_time_and_the_seed_has_none():
+    live = BotLive("")
+    live.apply({"type": "init_basket", "basket": "b1", "legs": {"A": {"px": 10.0}}})
+    assert live.quotes() == {"A": {"px": 10.0, "t": None}}
+    live.apply({"type": "init_basket", "basket": "b2", "legs": {"A": {"px": 10.0}}})
+    live.apply({"type": "price", "basket": "b2", "sym": "A", "p": 10.5})
+    q = live.quotes()["A"]
+    assert q["px"] == 10.5 and q["t"] is not None, "the newest quote across baskets wins"

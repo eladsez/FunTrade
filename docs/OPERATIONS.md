@@ -44,9 +44,10 @@ kept**. The next start resumes them. Nothing is flattened on shutdown.
 | Path | What |
 |---|---|
 | `state/positions.json` | Per-basket positions, realized PnL, executions already booked |
-| `state/baskets/<id>.json` | Basket state, pending action, in-flight orders, halt reason |
-| `state/journal.jsonl` | Append-only events for the dashboard: each basket's close z and decision, cycles, fills, skipped entries, halts, start/stop. The bot never reads it back |
-| `state/status.json` | Heartbeat for the dashboard (every minute; `running: false` on a clean stop): equity, broker connection, exposure, limits |
+| `state/baskets/<id>.json` | Basket state, pending action, in-flight orders, halt reason, and the entry that opened the position (`entry`: decision day, entry day, z; display only) |
+| `state/journal.jsonl` | Append-only events for the dashboard: each basket's close z, decision and leg closes, cycles, fills, skipped entries, halts, start/stop. The bot never reads it back |
+| `state/status.json` | Heartbeat for the dashboard (every minute; `running: false` on a clean stop): equity, broker connection, exposure, limits, per-symbol net USD (`symbol_net_usd`, held + reserved) |
+| `state/zhistory/<id>.json` | Each basket's z over the 365-day warm-up history (startup only), for the dashboard's chart |
 | `logs/funtrade.log` | Rotating log (10 × 10 MB); warnings and errors flushed immediately |
 | `config/risk.json` | Allocation and risk limits (fractions of account equity) |
 | `config/basket_configs/` | The baskets |
@@ -107,7 +108,7 @@ compose network). Everything lives in `~/funtrade` on the Pi:
 | `.env` | Paper login (`TWS_USERID`, `TWS_PASSWORD`), optional `VNC_SERVER_PASSWORD`, and `FUNTRADE_TAG` / `DASHBOARD_TAG` (managed by deploy.sh). chmod 600, never committed |
 | `docker-compose.yml`, `state_report.py` | Installed by each deploy |
 | `state/`, `logs/` | The bot's state and log (same as above) |
-| `dashboard/` | The dashboard's audit log (`audit.jsonl`) and backups of cleared halts |
+| `dashboard/` | The dashboard's audit log (`audit.jsonl`), backups of cleared halts, and every commission IBKR reported (`commissions.jsonl`; IBKR only returns recent executions) |
 | `gateway/` | Gateway settings, kept across restarts |
 
 **Deploys.** Push to `main` → GitHub builds an arm64 image (unit tests run inside the build),
@@ -156,7 +157,18 @@ halts, health, warnings).
 - **Access:** tailnet only. One-time on the Pi (Kupa already uses 443):
   `sudo tailscale serve --bg --https=8443 http://127.0.0.1:8090`, then
   `https://rpi.tail4f4240.ts.net:8443` (add it to the phone's home screen).
-- **History** (z chart, trades) starts with the first bot version that writes the journal.
+- **History** (z chart, trades) starts with the first bot version that writes the journal;
+  the z chart reaches back a year through `state/zhistory`.
+- **Numbers to know:** open P&L uses the day's close once the bot has journaled it (after its
+  18:00 ET fetch), otherwise IBKR *delayed* quotes (~15 min behind in session); each leg says
+  which. "Held" counts NYSE sessions. A books-vs-broker difference is "rechecking" until two
+  broker snapshots taken after the books last changed agree on it, then a mismatch. Fills
+  are compared with the day's official close (what the research assumes; positive bps =
+  worse). Commissions come from IBKR's commission reports. Warnings are grouped by bot run
+  with repeats folded; earlier runs are collapsed.
+- **Market calendar:** `dashboard/backend/app/nyse.py` (holidays and 13:00 early closes,
+  2026–2027 from NYSE's published calendar). Add each new year before it starts; outside
+  the known years the dashboard says so and assumes weekdays.
 - **Restart only the dashboard:** `docker compose restart dashboard` (any time; the bot is
   unaffected).
 - **Develop:** `dashboard/dev.sh up` (everything in containers, sample data, hot reload on

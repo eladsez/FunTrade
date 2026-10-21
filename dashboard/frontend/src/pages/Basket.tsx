@@ -1,39 +1,73 @@
 import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ChevronLeft } from 'lucide-react'
-import { useBasket } from '../lib/api'
+import { useBasket, useSession } from '../lib/api'
 import { useStream } from '../lib/live'
-import { pnlClass, price, qty, usd, z as fmtZ } from '../lib/format'
-import { fmtDay, fmtWhen, session } from '../lib/time'
-import type { BasketDetail } from '../lib/types'
-import { Card, CardHead, Failed, Loading, Pills, StateChip, Td, Th, sideClass } from '../components/ui'
+import { bps, held, pnlClass, price, qty, usd, z as fmtZ } from '../lib/format'
+import { fmtDay, fmtWhen, priceNote, sessionView } from '../lib/time'
+import type { BasketDetail, Cycle, Fill, Leg } from '../lib/types'
+import { Card, CardHead, Failed, Loading, Pills, StateChip, sideClass } from '../components/ui'
+import { ResponsiveTable, type Col } from '../components/ResponsiveTable'
 import { ZChart, ZChartLegend } from '../components/ZChart'
 import { note } from '../components/BasketList'
 
 type Range = '30' | '90' | '250' | 'all'
 
-function Stat({ label, children, className = '' }: { label: string; children: ReactNode; className?: string }) {
+function Stat({ label, children, sub, className = '' }: { label: string; children: ReactNode; sub?: ReactNode; className?: string }) {
   return (
     <div className="flex flex-col gap-1">
       <span className="text-[11px] text-muted md:text-xs">{label}</span>
       <span className={`num text-[17px] font-semibold md:text-[22px] ${className}`}>{children}</span>
+      {sub && <span className="text-[11px] text-muted">{sub}</span>}
     </div>
   )
 }
 
+const legPnl = (l: Leg) => (Math.abs(l.quantity) > 1e-9 ? (l.unrealized == null ? null : l.unrealized + l.realized) : l.realized)
+
+const brokerText = (l: Leg) => (l.broker_match == null ? 'unknown' : l.broker_match ? 'matches' : l.broker_settling ? 'rechecking' : 'MISMATCH')
+const brokerClass = (l: Leg) => (l.broker_match == null ? 'text-muted' : l.broker_match ? 'text-good' : l.broker_settling ? 'text-warn' : 'font-semibold text-bad')
+
+const LEG_COLS: Col<Leg>[] = [
+  { key: 'sym', head: 'Symbol', cell: l => l.symbol, className: 'num font-medium', card: 'title' },
+  { key: 'w', head: 'Weight', right: true, cell: l => qty(l.weight), className: 'num text-dim' },
+  { key: 'q', head: 'Shares', right: true, cell: l => qty(l.quantity), card: 'title',
+    className: l => `num ${l.quantity < 0 ? 'text-short' : l.quantity > 0 ? 'text-long' : 'text-muted'}` },
+  { key: 'avg', head: 'Avg', right: true, cell: l => (l.quantity ? price(l.avg_price) : '—'), className: 'num text-dim' },
+  { key: 'px', head: 'Price', right: true, className: 'num',
+    cell: l => <>{price(l.price)}<div className="text-[11px] font-normal text-muted">{priceNote(l)}</div></> },
+  { key: 'pnl', head: 'P&L', right: true, cell: l => usd(legPnl(l), { sign: true }), className: l => `num ${pnlClass(legPnl(l))}`, card: 'aside' },
+  { key: 'broker', head: 'Broker', cell: brokerText, className: l => `text-[13px] ${brokerClass(l)}` },
+]
+
+const fillText = (f: Fill) => `${f.side} ${f.quantity} ${f.symbol} @ ${f.price.toFixed(2)}`
+  + (f.cost_bps != null ? ` (close ${price(f.close)}, ${bps(f.cost_bps)})` : '')
+
+const CYCLE_COLS: Col<Cycle>[] = [
+  { key: 'sent', head: 'Sent', cell: c => fmtDay(c.day), className: 'num', card: 'title' },
+  { key: 'kind', head: 'Kind', cell: c => c.label, card: 'title' },
+  { key: 'side', head: 'Side', cell: c => c.position, className: c => sideClass(c.position), card: 'title' },
+  { key: 'res', head: 'Resolved', cell: c => (c.end_t ? fmtWhen(c.end_t) : 'working'), className: 'num text-dim' },
+  { key: 'result', head: 'Result', cell: c => (c.end_state ? <StateChip state={c.end_state} small /> : '—'), card: 'aside' },
+  { key: 'fills', head: 'Fills (vs the close)', label: 'Fills', className: 'num text-[13px] whitespace-normal text-dim',
+    cell: c => (c.fills.length ? c.fills.map(fillText).join(' · ') : c.end_t ? 'no fills' : '—') },
+]
+
 function Next({ b }: { b: BasketDetail }) {
-  const s = session()
+  const { data } = useSession()
+  const s = data ? sessionView(data) : null
+  const close = s ? `Close ${s.close.ny} ET` : 'Next close'
   const rows: [string, string][] = []
   if (b.state === 'IN_POSITION') {
     const cond = b.position === 'LONG' ? `z is above ${fmtZ(-b.exit_z)}` : `z is below ${fmtZ(b.exit_z)}`
-    rows.push([`Close ${s.close.ny} ET`, `If ${cond}, the exit is decided.`])
+    rows.push([close, `If ${cond}, the exit is decided.`])
     rows.push(['Next session', 'Exit goes out as MOC orders, filling at that day’s close.'])
     rows.push(['Otherwise', `Holds. No stop on z${b.loss_limit ? `; the basket loss limit is ${usd(b.loss_limit)}` : ''}.`])
   } else if (b.state === 'FLAT') {
-    rows.push([`Close ${s.close.ny} ET`, `Enters long if z < −${b.entry_z.toFixed(2)}, short if z > +${b.entry_z.toFixed(2)}.`])
+    rows.push([close, `Enters long if z < −${b.entry_z.toFixed(2)}, short if z > +${b.entry_z.toFixed(2)}.`])
     rows.push(['Next session', 'An entry goes out as MOC orders, sized with that close.'])
   } else if (b.state === 'ENTRY_PENDING' || b.state === 'EXIT_PENDING') {
-    rows.push([`Close ${s.close.ny} ET`, `${b.working_legs} MOC orders fill in the closing auction.`])
+    rows.push([close, `${b.working_legs} MOC orders fill in the closing auction.`])
     rows.push(['After the fills', b.state === 'ENTRY_PENDING' ? 'IN_POSITION if every leg filled; a partial fill triggers a recovery sweep.' : 'FLAT once every leg filled.'])
   } else if (b.state === 'SYSTEM_HALTED') {
     rows.push(['Halted', b.halt_reason ?? 'needs a human'])
@@ -62,8 +96,9 @@ export default function Basket() {
   const inBooks = b.legs.some(l => Math.abs(l.quantity) > 1e-9)
   const unreal = b.legs.every(l => l.unrealized != null) ? b.legs.reduce((s, l) => s + (l.unrealized ?? 0), 0) : null
   const pnl = inBooks ? (unreal == null ? null : unreal + b.realized) : b.realized
-  const entry = [...b.cycles].reverse().find(c => c.label === 'ENTRY')
-  const entryClose = entry ? b.closes.filter(c => c.day < entry.day && (c.action === 'ENTER_LONG' || c.action === 'ENTER_SHORT')).pop() : undefined
+  const net = pnl == null || b.commissions == null ? null : pnl - b.commissions
+  const e = b.entry
+  const q = b.fill_quality
   const intraday = live?.baskets[b.id]?.z
   const m = b.metrics
 
@@ -81,9 +116,14 @@ export default function Basket() {
         </div>
         <div className="grid w-full grid-cols-4 gap-2 md:ml-auto md:w-auto md:gap-7">
           <Stat label="z last close">{fmtZ(b.close_z)}</Stat>
-          <Stat label="Entered at">{entryClose ? fmtZ(entryClose.z) : '—'}</Stat>
-          <Stat label="Held">{b.held_days != null ? `${b.held_days} d` : '—'}</Stat>
-          <Stat label="P&L" className={pnlClass(pnl)}>{usd(pnl, { sign: true })}</Stat>
+          <Stat label="Entered at" sub={e ? `z of ${e.decision_day ? fmtDay(e.decision_day) : '?'} · in ${fmtDay(e.day)}${e.restored ? ' · restored' : ''}` : undefined}>
+            {e ? fmtZ(e.z) : '—'}
+          </Stat>
+          <Stat label="Held" sub={b.held_days != null ? 'trading days' : undefined}>{held(b.held_days, true)}</Stat>
+          <Stat label="P&L" className={pnlClass(pnl)} sub={b.commissions == null ? undefined
+            : net == null ? `fees ${usd(b.commissions, { cents: true })}` : `${usd(net, { sign: true })} after ${usd(b.commissions, { cents: true })} fees`}>
+            {usd(pnl, { sign: true })}
+          </Stat>
         </div>
       </div>
 
@@ -106,31 +146,10 @@ export default function Basket() {
       <section className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-2">
         <Card>
           <CardHead title="Legs" />
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead><tr><Th>Symbol</Th><Th right>Weight</Th><Th right>Shares</Th><Th right>Avg</Th><Th right>Last</Th><Th right>P&amp;L</Th><Th>Broker</Th></tr></thead>
-              <tbody>
-                {b.legs.map(l => {
-                  const lp = Math.abs(l.quantity) > 1e-9 ? (l.unrealized == null ? null : l.unrealized + l.realized) : l.realized
-                  return (
-                    <tr key={l.symbol}>
-                      <Td className="num font-medium">{l.symbol}</Td>
-                      <Td right className="num text-dim">{qty(l.weight)}</Td>
-                      <Td right className={`num ${l.quantity < 0 ? 'text-short' : l.quantity > 0 ? 'text-long' : 'text-muted'}`}>{qty(l.quantity)}</Td>
-                      <Td right className="num text-dim">{l.quantity ? price(l.avg_price) : '—'}</Td>
-                      <Td right className="num">{price(l.price)}</Td>
-                      <Td right className={`num ${pnlClass(lp)}`}>{usd(lp, { sign: true })}</Td>
-                      <Td className={`text-[13px] ${l.broker_match == null ? 'text-muted' : l.broker_match ? 'text-good' : 'font-semibold text-bad'}`}>
-                        {l.broker_match == null ? 'unknown' : l.broker_match ? 'matches' : 'MISMATCH'}
-                      </Td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <ResponsiveTable label="Legs" rows={b.legs} cols={LEG_COLS} rowKey={l => l.symbol} />
           <p className="m-0 px-4 py-3 text-[13px] leading-normal text-muted">
             Long the spread = buy the positive-weight legs, sell the negative ones. "Broker" compares the bot's books for the symbol (all baskets) with IBKR's position.
+            Prices are the day's close once the bot has it (18:00 ET), otherwise IBKR delayed quotes (~15 min behind in session).
           </p>
         </Card>
 
@@ -149,28 +168,17 @@ export default function Basket() {
       </section>
 
       <Card>
-        <CardHead title="Trades (cycles)" />
-        {b.cycles.length ? (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead><tr><Th>Sent</Th><Th>Kind</Th><Th>Side</Th><Th>Resolved</Th><Th>Result</Th><Th>Fills</Th></tr></thead>
-              <tbody>
-                {[...b.cycles].reverse().map((c, i) => (
-                  <tr key={i}>
-                    <Td className="num">{fmtDay(c.day)}</Td>
-                    <Td>{c.label}</Td>
-                    <Td className={sideClass(c.position)}>{c.position}</Td>
-                    <Td className="num text-dim">{c.end_t ? fmtWhen(c.end_t) : 'working'}</Td>
-                    <Td>{c.end_state ? <StateChip state={c.end_state} small /> : '—'}</Td>
-                    <Td className="num text-[13px] whitespace-normal text-dim">
-                      {c.fills.length ? c.fills.map(f => `${f.side} ${f.quantity} ${f.symbol} @ ${f.price.toFixed(2)}`).join(' · ') : c.end_t ? 'no fills' : '—'}
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : <p className="m-0 px-4 py-3.5 text-sm text-muted">No trades journaled for this basket yet.</p>}
+        <CardHead title="Trades (cycles)">
+          {q.fills > 0 && (
+            <span className="text-[13px] text-muted">
+              fills vs the close: <span className={`num ${q.bps != null && q.bps > 0 ? 'text-bad' : 'text-good'}`}>{bps(q.bps)}</span> avg,{' '}
+              <span className="num">{usd(q.cost_usd, { sign: true, cents: true })}</span> over {q.fills}{q.pending > 0 && ` (+${q.pending} pending)`}
+            </span>
+          )}
+        </CardHead>
+        {b.cycles.length
+          ? <ResponsiveTable label="Trades" rows={[...b.cycles].reverse()} cols={CYCLE_COLS} rowKey={c => String(c.t)} />
+          : <p className="m-0 px-4 py-3.5 text-sm text-muted">No trades journaled for this basket yet.</p>}
         {b.skipped.length > 0 && (
           <p className="m-0 border-t border-line px-4 py-3 text-[13px] text-muted">
             Last skipped entry: {fmtWhen(b.skipped[b.skipped.length - 1].t)} ET, {b.skipped[b.skipped.length - 1].reason}

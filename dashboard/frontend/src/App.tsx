@@ -2,7 +2,7 @@ import { NavLink, Route, Routes } from 'react-router-dom'
 import { LayoutGrid, List, Activity, Power, TrendingUp } from 'lucide-react'
 import { useOverview } from './lib/api'
 import { useStream } from './lib/live'
-import { session, useNow } from './lib/time'
+import { fmtTime, useNow } from './lib/time'
 import { Dot } from './components/ui'
 import Overview from './pages/Overview'
 import Baskets from './pages/Baskets'
@@ -18,8 +18,7 @@ const NAV = [
 ]
 
 function Header() {
-  useNow(30_000)
-  const s = session()
+  const now = useNow(30_000)
   const { connected } = useStream()
   const { data } = useOverview()
   const gw = data?.broker.bot_connected
@@ -42,8 +41,8 @@ function Header() {
         ))}
       </nav>
       <div className="ml-auto flex items-center gap-4 text-[13px] text-muted">
-        <span className="num hidden md:inline">NY {s.nyClock} · IL {s.ilClock}</span>
-        <span className="num md:hidden">{s.ilClock} IL</span>
+        <span className="num hidden md:inline">NY {fmtTime(now, 'NY')} · IL {fmtTime(now, 'IL')}</span>
+        <span className="num md:hidden">{fmtTime(now, 'IL')} IL</span>
         <span className="flex items-center gap-1.5"><Dot tone={tone} /><span className="hidden sm:inline">{label}</span></span>
       </div>
     </header>

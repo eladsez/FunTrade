@@ -382,6 +382,22 @@ double PortfolioManager::getNetSymbolQuantity(const std::string& symbol) const {
     return virtualQtyLocked(symbol);
 }
 
+std::map<std::string, PortfolioManager::SymbolNet> PortfolioManager::getSymbolNets() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    std::map<std::string, SymbolNet> out;
+    for (const auto& [sym, vkeys] : symbol_to_vkeys_) {
+        SymbolNet n;
+        for (const auto& vkey : vkeys) {
+            auto p = positions_.find(vkey);
+            if (p == positions_.end()) continue;
+            n.quantity += p->second.quantity;
+            if (p->second.current_price > 0.0) n.price = p->second.current_price;
+        }
+        if (std::abs(n.quantity) > 1e-9) out.emplace(sym, n);
+    }
+    return out;
+}
+
 size_t PortfolioManager::getTotalTrades() const {
     std::lock_guard<std::mutex> lock(mtx_);
     return total_trades_;

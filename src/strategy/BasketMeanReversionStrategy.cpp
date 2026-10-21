@@ -378,9 +378,16 @@ void BasketMeanReversionStrategy::decide(int64_t day) {
     if (pending_action_ != PendingAction::NONE) {
         LOG_INFO("[{}] Close z = {:.4f} -> {} at next session.", basket_id_, last_daily_z_.value_or(0.0), name(pending_action_));
     }
+    // Each leg's close too: the dashboard compares fills with the close the research assumes.
+    nlohmann::json closes = nlohmann::json::object();
+    if (auto c = basket_state_->closesOn(day)) {
+        const auto& symbols = basket_state_->getSymbols();
+        for (size_t i = 0; i < symbols.size(); ++i) closes[symbols[i]] = (*c)[i];
+    }
     Journal::instance().record("close", {{"basket", basket_id_}, {"day", day},
         {"z", last_daily_z_ ? nlohmann::json(*last_daily_z_) : nlohmann::json(nullptr)},
-        {"state", name(master_state_)}, {"position", name(current_position_)}, {"action", name(pending_action_)}});
+        {"state", name(master_state_)}, {"position", name(current_position_)}, {"action", name(pending_action_)},
+        {"closes", closes}});
 }
 
 // =========================================================================
@@ -415,6 +422,7 @@ void BasketMeanReversionStrategy::enter(PositionState side) {
 
     master_state_ = MasterState::ENTRY_PENDING;
     current_position_ = side;
+    entry_ = EntryRecord{decision_day_, session_day_, basket_state_->dailyZScore(decision_day_), false};
     dispatchCycle(*targets, "ENTRY");
 }
 
@@ -601,6 +609,13 @@ void BasketMeanReversionStrategy::saveState() const {
     j["halt_after_flat"] = halt_after_flat_;
     j["halt_reason"] = halt_reason_;
     j["cycle_day"] = cycle_day_;
+    if (entry_ && master_state_ != MasterState::FLAT) {
+        j["entry"] = {{"decision_day", entry_->decision_day}, {"day", entry_->day},
+                      {"z", entry_->z ? nlohmann::json(*entry_->z) : nlohmann::json(nullptr)},
+                      {"restored", entry_->restored}};
+    } else {
+        j["entry"] = nullptr;
+    }
     j["cycle_legs"] = nlohmann::json::array();
     for (const auto& l : cycle_legs_) {
         j["cycle_legs"].push_back({{"client_order_id", l.client_order_id}, {"symbol", l.symbol},
@@ -623,6 +638,12 @@ void BasketMeanReversionStrategy::loadState() {
     halt_after_flat_ = j->value("halt_after_flat", false);
     halt_reason_ = j->value("halt_reason", "");
     cycle_day_ = j->value("cycle_day", int64_t{0});
+    if (auto e = j->find("entry"); e != j->end() && e->is_object() && master_state_ != MasterState::FLAT) {
+        const auto& z = e->value("z", nlohmann::json(nullptr));
+        entry_ = EntryRecord{e->value("decision_day", int64_t{0}), e->value("day", int64_t{0}),
+                             z.is_number() ? std::optional<double>(z.get<double>()) : std::nullopt,
+                             e->value("restored", false)};
+    }
     for (const auto& l : j->value("cycle_legs", nlohmann::json::array())) {
         cycle_legs_.push_back({l.at("client_order_id"), l.at("symbol"), l.at("position_key"),
                                magic_enum::enum_cast<Side>(l.at("side").get<std::string>()).value_or(Side::UNKNOWN),
@@ -649,6 +670,20 @@ void BasketMeanReversionStrategy::restoreCycle() {
                  filled, l.target, working ? "still working" : "done");
     }
     if (current_cycle_->isComplete()) evaluateCompletedCycle();
+}
+
+// A position saved before the state file had an entry record: its last cycle was the entry
+// (cycle_day is kept after a cycle resolves), decided on the close before that session. The
+// z is recomputed from the warm-up history. Marked restored; display only.
+void BasketMeanReversionStrategy::restoreEntry() {
+    if (entry_ || master_state_ != MasterState::IN_POSITION || cycle_day_ <= 0) return;
+    std::optional<int64_t> decided;
+    for (int64_t d : basket_state_->completeDays()) {
+        if (d < cycle_day_) decided = d;
+    }
+    if (!decided) return;
+    entry_ = EntryRecord{*decided, cycle_day_, basket_state_->dailyZScore(*decided), true};
+    LOG_INFO("[{}] Entry record restored: decided on day {}, entered day {}.", basket_id_, *decided, cycle_day_);
 }
 
 void BasketMeanReversionStrategy::reconcileOnStart() {
@@ -683,6 +718,8 @@ void BasketMeanReversionStrategy::reconcileOnStart() {
         halt("inventory exists for a basket whose state is FLAT");
         return;
     }
+
+    restoreEntry();
 
     // Decide on the latest close if that hasn't happened yet (e.g. first run, or down at EOD).
     if (last_close_day_ > 0 && pending_action_ == PendingAction::NONE) decide(last_close_day_);

@@ -111,6 +111,13 @@ Dashboard (`dashboard/`):
 - Its IBKR connection (client id 17) is read-only by construction (`broker.FORBIDDEN`:
   no orders, no market data lines; tested). Never give it the bot's client id.
 - It deploys and restarts without the bot (`--no-deps`); keep it that way.
+- Numbers it shows must say where they come from (close vs delayed quote, restored entry,
+  pending close). A books/broker difference is a mismatch only after two broker snapshots
+  taken after the books last changed (`views.Ctx.orders`).
+- `app/nyse.py` holds the NYSE holidays/early closes by year: extend it every December.
+- Tests: backend pytest, frontend Vitest + Testing Library (`src/**/*.test.tsx`, fixtures in
+  `src/test/`); both run in the image build. Frontend builds on node:24 (npm 11: npm 10
+  fails to resolve vitest's optional peers).
 
 ## IBKR facts learned the hard way
 
