@@ -4,6 +4,7 @@
 #include <utils/StateStore.hpp>
 #include <utils/Journal.hpp>
 #include <core/Logger.hpp>
+#include <algorithm>
 #include <fstream>
 #include <stdexcept>
 #include <nlohmann/json.hpp>
@@ -677,6 +678,22 @@ void BasketMeanReversionStrategy::restoreCycle() {
         current_cycle_->restoreLeg(l.client_order_id, l.symbol, l.target, l.side, filled, st);
         LOG_INFO("[{}] Reattached leg {}: {:.4f}/{:.4f} filled, {}", basket_id_, l.client_order_id,
                  filled, l.target, working ? "still working" : "done");
+    }
+    // An entry still in flight keeps its exposure reserved, as when it was approved.
+    if (options_.risk && master_state_ == MasterState::ENTRY_PENDING) {
+        const auto& symbols = basket_state_->getSymbols();
+        std::vector<std::string> syms;
+        std::vector<LegTarget> remaining;
+        std::vector<double> prices;
+        for (const auto& l : cycle_legs_) {
+            auto it = std::find(symbols.begin(), symbols.end(), l.symbol);
+            double filled = std::abs(portfolio_mngr_->getNetPosition(l.position_key) - l.baseline);
+            if (it == symbols.end() || filled + 1e-9 >= l.target) continue;
+            syms.push_back(l.symbol);
+            remaining.push_back({l.target - filled, l.side});
+            prices.push_back(basket_state_->getPrice(static_cast<size_t>(it - symbols.begin())));
+        }
+        if (!remaining.empty()) options_.risk->reserve(basket_id_, syms, remaining, prices);
     }
     if (current_cycle_->isComplete()) evaluateCompletedCycle();
 }

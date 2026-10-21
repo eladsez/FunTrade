@@ -37,13 +37,9 @@ public:
         if (killSwitchActive()) return "kill switch active (" + limits_.kill_switch_file + ")";
 
         std::lock_guard<std::mutex> lock(mtx_);
-        double new_gross = 0.0;
-        std::map<std::string, double> new_net;  // symbol -> signed qty
-        for (size_t i = 0; i < targets.size(); ++i) {
-            double signed_qty = targets[i].side == Side::BUY ? targets[i].quantity : -targets[i].quantity;
-            new_gross += targets[i].quantity * prices[i];
-            new_net[symbols[i]] += signed_qty;
-        }
+        auto r = reservationOf(symbols, targets, prices);
+        const double new_gross = r.gross;
+        auto& new_net = r.net;
 
         if (limits_.max_gross_exposure_usd > 0.0) {
             double gross = pm_->getGrossExposure() + reservedGrossLocked() + new_gross;
@@ -59,10 +55,16 @@ public:
                     return sym + " net exposure " + fmt(usd) + " > limit " + fmt(limits_.max_symbol_net_usd);
             }
         }
-        std::map<std::string, double> px;
-        for (size_t i = 0; i < symbols.size(); ++i) px[symbols[i]] = prices[i];
-        reservations_[basket_id] = {new_gross, new_net, px};
+        reservations_[basket_id] = std::move(r);
         return std::nullopt;
+    }
+
+    // An entry the previous process approved whose orders were still working when this one
+    // started (restart, handover): reserved again, unchecked, so the caps keep counting it.
+    void reserve(const std::string& basket_id, const std::vector<std::string>& symbols,
+                 const std::vector<LegTarget>& targets, const std::vector<double>& prices) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        reservations_[basket_id] = reservationOf(symbols, targets, prices);
     }
 
     // Called when the basket's entry cycle resolves (filled exposure is now in the PM).
@@ -112,6 +114,17 @@ private:
         std::map<std::string, double> net;
         std::map<std::string, double> price;  // leg prices the entry was approved at
     };
+
+    static Reservation reservationOf(const std::vector<std::string>& symbols, const std::vector<LegTarget>& targets,
+                                     const std::vector<double>& prices) {
+        Reservation r{0.0, {}, {}};
+        for (size_t i = 0; i < targets.size(); ++i) {
+            r.gross += targets[i].quantity * prices[i];
+            r.net[symbols[i]] += targets[i].side == Side::BUY ? targets[i].quantity : -targets[i].quantity;
+            r.price[symbols[i]] = prices[i];
+        }
+        return r;
+    }
 
     static bool fileExists(const std::string& p) { return !p.empty() && std::filesystem::exists(p); }
     static std::string fmt(double v) { return std::to_string(static_cast<long long>(v)); }

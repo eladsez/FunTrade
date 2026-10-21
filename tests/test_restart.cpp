@@ -138,6 +138,24 @@ TEST_F(RestartTest, PlainStopStillCancelsWorkingOrders) {
     EXPECT_EQ(engine->canceled.size(), 2u);
 }
 
+// A reattached entry keeps its exposure reserved until it resolves, like the original one.
+TEST_F(RestartTest, ReattachedEntryKeepsItsRiskReservation) {
+    rebuild([](RiskLimits& l) { l.max_gross_exposure_usd = 1e9; });
+    closeDay(0.05);
+    openSession();
+    const double reserved = risk->reservedGross();
+    ASSERT_GT(reserved, 0.0);
+    const auto a = placedFor("A"), b = placedFor("B");
+    engine->emit(FakeExecutionEngine::report(a, OrderStatus::FILLED, a.quantity, a.quantity, last["A"]));
+    engine->openOrders = {workingAtBroker(b)};
+
+    handOverRestart();
+    EXPECT_NEAR(risk->reservedGross(), b.quantity * last["B"], 1e-6) << "the unfilled leg only";
+    engine->openOrders.clear();
+    engine->emit(FakeExecutionEngine::report(b, OrderStatus::FILLED, b.quantity, b.quantity, last["B"]));
+    EXPECT_DOUBLE_EQ(risk->reservedGross(), 0.0);
+}
+
 TEST_F(RestartTest, CrashAfterPartialFillWithNothingWorkingSchedulesRecovery) {
     closeDay(0.05);
     openSession();
