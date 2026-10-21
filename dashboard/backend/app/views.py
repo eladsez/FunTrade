@@ -45,6 +45,24 @@ def bot_stopped(status: dict | None, now: float | None = None) -> bool:
     return bot_health(status, now)["state"] in ("stopped", "silent")
 
 
+def ibkr_link(status: dict | None, broker: dict, now: float | None = None) -> dict:
+    """Is the Gateway connected to IBKR (not just reachable)? While it's cut off (error 1100)
+    both our sockets stay up but nothing trades. The bot reports it in status.json; the
+    dashboard's own connection sees the same codes, which covers a stopped or older bot.
+    Down if either says so, from the earlier start."""
+    bot_live = bool(status) and bot_health(status, now)["state"] == "running" and bool(status.get("broker_connected"))
+    downs = []
+    if bot_live and status.get("ibkr_connected") is False:
+        downs.append(status.get("ibkr_down_since"))
+    if broker.get("ibkr_down_since"):
+        downs.append(broker["ibkr_down_since"] * 1000)
+    if downs:
+        known = [d for d in downs if d]
+        return {"connected": False, "down_since": min(known) if known else None}
+    knows = (bot_live and "ibkr_connected" in status) or broker.get("connected")
+    return {"connected": True if knows else None, "down_since": None}
+
+
 def held_qty(snapshot: dict | None) -> dict[str, float] | None:
     """Stock quantity per symbol in a broker snapshot; None if it holds no answer."""
     if not snapshot or (not snapshot.get("connected") and not snapshot.get("positions")):
@@ -307,6 +325,7 @@ class Ctx:
             "broker": {"connected": self.broker.get("connected", False), "checked_at": self.broker.get("checked_at"),
                        "bot_connected": status.get("broker_connected")},
             "live": {"connected": bool(self.live and self.live.connected)},
+            "ibkr": ibkr_link(self.status, self.broker, self.now.timestamp()),
             "equity_usd": status.get("equity_usd"),
             "net_liquidation": acct.get("NetLiquidation"),
             "realized": sum(p.get("realized_pnl", 0.0) for p in self.positions.values()),
@@ -471,6 +490,7 @@ class Ctx:
             "can_edit_state": bot_stopped(self.status),
             "broker": {k: self.broker.get(k) for k in ("connected", "checked_at", "error")},
             "live": {"connected": bool(self.live and self.live.connected)},
+            "ibkr": ibkr_link(self.status, self.broker, self.now.timestamp()),
             "flags": self.flags,
             "halts": halts,
             "last_close_t": self.journal.latest_close_t(),

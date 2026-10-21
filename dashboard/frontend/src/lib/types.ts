@@ -49,10 +49,15 @@ export interface PositionRow { symbol: string; bot: number; broker: number | nul
 export interface Health { state: 'running' | 'stale' | 'silent' | 'stopped' | 'unknown'; running: boolean | null; age_s: number | null }
 export interface Money { value: number; currency: string }
 
+/** The Gateway's own link to IBKR. While it's cut off (error 1100) every socket stays up but
+ * nothing trades. null: nobody can tell (bot stopped and no dashboard connection). */
+export interface IbkrLink { connected: boolean | null; down_since: number | null }
+
 export interface Overview {
   bot: Health
   broker: { connected: boolean; checked_at: number | null; bot_connected: boolean | null }
   live: { connected: boolean }
+  ibkr: IbkrLink
   equity_usd: number | null
   net_liquidation?: Money
   realized: number
@@ -141,6 +146,7 @@ export interface System {
   can_edit_state: boolean
   broker: BrokerState
   live: { connected: boolean }
+  ibkr: IbkrLink
   flags: { kill: boolean; flatten: boolean }
   halts: Halt[]
   last_close_t: number | null

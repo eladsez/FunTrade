@@ -137,7 +137,7 @@ def write(state: Path, logs: Path, config_dir: Path, now: float | None = None, d
                                                       "total_realized_pnl": 0.0}, indent=2))
     (state / "status.json").write_text(json.dumps({
         "updated_at": int(now * 1000), "started_at": int(now * 1000) - 6 * 3600_000, "running": True,
-        "git_sha": "9efb6c1d", "broker_connected": True, "equity_usd": 82140.0, "equity_at_start_usd": 82140.0,
+        "git_sha": "9efb6c1d", "broker_connected": True, "ibkr_connected": True, "ibkr_down_since": None, "equity_usd": 82140.0, "equity_at_start_usd": 82140.0,
         "baskets": 61, "gross_exposure_usd": 4880.0, "reserved_gross_usd": 14960.0,
         "limits": {"max_gross_exposure_usd": 82140.0, "max_symbol_net_usd": 8214.0, "max_basket_loss_usd": 751.6},
         "symbol_net_usd": {"SCHW": 7905.4, "HBAN": 6120.9, "FITB": 2297.4, "TFC": 828.9, "KEY": 1093.1, "TRV": 1352.5,

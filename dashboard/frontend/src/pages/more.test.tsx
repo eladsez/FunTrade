@@ -91,6 +91,29 @@ describe('System controls', () => {
     expect(screen.getByText('cannot connect')).toBeTruthy()
   })
 
+  it('shows whether the Gateway is logged in to IBKR', async () => {
+    const down = Date.parse('2026-10-21T00:16:00-04:00')
+    const { unmount } = renderWithApi(<System />, { '/api/system': system({ ibkr: { connected: false, down_since: down } }) })
+    const row = (await screen.findByText('Gateway ↔ IBKR')).parentElement!
+    expect(row.textContent).toContain('Cut off (1100)')
+    expect(row.textContent).toContain('since 00:16 ET')
+    unmount()
+    renderWithApi(<System />, { '/api/system': system() })
+    expect((await screen.findByText('Gateway ↔ IBKR')).parentElement!.textContent).toContain('Logged in')
+  })
+
+  it('an unknown IBKR link says so', async () => {
+    renderWithApi(<System />, { '/api/system': system({ ibkr: { connected: null, down_since: null } }) })
+    expect((await screen.findByText('Gateway ↔ IBKR')).parentElement!.textContent).toContain('unknown')
+  })
+
+  it('a cut-off link without a start time leaves it out', async () => {
+    renderWithApi(<System />, { '/api/system': system({ ibkr: { connected: false, down_since: null } }) })
+    const row = (await screen.findByText('Gateway ↔ IBKR')).parentElement!
+    expect(row.textContent).not.toContain('since')
+    expect(row.textContent).toContain('restart ib-gateway')
+  })
+
   it('a failed load says why', async () => {
     renderWithApi(<System />, { '/api/system': () => ({ status: 500, body: { detail: 'state unreadable' } }) })
     expect(await screen.findByText("Couldn't load: state unreadable")).toBeTruthy()

@@ -349,3 +349,31 @@ def test_timeline_texts():
 def test_books_changed_at_uses_the_latest_fill_without_a_positions_file(cfg, journal):
     (cfg.state_dir / "positions.json").unlink()
     assert ctx(cfg, journal).books_changed_at() == journal.latest_fill_t() / 1000
+
+
+def test_ibkr_link_from_the_bot_and_the_dashboards_own_connection():
+    now = time.time()
+    bot = {"updated_at": now * 1000, "running": True, "broker_connected": True, "ibkr_connected": True}
+    cut = {**bot, "ibkr_connected": False, "ibkr_down_since": 1_000_000}
+    assert views.ibkr_link(bot, {}, now) == {"connected": True, "down_since": None}
+    assert views.ibkr_link(cut, {"connected": False}, now) == {"connected": False, "down_since": 1_000_000}
+    assert views.ibkr_link(cut, {"ibkr_down_since": 900.0}, now) == {"connected": False, "down_since": 900_000}, \
+        "the earlier start wins"
+    assert views.ibkr_link({**cut, "ibkr_down_since": None}, {}, now) == {"connected": False, "down_since": None}
+
+    stopped = {**cut, "updated_at": (now - 3600) * 1000}
+    assert views.ibkr_link(stopped, {}, now) == {"connected": None, "down_since": None}, "a stale status says nothing"
+    assert views.ibkr_link(stopped, {"connected": True}, now)["connected"] is True
+    assert views.ibkr_link(stopped, {"connected": False, "ibkr_down_since": 5.0}, now) == {"connected": False, "down_since": 5000}
+
+    older_bot = {"updated_at": now * 1000, "running": True, "broker_connected": True}
+    assert views.ibkr_link(older_bot, {}, now)["connected"] is None, "a bot without the field doesn't know"
+    socket_down = {**cut, "broker_connected": False}
+    assert views.ibkr_link(socket_down, {}, now)["connected"] is None, "can't tell while the bot can't reach the Gateway"
+    assert views.ibkr_link(None, {}, now)["connected"] is None
+
+
+def test_pages_report_the_ibkr_link(cfg, journal):
+    c = ctx(cfg, journal, broker_matching(cfg))
+    assert c.overview()["ibkr"] == {"connected": True, "down_since": None}
+    assert c.system([])["ibkr"]["connected"] is True

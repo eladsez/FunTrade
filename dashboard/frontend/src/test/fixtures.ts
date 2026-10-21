@@ -37,6 +37,7 @@ export function overview(over: Partial<Overview> = {}): Overview {
     bot: { state: 'running', running: true, age_s: 20 },
     broker: { connected: true, checked_at: NOW / 1000 - 30, bot_connected: true },
     live: { connected: true },
+    ibkr: { connected: true, down_since: null },
     equity_usd: 81994, net_liquidation: { value: 253648, currency: 'ILS' },
     realized: 0, unrealized: 41.5,
     prices: { source: 'delayed', oldest_t: ny('2026-10-21T13:48'), close_day: null, missing: 0 },
@@ -98,6 +99,7 @@ export function system(over: Partial<System> = {}): System {
   return {
     bot: { state: 'running', running: true, age_s: 20, started_at: ny('2026-10-20T17:34'), git_sha: 'ca784ef4e96e', broker_connected: true },
     can_edit_state: false, broker: { connected: true, checked_at: NOW / 1000 - 30, error: null }, live: { connected: true },
+    ibkr: { connected: true, down_since: null },
     flags: { kill: false, flatten: false }, halts: [], last_close_t: ny('2026-10-20T18:05'),
     symbols: 92, market_data_lines: 100, state_saved_at: NOW / 1000 - 60, equity_at_start_usd: 82076,
     limits: { max_gross_exposure_usd: 82076, max_symbol_net_usd: 8207, max_basket_loss_usd: 751 },

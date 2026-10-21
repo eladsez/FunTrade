@@ -45,6 +45,21 @@ describe('Overview', () => {
     expect(alerts.textContent).not.toContain('broker 0')   // no red books-vs-broker banner
   })
 
+  it('a Gateway cut off from IBKR is the first alert', async () => {
+    const ibkr = { connected: false, down_since: Date.parse('2026-10-21T00:16:00-04:00') }
+    renderWithApi(<Overview />, { '/api/overview': overview({ ibkr, settling: [] }), '/api/session': session })
+    const alerts = await screen.findByRole('region', { name: 'Alerts' })
+    expect(alerts.firstElementChild?.textContent).toContain('Gateway cut off from IBKR since 00:16 ET (13h 49m)')
+    expect(alerts.textContent).toContain('restart ib-gateway')
+  })
+
+  it('a Gateway cut off for an unknown time still alerts', async () => {
+    renderWithApi(<Overview />, { '/api/overview': overview({ ibkr: { connected: false, down_since: null }, settling: [] }), '/api/session': session })
+    const alerts = await screen.findByRole('region', { name: 'Alerts' })
+    expect(alerts.textContent).not.toContain('since')
+    expect(alerts.textContent).toContain('no orders or prices go through')
+  })
+
   it('a confirmed mismatch is an alert', async () => {
     const m = { symbol: 'TRV', bot: 2, broker: 0, baskets: {}, match: false, settling: false }
     renderWithApi(<Overview />, { '/api/overview': overview({ mismatches: [m], settling: [] }), '/api/session': session })

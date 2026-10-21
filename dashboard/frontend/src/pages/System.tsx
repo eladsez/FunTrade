@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useClearHalt, useSetFlag, useSystem } from '../lib/api'
 import { qty, usd } from '../lib/format'
-import { ago, fmtWhen } from '../lib/time'
+import { ago, fmtWhen, outage } from '../lib/time'
 import type { Halt, LogRun, SymbolCap, System as Sys } from '../lib/types'
 import { Card, CardHead, Dot, Failed, Loading } from '../components/ui'
 import { Confirm } from '../components/Confirm'
@@ -33,6 +33,9 @@ function healthRows(s: Sys): { k: string; v: string; sub?: string; tone: 'ok' | 
     { k: 'Bot', v: bot.state === 'unknown' ? 'No status file' : bot.state[0].toUpperCase() + bot.state.slice(1),
       sub: [bot.started_at && `since ${fmtWhen(bot.started_at)} ET`, bot.git_sha && `image ${bot.git_sha.slice(0, 7)}`, bot.age_s != null && `heartbeat ${ago(Date.now() - bot.age_s * 1000)}`].filter(Boolean).join(' · '), tone: botTone },
     { k: 'Bot ↔ Gateway', v: bot.broker_connected == null ? 'unknown' : bot.broker_connected ? 'Connected' : 'Disconnected', tone: bot.broker_connected ? 'ok' : bot.broker_connected == null ? 'off' : 'bad' },
+    { k: 'Gateway ↔ IBKR', v: s.ibkr.connected == null ? 'unknown' : s.ibkr.connected ? 'Logged in' : 'Cut off (1100)',
+      sub: s.ibkr.connected === false ? [s.ibkr.down_since != null && outage(s.ibkr.down_since), 'no orders or prices; restart ib-gateway if it lasts'].filter(Boolean).join(' · ') : undefined,
+      tone: s.ibkr.connected ? 'ok' : s.ibkr.connected == null ? 'off' : 'bad' },
     { k: 'Dashboard ↔ Gateway', v: s.broker.connected ? 'Connected (read-only)' : 'Not connected', sub: s.broker.connected ? `checked ${ago((s.broker.checked_at ?? 0) * 1000)}` : s.broker.error ?? undefined, tone: s.broker.connected ? 'ok' : 'warn' },
     { k: 'Live feed from the bot', v: s.live.connected ? 'Connected' : 'Not connected', sub: 'prices and intraday z, display only', tone: s.live.connected ? 'ok' : 'warn' },
     { k: 'Last close decided', v: s.last_close_t ? `${fmtWhen(s.last_close_t)} ET` : 'none journaled', sub: 'after the 18:00 ET history fetch', tone: s.last_close_t && Date.now() - s.last_close_t < 4 * 86400_000 ? 'ok' : 'warn' },
